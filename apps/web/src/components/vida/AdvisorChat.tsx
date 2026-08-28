@@ -198,7 +198,7 @@ export function AdvisorChat({
               {m.role === "user" ? "RULO ›" : "ASESOR ›"}
             </span>
             {m.role === "assistant" && m.content && !m.content.startsWith("⚠") ? (
-              <div className="mt-0.5">
+              <div className="md-prose mt-0.5 text-[14px]">
                 <Markdown source={m.content} />
               </div>
             ) : (

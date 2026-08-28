@@ -16,6 +16,7 @@ import { useVoiceConnect } from "@/hooks/useVoiceConnect";
 import { useWorkspace } from "@/state/WorkspaceContext";
 import { ClaudeExecBar, claudeModelLabel } from "./ClaudeExecBar";
 import { AgentSteps } from "./AgentSteps";
+import { Markdown } from "./Markdown";
 import { Pensando } from "./Pensando";
 import { PanelState } from "@/components/ui/PanelState";
 
@@ -599,11 +600,14 @@ export function ChatPanel({
               {/* Pasos del turno ANTES del texto: el trabajo se ve mientras
                   ocurre y la respuesta aterriza debajo (patrón Replit). */}
               {steps.length > 0 && <AgentSteps steps={steps} busy={streaming} />}
-              <div className="text-base leading-loose whitespace-pre-wrap text-text-dim">
-                {m.content ||
-                  // "Pensando" solo hasta el primer paso: a partir de ahí los
-                  // pasos ya cuentan qué está haciendo.
-                  (streaming && steps.length === 0 ? <Pensando /> : "")}
+              <div className="md-prose text-[15px] text-text-dim">
+                {m.content ? (
+                  <Markdown source={m.content} />
+                ) : // "Pensando" solo hasta el primer paso: a partir de ahí los
+                // pasos ya cuentan qué está haciendo.
+                streaming && steps.length === 0 ? (
+                  <Pensando />
+                ) : null}
               </div>
               {/* Acciones SOLO al terminar (patrón Claude · ChatGPT · Bard):
                   durante el stream la respuesta aún no es copiable ni final. */}

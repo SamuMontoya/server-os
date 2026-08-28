@@ -202,7 +202,9 @@ export function Markdown({ source, project }: { source: string; project?: string
     const k = key++;
     blocks.push(
       <p key={k} className="md-p">
-        {renderInline(buf.join(" "), `p${k}`)}
+        {/* Se unen con \n (no con espacio) para que el salto simple sobreviva:
+            .md-p usa white-space:pre-line y lo pinta como salto real. */}
+        {renderInline(buf.join("\n"), `p${k}`)}
       </p>,
     );
   }

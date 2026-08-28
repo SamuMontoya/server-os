@@ -308,7 +308,7 @@ export function PieceChat({ piece }: { piece: ContentPiece }) {
                 )}
 
                 {m.content ? (
-                  <div className="px-0.5 text-xs leading-relaxed">
+                  <div className="md-prose px-0.5 text-xs leading-relaxed">
                     <Markdown source={m.content} project="rulocodeshow" />
                   </div>
                 ) : m.live ? (
