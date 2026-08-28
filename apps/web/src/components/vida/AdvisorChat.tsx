@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { streamChat, type ChatMessage } from "@/lib/hermes";
 import { Markdown } from "@/components/Markdown";
+import { Pensando } from "@/components/Pensando";
 
 // Sin datos del stream por este tiempo = turno colgado → se aborta solo.
 // Holgado a propósito: el asesor corre tools reales (consultas de finanzas).
@@ -202,12 +203,7 @@ export function AdvisorChat({
               </div>
             ) : (
               <span className={`whitespace-pre-wrap ${m.content.startsWith("⚠") ? "text-amber" : ""}`}>
-                {m.content ||
-                  (busy && i === messages.length - 1 ? (
-                    <span className="pulse-dot">pensando…</span>
-                  ) : (
-                    ""
-                  ))}
+                {m.content || (busy && i === messages.length - 1 ? <Pensando /> : "")}
               </span>
             )}
           </div>

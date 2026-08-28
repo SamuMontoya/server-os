@@ -847,6 +847,53 @@ body::after {
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
 
+/* ── "Pensando" — shimmer de skeleton sobre las letras + puntos saltando ──
+   Mismo lenguaje visual que .skeleton (barrido de luz violeta), pero
+   recortado a los glifos con background-clip:text. */
+@keyframes thinking-shimmer {
+  0% {
+    background-position: 140% 0;
+  }
+  100% {
+    background-position: -40% 0;
+  }
+}
+.thinking-text {
+  /* El degradado tiene que cubrir TODO el texto: con color:transparent, lo
+     que el background no pinta queda invisible. De ahí el 200% y los topes
+     opacos a ambos lados. */
+  background: linear-gradient(
+    90deg,
+    var(--text-dim) 0%,
+    var(--text-dim) 40%,
+    var(--violet) 50%,
+    var(--text-dim) 60%,
+    var(--text-dim) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 1.8s linear infinite;
+}
+
+/* Los tres puntos saltan en cascada (el desfase va inline, por punto). */
+@keyframes thinking-bounce {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  35% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+.thinking-dot {
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+}
+
 /* ── Reduced motion: loops y reveals se apagan, los cambios de estado
    quedan instantáneos ─────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
@@ -857,8 +904,18 @@ body::after {
   .wave-bar,
   .voice-orb-live,
   .skeleton,
+  .thinking-dot,
   .cursor-blink::after {
     animation: none;
+  }
+  /* Sin el barrido, color:transparent dejaría el texto invisible: se vuelve
+     a pintar plano. */
+  .thinking-text {
+    animation: none;
+    background: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    color: var(--text-dim);
   }
   *,
   *::before,

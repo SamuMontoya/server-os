@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import type { LiveSuggestionKind } from "@hermes/shared";
 import { PanelState } from "@/components/ui/PanelState";
+import { Pensando } from "@/components/Pensando";
 import { fmtLiveClock, useLiveMeeting } from "@/state/LiveMeetingProvider";
 
 // Acento por tipo de sugerencia: franja izquierda + label. Clases literales
@@ -75,7 +76,9 @@ export function LiveSuggestionsRail() {
               <span className="text-cyan">▌</span>
             </p>
           ) : (
-            <p className="mt-1 text-xs leading-snug text-text-dim italic">pensando la respuesta…</p>
+            <p className="mt-1 text-xs leading-snug">
+              <Pensando label="Pensando la respuesta" dot={3} />
+            </p>
           )}
           <p className="mt-1 text-2xs leading-snug text-text-dim">{streaming.trigger}</p>
         </div>

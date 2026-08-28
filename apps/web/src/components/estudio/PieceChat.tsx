@@ -20,6 +20,7 @@ import type { ContentChatMessage, ContentPiece } from "@hermes/shared";
 import { useEstudioContext } from "@/state/EstudioProvider";
 import { hermesFetch, hermesGet } from "@/lib/hermes";
 import { Markdown } from "@/components/Markdown";
+import { Pensando } from "@/components/Pensando";
 
 /** Sugerencias del empty state: qué pide + qué va a pasar (patrón Bard). */
 const SUGGESTIONS: { label: string; hint: string }[] = [
@@ -311,15 +312,8 @@ export function PieceChat({ piece }: { piece: ContentPiece }) {
                     <Markdown source={m.content} project="rulocodeshow" />
                   </div>
                 ) : m.live ? (
-                  /* Pensando: tres puntos con pulso escalonado (Base44). */
-                  <span className="flex gap-1 px-1 py-1" aria-label="Hermes está pensando">
-                    {[0, 150, 300].map((d) => (
-                      <span
-                        key={d}
-                        className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet/70"
-                        style={{ animationDelay: `${d}ms` }}
-                      />
-                    ))}
+                  <span className="flex px-1 py-1 text-xs">
+                    <Pensando dot={3} />
                   </span>
                 ) : null}
 
