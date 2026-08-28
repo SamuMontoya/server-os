@@ -237,9 +237,14 @@ function step(myToken: number) {
     step(myToken);
   };
   u.onerror = (ev) => {
-    // `interrupted`/`canceled` son un stop deliberado: no se sigue.
+    // `interrupted`/`canceled` son un stop deliberado: no se sigue. Se limpia
+    // igual el resaltado, o queda una frase subrayada sin nadie leyéndola
+    // (pasa si algo cancela la síntesis sin pasar por stopSpeaking).
     const r = (ev as SpeechSynthesisErrorEvent).error;
-    if (r === "interrupted" || r === "canceled") return;
+    if (r === "interrupted" || r === "canceled") {
+      if (myToken === token) setSpeaking(null);
+      return;
+    }
     if (myToken !== token) return;
     qIndex++;
     step(myToken);

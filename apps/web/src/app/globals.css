@@ -472,6 +472,48 @@ body::after {
   color: var(--text);
   padding: 0;
 }
+/* Tablas del markdown. El wrapper scrollea por su cuenta — regla del
+   proyecto: el contenido ancho se desborda DENTRO de su caja, nunca empuja
+   la página. */
+.md-table-wrap {
+  margin: 0.8em 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+  /* Sin esto una celda larga estira la tabla y aplasta a las demás. */
+  min-width: max-content;
+}
+.md-table th,
+.md-table td {
+  padding: 6px 10px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+  /* El user-agent centra los <th> por defecto: sin esto, una columna SIN
+     marcador de alineación sale con el encabezado centrado y las celdas a la
+     izquierda. El estilo inline de las alineadas gana igual. */
+  text-align: left;
+  /* El pre-line de los párrafos no aplica aquí: dentro de una celda un salto
+     suelto es separación, no un renglón nuevo. */
+  white-space: normal;
+}
+.md-table thead th {
+  background: rgb(122 132 255 / 0.08);
+  color: var(--violet-hot);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.md-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.md-table tbody tr:hover td {
+  background: rgb(122 132 255 / 0.04);
+}
+
 .md-quote {
   margin: 0.6em 0;
   padding: 4px 12px;

@@ -89,6 +89,40 @@ function renderInline(text: string, kp: string): ReactNode[] {
 
 const SPECIAL = /^(#{1,6})\s|^```|^>\s?|^\s*[-*+]\s+|^\s*\d+\.\s+|^(-{3,}|\*{3,}|_{3,})\s*$/;
 
+// ── Tablas (GFM) ──────────────────────────────────────────────────────
+// Lo que hace tabla a una tabla es la fila de guiones DEBAJO del encabezado.
+// Sin ella son pipes sueltos y se tratan como párrafo — por eso la detección
+// mira siempre la línea siguiente, no la actual.
+const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+function isTableStart(lines: string[], i: number): boolean {
+  return (
+    lines[i].includes("|") &&
+    i + 1 < lines.length &&
+    TABLE_SEP.test(lines[i + 1]) &&
+    lines[i + 1].includes("-")
+  );
+}
+
+function splitRow(line: string): string[] {
+  let s = line.trim();
+  // Los pipes de los bordes son opcionales en GFM.
+  if (s.startsWith("|")) s = s.slice(1);
+  if (/(?<!\\)\|$/.test(s)) s = s.slice(0, -1);
+  // Un `\|` escapado es contenido de la celda, no un corte.
+  return s.split(/(?<!\\)\|/).map((c) => c.replace(/\\\|/g, "|").trim());
+}
+
+function alignOf(cell: string): "left" | "center" | "right" | undefined {
+  const c = cell.trim();
+  const l = c.startsWith(":");
+  const r = c.endsWith(":");
+  if (l && r) return "center";
+  if (r) return "right";
+  if (l) return "left";
+  return undefined;
+}
+
 export function Markdown({ source, project }: { source: string; project?: string }) {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
@@ -188,6 +222,49 @@ export function Markdown({ source, project }: { source: string; project?: string
       continue;
     }
 
+    // Tabla
+    if (isTableStart(lines, i)) {
+      const head = splitRow(line);
+      const aligns = splitRow(lines[i + 1]).map(alignOf);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].includes("|") && !/^\s*$/.test(lines[i])) {
+        rows.push(splitRow(lines[i++]));
+      }
+      const k = key++;
+      blocks.push(
+        // El wrapper scrollea aparte: una tabla ancha no debe empujar el hilo
+        // ni forzar scroll horizontal en toda la página.
+        <div key={k} className="md-table-wrap">
+          <table className="md-table">
+            <thead>
+              <tr>
+                {head.map((c, n) => (
+                  <th key={n} style={{ textAlign: aligns[n] }}>
+                    {renderInline(c, `th${k}-${n}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri}>
+                  {/* Se recorre el ENCABEZADO, no la fila: una fila con menos
+                      celdas de las debidas dejaría la tabla desalineada. */}
+                  {head.map((_, n) => (
+                    <td key={n} style={{ textAlign: aligns[n] }}>
+                      {renderInline(r[n] ?? "", `td${k}-${ri}-${n}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
+
     // Línea en blanco
     if (/^\s*$/.test(line)) {
       i++;
@@ -196,7 +273,13 @@ export function Markdown({ source, project }: { source: string; project?: string
 
     // Párrafo (junta líneas consecutivas no especiales)
     const buf: string[] = [];
-    while (i < lines.length && !/^\s*$/.test(lines[i]) && !SPECIAL.test(lines[i])) {
+    while (
+      i < lines.length &&
+      !/^\s*$/.test(lines[i]) &&
+      !SPECIAL.test(lines[i]) &&
+      // Una tabla pegada al párrafo (sin línea en blanco) no se traga aquí.
+      !isTableStart(lines, i)
+    ) {
       buf.push(lines[i++]);
     }
     const k = key++;
