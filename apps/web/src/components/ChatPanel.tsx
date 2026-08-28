@@ -12,6 +12,7 @@ import {
   type ClaudeExecConfig,
 } from "@/lib/hermes";
 import { useSpeechDictation } from "@/hooks/useSpeechDictation";
+import { speak, stopSpeaking } from "@/hooks/useSpeech";
 import { useVoiceConnect } from "@/hooks/useVoiceConnect";
 import { useWorkspace } from "@/state/WorkspaceContext";
 import { ClaudeExecBar, claudeModelLabel } from "./ClaudeExecBar";
@@ -345,11 +346,18 @@ export function ChatPanel({
     }));
     resizeInput();
     scrollDown(true);
+    // Si estaba leyendo la respuesta anterior, se calla: el turno nuevo manda.
+    stopSpeaking();
+
+    // Se acumula aparte para poder leerla al cerrar el turno sin volver a
+    // buscarla en el estado (que para entonces ya puede haber cambiado de tab).
+    let reply = "";
 
     try {
       await streamChat(
         history,
         (delta) => {
+          reply += delta;
           updateTab(tabKey, (t) => {
             const msgs = [...t.messages];
             const last = msgs[msgs.length - 1];
@@ -387,6 +395,8 @@ export function ChatPanel({
     } finally {
       updateTab(tabKey, (t) => ({ ...t, busy: false }));
       scrollDown();
+      // speak() se autocensura si el toggle está apagado.
+      speak(reply);
     }
   };
 

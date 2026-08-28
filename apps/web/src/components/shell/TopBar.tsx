@@ -16,6 +16,7 @@ import { Clock } from "@/components/Clock";
 import { LiveMeetingChip } from "./LiveMeetingChip";
 import { GestureChip } from "./GestureChip";
 import { UiHandsChip } from "./UiHandsChip";
+import { SpeakToggle } from "./SpeakToggle";
 import { MachineSelector } from "@/components/MachineSelector";
 
 const ESTADO: Record<string, { txt: string; dot: string }> = {
@@ -61,6 +62,8 @@ export function TopBar() {
           <span className={`h-1.5 w-1.5 rounded-full ${online ? e.dot : "bg-red"}`} />
           {online ? e.txt : "Desconectado"}
         </span>
+        {/* Lectura en voz alta: junto al estado de voz, que es su vecindario. */}
+        <SpeakToggle />
         <div className="empty:hidden">
           <LiveMeetingChip />
         </div>
