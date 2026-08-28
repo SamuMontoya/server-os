@@ -888,6 +888,17 @@ body::after {
   animation: skeleton-shimmer 1.4s ease-in-out infinite;
 }
 
+/* Frase que la voz está diciendo (CSS Custom Highlight API). Subrayado +
+   fondo tenue: se sigue leyendo cómodo, como en el lector. */
+::highlight(hermes-speaking) {
+  background-color: rgb(139 148 255 / 0.18);
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--violet);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
 /* ── "Pensando" — shimmer de skeleton sobre las letras + puntos saltando ──
    Mismo lenguaje visual que .skeleton (barrido de luz violeta), pero
    recortado a los glifos con background-clip:text. */

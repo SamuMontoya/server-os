@@ -12,7 +12,8 @@ import {
   type ClaudeExecConfig,
 } from "@/lib/hermes";
 import { useSpeechDictation } from "@/hooks/useSpeechDictation";
-import { speak, stopSpeaking } from "@/hooks/useSpeech";
+import { beginSpeechTurn, feedSpeech } from "@/hooks/useSpeech";
+import { SpeechHighlight } from "./SpeechHighlight";
 import { useVoiceConnect } from "@/hooks/useVoiceConnect";
 import { useWorkspace } from "@/state/WorkspaceContext";
 import { ClaudeExecBar, claudeModelLabel } from "./ClaudeExecBar";
@@ -347,7 +348,7 @@ export function ChatPanel({
     resizeInput();
     scrollDown(true);
     // Si estaba leyendo la respuesta anterior, se calla: el turno nuevo manda.
-    stopSpeaking();
+    beginSpeechTurn();
 
     // Se acumula aparte para poder leerla al cerrar el turno sin volver a
     // buscarla en el estado (que para entonces ya puede haber cambiado de tab).
@@ -358,6 +359,9 @@ export function ChatPanel({
         history,
         (delta) => {
           reply += delta;
+          // Habla mientras renderiza: encola las frases ya completas y deja
+          // fuera la última, que puede estar a medias.
+          feedSpeech(reply);
           updateTab(tabKey, (t) => {
             const msgs = [...t.messages];
             const last = msgs[msgs.length - 1];
@@ -395,8 +399,9 @@ export function ChatPanel({
     } finally {
       updateTab(tabKey, (t) => ({ ...t, busy: false }));
       scrollDown();
-      // speak() se autocensura si el toggle está apagado.
-      speak(reply);
+      // Cierra la cola con la última frase. Se autocensura si el toggle
+      // está apagado.
+      feedSpeech(reply, { final: true });
     }
   };
 
@@ -551,6 +556,9 @@ export function ChatPanel({
           </>
         )}
       </div>
+
+      {/* Resalta la frase que la voz va diciendo dentro del hilo. */}
+      <SpeechHighlight containerRef={scrollRef} />
 
       {/* Mensajes del tab activo */}
       <div
