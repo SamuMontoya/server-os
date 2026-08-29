@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { COOKIE_DESTINO, rutaSegura } from "@/lib/auth/destino";
 
 /**
  * Callback de OAuth. Google devuelve aquí un `code` de un solo uso que se
@@ -30,21 +31,7 @@ function urlAbsoluta(request: Request, ruta: string): string {
   return new URL(ruta, base).toString();
 }
 
-/** Cookie donde el navegador dejó a dónde volver, antes de irse a Google. */
-export const COOKIE_DESTINO = "hermes.destino";
 
-/** Solo rutas internas: un destino manipulado no puede sacarte del sitio. */
-function rutaSegura(valor: string | undefined): string {
-  if (!valor) return "/";
-  try {
-    const d = decodeURIComponent(valor);
-    // Debe empezar por "/" y no por "//" (que el navegador leería como host).
-    if (!d.startsWith("/") || d.startsWith("//")) return "/";
-    return d;
-  } catch {
-    return "/";
-  }
-}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

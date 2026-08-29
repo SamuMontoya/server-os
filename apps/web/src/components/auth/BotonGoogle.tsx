@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { cabeceraCookieDestino } from "@/lib/auth/destino";
 
 /**
  * Botón de "Continuar con Google".
@@ -10,33 +11,7 @@ import { createClient } from "@/lib/supabase/client";
  * callback, y el flujo de OAuth tiene que arrancar con una interacción real.
  */
 
-/** Vida corta: solo tiene que sobrevivir el viaje de ida y vuelta a Google. */
-const COOKIE_DESTINO = "hermes.destino";
-const VIDA_SEGUNDOS = 600;
 
-/**
- * El destino va en una COOKIE, nunca en la URL de callback.
- *
- * Con `?next=` en la URL, la lista de URLs permitidas de Supabase —que compara
- * de forma literal— no reconoce el callback, cae al `site_url` y suelta el
- * `?code=` donde nadie lo canjea. Con cookie, la URL de callback es siempre
- * idéntica y siempre coincide.
- *
- * `SameSite=Lax` no es preferencia: la vuelta desde Google es una navegación de
- * nivel superior desde otro sitio, y con `Strict` el navegador no la mandaría.
- */
-function cabeceraCookieDestino(destino: string): string {
-  const seguro = typeof window !== "undefined" && window.location.protocol === "https:";
-  return [
-    `${COOKIE_DESTINO}=${encodeURIComponent(destino)}`,
-    "Path=/",
-    `Max-Age=${VIDA_SEGUNDOS}`,
-    "SameSite=Lax",
-    seguro ? "Secure" : "",
-  ]
-    .filter(Boolean)
-    .join("; ");
-}
 
 export function BotonGoogle({ destino }: { destino?: string }) {
   const [cargando, setCargando] = useState(false);
