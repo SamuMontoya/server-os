@@ -142,3 +142,13 @@ export function modelSummary(): string {
     })
     .join(" ");
 }
+
+/**
+ * Subagentes: delegar lo mecánico (leer, buscar, resumir) a un modelo barato.
+ * Es la palanca más limpia de las tres — no rompe el caché del hilo principal,
+ * porque el subagente corre en su PROPIO contexto y solo devuelve su conclusión.
+ * `HERMES_SUBAGENTS=off` lo apaga.
+ */
+export function subagentsEnabled(): boolean {
+  return (process.env.HERMES_SUBAGENTS || "").toLowerCase() !== "off";
+}
