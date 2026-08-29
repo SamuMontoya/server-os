@@ -227,12 +227,19 @@ const startedAt = Date.now();
 const expandHome = (p: string) => (p.startsWith("~") ? joinPath(homedir(), p.slice(1)) : p);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Orígenes permitidos: loopback, IPs privadas de la LAN y nombres mDNS (.local).
+// Orígenes permitidos: loopback, IPs privadas de la LAN, la malla de Tailscale
+// y nombres mDNS (.local).
 // Multi-máquina: el dashboard lo sirve UNA máquina y los browsers del resto de
 // la red lo cargan desde http://192.168.x.x:31415 — con el allowlist viejo (solo
 // localhost) el preflight moría y no había dashboard desde otro PC.
+//
+// 100.64.0.0/10 es el rango CGNAT que usa Tailscale. Faltaba: el allowlist ya
+// aceptaba los nombres MagicDNS (*.ts.net) pero NO las IPs crudas de la malla,
+// así que abrir el dashboard en http://100.x.x.x:31415 cargaba la página y
+// luego mostraba "Desconectado" — el preflight al agente moría en CORS. El
+// segundo octeto va de 64 a 127.
 const LAN_ORIGIN =
-  /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.(?:local|ts\.net))(?::\d+)?$/i;
+  /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}|[a-z0-9-]+\.(?:local|ts\.net))(?::\d+)?$/i;
 
 // Private Network Access: Chrome exige que un preflight que va de una IP
 // privada a loopback lo autorice explícitamente. Se responde ANTES del cors
