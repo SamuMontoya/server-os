@@ -7,7 +7,7 @@
  */
 import type { KnowledgeHit, KnowledgeSource, KnowledgeStats } from "@hermes/shared";
 import { supabase } from "./supabase.js";
-import { embed } from "./embeddings.js";
+import { embed, EMB } from "./embeddings.js";
 import { searchMemory } from "./memory.js";
 
 export interface SearchKnowledgeOptions {
@@ -26,7 +26,7 @@ export async function searchKnowledge(
   if (embedding) {
     // Se piden de más y se depura acá: sin esto, los turnos de chat recientes
     // (boost de recencia) acaparan el top y aparecen repetidos casi idénticos.
-    const { data, error } = await supabase.rpc("match_knowledge", {
+    const { data, error } = await supabase.rpc(EMB.rpc.knowledge, {
       query_embedding: embedding,
       match_count: Math.min(limit * 3, 40),
       filter_sources: opts.sources ?? null,

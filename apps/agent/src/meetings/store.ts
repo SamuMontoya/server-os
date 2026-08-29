@@ -19,7 +19,7 @@ import type {
 } from "@hermes/shared";
 import { env } from "../env.js";
 import { supabase } from "../supabase.js";
-import { embed } from "../embeddings.js";
+import { embed, EMB } from "../embeddings.js";
 import { safeName } from "../conversations.js";
 import { extractSection, readProjects } from "../vault/projects.js";
 import { tasksForMeeting } from "../tasks/store.js";
@@ -334,7 +334,7 @@ async function mirrorMeeting(m: Meeting, durationSec: number | null): Promise<vo
       meeting_date: m.fecha,
       transcript: m.transcript,
       summary: m.summary,
-      summary_embedding: embedding,
+      [EMB.meetingCol]: embedding,
       duration_sec: durationSec,
       source: m.source,
       stt_provider: m.stt_provider ?? null,
@@ -398,7 +398,7 @@ export async function searchMeetings(
     similarity: typeof r.similarity === "number" ? r.similarity : undefined,
   });
   if (embedding) {
-    const { data, error } = await supabase.rpc("match_meetings", {
+    const { data, error } = await supabase.rpc(EMB.rpc.meetings, {
       query_embedding: embedding,
       match_count: limit,
       filter_project: project ?? null,

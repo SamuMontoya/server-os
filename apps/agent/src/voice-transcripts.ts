@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { env } from "./env.js";
 import { supabase } from "./supabase.js";
-import { embedBatch } from "./embeddings.js";
+import { embedBatch, EMB } from "./embeddings.js";
 
 const API = "https://api.elevenlabs.io/v1/convai";
 const PAGE_SIZE = 20; // conversaciones recientes a revisar por ciclo
@@ -98,7 +98,7 @@ export async function syncVoiceTranscripts(): Promise<VoiceSyncResult | null> {
           machine: env.MACHINE_NAME,
           chat_id: conv.conversation_id,
           channel: "voice",
-          embedding: content.length >= MIN_EMBED_CHARS ? vectors[i] : null,
+          [EMB.col]: content.length >= MIN_EMBED_CHARS ? vectors[i] : null,
         };
       });
       const { error } = await db

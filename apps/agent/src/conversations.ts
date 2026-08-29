@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import type { ChatSummary } from "@hermes/shared";
 import { REPO_ROOT, env } from "./env.js";
 import { supabase } from "./supabase.js";
-import { embedBatch } from "./embeddings.js";
+import { embedBatch, EMB } from "./embeddings.js";
 
 export interface StoredMessage {
   role: "user" | "assistant";
@@ -58,7 +58,7 @@ export function mirrorMessages(
       machine: env.MACHINE_NAME,
       chat_id: chatId,
       channel: "text",
-      embedding: m.content.trim().length >= MIN_EMBED_CHARS ? vectors[i] : null,
+      [EMB.col]: m.content.trim().length >= MIN_EMBED_CHARS ? vectors[i] : null,
     }));
     const { error } = await db
       .from("conversation_messages")

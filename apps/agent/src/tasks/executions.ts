@@ -24,7 +24,7 @@ import type {
 } from "@hermes/shared";
 import { env } from "../env.js";
 import { supabase } from "../supabase.js";
-import { embed } from "../embeddings.js";
+import { embed, EMB } from "../embeddings.js";
 import { safeName } from "../conversations.js";
 import { extractSection, readProjects } from "../vault/projects.js";
 import type { ClaudeLine } from "../agent/claude-cli.js";
@@ -335,7 +335,7 @@ async function mirrorExecution(e: TaskExecution, usage?: RunTokenUsage): Promise
   const { error } = await supabase.from("task_executions").upsert(
     {
       local_key: execLocalKey(e.project_slug, e.run_id ?? e.id),
-      embedding,
+      [EMB.col]: embedding,
       execution_id: e.id,
       task_id: e.task_id,
       project_slug: safeName(e.project_slug),

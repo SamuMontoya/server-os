@@ -24,6 +24,17 @@ export const env = {
   SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+  // ── Embeddings: proveedor intercambiable ──────────────────────────────
+  // "openai"  → text-embedding-3-small, 1536 dims, columnas `embedding`.
+  // "ollama"  → modelo local (default nomic-embed-text, 768), columnas
+  //             `embedding_local` y RPCs `*_local` (migración 025).
+  // "none"    → sin vectores; la búsqueda cae a recencia/ILIKE.
+  // Los dos esquemas conviven en la MISMA base: el servidor puede usar
+  // embeddings locales sin romper la Mac, que sigue en 1536. pgvector no
+  // compara dimensiones distintas, así que cada uno ve solo su índice.
+  EMBEDDINGS_PROVIDER: (process.env.EMBEDDINGS_PROVIDER || "").toLowerCase(),
+  OLLAMA_URL: (process.env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/$/, ""),
+  OLLAMA_EMBED_MODEL: process.env.OLLAMA_EMBED_MODEL || "nomic-embed-text",
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || "",
   // Agente de voz de ElevenLabs. Comparte el valor con el dashboard web
   // (NEXT_PUBLIC_…) para que la app móvil obtenga el token del mismo agente.

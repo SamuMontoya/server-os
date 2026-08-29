@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import matter from "gray-matter";
 import { env } from "../env.js";
 import { supabase } from "../supabase.js";
-import { embedBatch } from "../embeddings.js";
+import { embedBatch, EMB } from "../embeddings.js";
 
 /** Carpetas del vault que entran al índice (conocimiento, no config). */
 const INDEXED_FOLDERS = ["projects", "00 Inbox", "10 Notas"];
@@ -120,7 +120,7 @@ export async function syncVaultKnowledge(): Promise<VaultSyncResult | null> {
       const vectors = await embedBatch(changed.map((d) => `${d.title}\n${d.content}`));
       const rows = changed.map((d, i) => ({
         ...d,
-        embedding: vectors[i],
+        [EMB.col]: vectors[i],
         machine: env.MACHINE_NAME,
         updated_at: new Date().toISOString(),
       }));

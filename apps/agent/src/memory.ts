@@ -1,6 +1,6 @@
 import type { Memory, MemoryType } from "@hermes/shared";
 import { supabase, hasSupabase } from "./supabase.js";
-import { embed } from "./embeddings.js";
+import { embed, EMB } from "./embeddings.js";
 import { env } from "./env.js";
 
 export interface SaveMemoryInput {
@@ -24,7 +24,7 @@ export async function saveMemory(input: SaveMemoryInput): Promise<string> {
   // se refresca (contenido + fecha + importancia máxima) en vez de duplicarla.
   // Así la base no se llena de variantes de "prefiere pnpm".
   if (embedding) {
-    const { data: similar } = await supabase.rpc("match_memories", {
+    const { data: similar } = await supabase.rpc(EMB.rpc.memories, {
       query_embedding: embedding,
       match_count: 5,
       filter_type: input.type,
@@ -38,7 +38,7 @@ export async function saveMemory(input: SaveMemoryInput): Promise<string> {
         .update({
           content: input.content,
           summary: input.summary ?? top.summary,
-          embedding,
+          [EMB.col]: embedding,
           project_slug: input.project ?? top.project_slug,
           tags: [...new Set([...(top.tags ?? []), ...(input.tags ?? [])])],
           importance: Math.max(top.importance ?? 3, input.importance ?? 3),
@@ -55,7 +55,7 @@ export async function saveMemory(input: SaveMemoryInput): Promise<string> {
       type: input.type,
       content: input.content,
       summary: input.summary ?? null,
-      embedding,
+      [EMB.col]: embedding,
       project_slug: input.project ?? null,
       tags: input.tags ?? [],
       importance: input.importance ?? 3,
@@ -76,7 +76,7 @@ export async function searchMemory(
   if (!supabase) return [];
   const embedding = await embed(query);
   if (embedding) {
-    const { data, error } = await supabase.rpc("match_memories", {
+    const { data, error } = await supabase.rpc(EMB.rpc.memories, {
       query_embedding: embedding,
       match_count: limit,
       filter_type: type ?? null,
