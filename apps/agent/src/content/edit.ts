@@ -34,6 +34,7 @@ import { emit } from "../events.js";
 import { env } from "../env.js";
 import { getPiece, updatePiece } from "./store.js";
 import { OWNER } from "../owner.js";
+import { optionsFor } from "../agent/models.js";
 
 const execFileAsync = promisify(execFile);
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -361,7 +362,7 @@ async function runEdit(
       prompt,
       options: {
         cwd: env.VIDEO_EDIT_PATH,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("videoEdit"),
         // Un render footage-led encadena MUCHAS llamadas (probe, review,
         // pipeline por etapas, Remotion): el tope alto es a propósito.
         maxTurns: 300,

@@ -10,6 +10,7 @@ import { env } from "../env.js";
 import { emit } from "../events.js";
 import { getEnglishSession, listEnglishSessions, updateSessionReport } from "./store.js";
 import { OWNER, ownerBlurb } from "../owner.js";
+import { optionsFor } from "../agent/models.js";
 
 const MAX_TRANSCRIPT_CHARS = 60_000;
 
@@ -88,7 +89,7 @@ Reglas:
 - Prioriza patrones que se REPITEN entre sesiones sobre errores puntuales.
 - Los drills deben ser hablados y concretos ("describe tu proyecto actual usando solo pasado perfecto", no "estudiar gramática").
 - Responde SIEMPRE llamando a la tool record_practice_report UNA sola vez.`,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("englishReport"),
         maxTurns: 6,
         settingSources: [],
         mcpServers: { english: server },

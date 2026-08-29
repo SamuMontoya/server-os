@@ -51,6 +51,7 @@ import {
 } from "./live-copilot.js";
 import { getLiveSttProvider, type LiveSttConnection, type NormalizedTurn } from "./live-stt.js";
 import { OWNER } from "../owner.js";
+import { optionsFor } from "../agent/models.js";
 
 // ── Constantes de cadencia y umbrales ──────────────────────────────────
 
@@ -715,7 +716,7 @@ Evalúa el momento actual y llama a record_live_suggestions.`,
       options: {
         cwd: env.VAULT_PATH || process.cwd(),
         systemPrompt,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("liveCoach"),
         maxTurns: 3,
         settingSources: [],
         mcpServers: { livecoach: server },

@@ -25,6 +25,7 @@ import type { LiveSuggestionLang } from "@hermes/shared";
 import { env } from "../env.js";
 import type { NormalizedTurn } from "./live-stt.js";
 import { OWNER } from "../owner.js";
+import { optionsFor } from "../agent/models.js";
 
 // ── Cadencia y umbrales del gatillo ────────────────────────────────────
 
@@ -401,7 +402,9 @@ class SdkFastEngine implements FastEngine {
       options: {
         cwd: env.VAULT_PATH || process.cwd(),
         systemPrompt: this.systemStatic,
-        model: env.COPILOT_MODEL,
+        // COPILOT_MODEL sigue mandando si está puesta (compatibilidad);
+        // si no, la política decide — haiku, por latencia (~2s de presupuesto).
+        ...(env.COPILOT_MODEL ? { model: env.COPILOT_MODEL } : optionsFor("liveCopilot")),
         includePartialMessages: true,
         thinking: { type: "disabled" }, // mínima latencia: aquí manda el TTFT
         maxTurns: 1000, // toda la junta vive en UNA sesión

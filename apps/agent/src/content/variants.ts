@@ -13,6 +13,7 @@ import { env } from "../env.js";
 import { buildCreativeContext } from "./context.js";
 import { getPiece, updatePiece } from "./store.js";
 import { OWNER, ownerBlurb } from "../owner.js";
+import { optionsFor } from "../agent/models.js";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
@@ -100,7 +101,7 @@ Genera 3-5 variantes con ángulos distintos y llama a record_variants.`,
       options: {
         cwd: env.VAULT_PATH || process.cwd(),
         systemPrompt: SYSTEM_PROMPT,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("variants"),
         maxTurns: 4,
         settingSources: [],
         mcpServers: { variants: server },

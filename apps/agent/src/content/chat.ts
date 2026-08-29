@@ -17,6 +17,7 @@ import { emit } from "../events.js";
 import { env } from "../env.js";
 import { OWNER, ownerBlurb } from "../owner.js";
 import { buildCreativeContext } from "./context.js";
+import { optionsFor } from "../agent/models.js";
 import {
   appendChatMessage,
   getChatSessionId,
@@ -267,7 +268,7 @@ export async function pieceChatTurn(
       options: {
         cwd: env.VAULT_PATH || process.cwd(),
         systemPrompt: SYSTEM_PROMPT,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("pieceChat"),
         maxTurns: 12,
         includePartialMessages: true,
         settingSources: [],

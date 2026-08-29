@@ -1,6 +1,7 @@
+import { isEnabled } from "@hermes/shared";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { env } from "../env.js";
+import { env, IS_MAC } from "../env.js";
 import { readProjects } from "../vault/projects.js";
 import { listPreferences, recentMemories } from "../memory.js";
 import { searchKnowledge } from "../knowledge.js";
@@ -50,7 +51,8 @@ El usuario está en su página VIDA (finanzas personales + hábitos + metas) hab
         .join(" · ")}.`,
     );
   }
-  lines.push(
+  if (isEnabled("vida"))
+    lines.push(
     `Herramientas de asesor (mcp__hermes__*): log_transaction registra gastos/ingresos al vuelo (con account si nombra billetera: bancolombia, nu, nequi, ontop — el saldo se ajusta solo); get_balance el saldo vivo; set_wallet_balance recalibra una billetera; get_finance_summary y list_transactions para análisis con detalle; set_budget presupuestos; log_habit / get_habits_today / manage_habit / update_goal para hábitos y metas. Si ${OWNER} menciona un gasto, regístralo sin pedir permiso y confírmalo en una frase.`,
   );
   return lines.join("\n\n");
@@ -79,15 +81,32 @@ Reglas:
   - search_knowledge: TU PRIMERA opción para contexto histórico. Busca semánticamente en TODO lo que sabes: memorias, reuniones, ejecuciones de tareas, conversaciones pasadas (texto y voz) y notas del vault. Úsala SIEMPRE antes de preguntar algo que podrías saber.
   - save_memory: guarda hechos/aprendizajes que valga la pena recordar entre sesiones.
   - save_preference: guarda preferencias de ${OWNER} cuando exprese una ("prefiero X").
-  - search_memory / search_meetings / get_recent_activity: búsquedas acotadas a una sola fuente.
-  - query_code_graph: preguntas sobre la estructura del código de hermes-os (qué depende de qué, dónde vive un módulo, cómo se conectan dos partes). Prefiérela sobre leer archivos a ciegas.
+  - search_memory / get_recent_activity: búsquedas acotadas a una sola fuente.
   - get_project_status / update_project_note: leer y persistir estado de proyectos.
   - capture_idea: ideas sueltas van al Inbox del vault.
-  - create_linear_issue / list_linear_issues: manejo de tareas en Linear. Al crear un issue, PRIMERO junta contexto real (get_project_status, search_knowledge, query_code_graph) y luego redacta: título imperativo específico; description en markdown con qué/por qué, archivos o rutas relevantes y criterios de aceptación; y prompt = un prompt AUTOCONTENIDO listo para copiar-pegar en Claude Code (ruta local del repo, instrucciones concretas, criterios de aceptación y cómo verificar) — se publica al final del issue como bloque "Copy prompt". Lista antes de crear si sospechas duplicado; pasa project (slug del vault) para que quede etiquetado.
-  - mcp__linear__* (MCP oficial de Linear, si está conectado): para TODO lo demás de Linear — actualizar estado/prioridad/asignación, comentar, buscar issues o proyectos, ciclos. Para CREAR issues usa SIEMPRE create_linear_issue (garantiza el bloque Copy prompt); nunca crees issues con el MCP.
-  - mcp__chrome-devtools__* (si están disponibles): NAVEGAR la web de verdad en un Chrome dedicado VISIBLE (perfil "Hermes", con sesiones persistidas). Flujo: navega a la página → toma un snapshot para ver los elementos y sus uids → interactúa (click/llenar) con esos uids → verifica con otro snapshot. ${OWNER} está VIENDO esa ventana: no cierres pestañas que no abriste. Si un sitio pide login, no intentes credenciales — reporta que ${OWNER} inicie sesión una vez en ese perfil.
 - Guarda memorias proactivamente al final de tareas significativas (qué se hizo, qué se aprendió). Escribe cada memoria autocontenida (con nombres y contexto): así la búsqueda semántica la encuentra después.
 - No hagas cambios destructivos. No uses sudo. No borres fuera del vault sin instrucción explícita.`);
+
+
+  // Estas líneas describen tools que solo existen si su feature está encendida.
+  // Dejarlas fijas costaba ~500 tokens por TURNO enseñándole al modelo a llamar
+  // herramientas no registradas — gasto y alucinación a la vez.
+  const toolDocs: string[] = [];
+  if (isEnabled("juntas")) toolDocs.push("  - search_meetings: busca en actas de reuniones pasadas.");
+  if (isEnabled("codegraph"))
+    toolDocs.push(
+      "  - query_code_graph: preguntas sobre la estructura del código de hermes-os (qué depende de qué, dónde vive un módulo, cómo se conectan dos partes). Prefiérela sobre leer archivos a ciegas.",
+    );
+  if (isEnabled("linear"))
+    toolDocs.push(
+      '  - create_linear_issue / list_linear_issues: manejo de tareas en Linear. Al crear un issue, PRIMERO junta contexto real (get_project_status, search_knowledge, query_code_graph) y luego redacta: título imperativo específico; description en markdown con qué/por qué, archivos o rutas relevantes y criterios de aceptación; y prompt = un prompt AUTOCONTENIDO listo para copiar-pegar en Claude Code (ruta local del repo, instrucciones concretas, criterios de aceptación y cómo verificar) — se publica al final del issue como bloque "Copy prompt". Lista antes de crear si sospechas duplicado; pasa project (slug del vault) para que quede etiquetado.',
+      '  - mcp__linear__* (MCP oficial de Linear, si está conectado): para TODO lo demás de Linear — actualizar estado/prioridad/asignación, comentar, buscar issues o proyectos, ciclos. Para CREAR issues usa SIEMPRE create_linear_issue (garantiza el bloque Copy prompt); nunca crees issues con el MCP.',
+    );
+  if (IS_MAC && env.BROWSER_AGENT_ENABLED)
+    toolDocs.push(
+      `  - mcp__chrome-devtools__* (si están disponibles): NAVEGAR la web de verdad en un Chrome dedicado VISIBLE (perfil "Hermes", con sesiones persistidas). Flujo: navega a la página → toma un snapshot para ver los elementos y sus uids → interactúa (click/llenar) con esos uids → verifica con otro snapshot. ${OWNER} está VIENDO esa ventana: no cierres pestañas que no abriste. Si un sitio pide login, no intentes credenciales — reporta que ${OWNER} inicie sesión una vez en ese perfil.`,
+    );
+  if (toolDocs.length) parts.push(`Tools adicionales disponibles:\n${toolDocs.join("\n")}`);
 
   // Persona y preferencias del dueño (SOUL.md, fuera del repo)
   const soul = soulPromptBlock();

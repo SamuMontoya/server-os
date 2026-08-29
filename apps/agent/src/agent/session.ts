@@ -13,6 +13,7 @@ import { checkTool } from "./guardrails.js";
 import { hermesMcpServer, HERMES_TOOL_NAMES } from "./tools.js";
 import { linearEnabled } from "../linear.js";
 import { ensureCdpChrome, CDP_URL } from "../browser.js";
+import { optionsFor } from "./models.js";
 
 /**
  * MCP oficial de Linear (remoto, hosteado por ellos). Auth headless: la misma
@@ -137,7 +138,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
       options: {
         cwd: opts.cwd || env.VAULT_PATH || process.cwd(),
         systemPrompt,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("console"),
         maxTurns: 40,
         includePartialMessages: true,
         settingSources: [],

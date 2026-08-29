@@ -16,6 +16,7 @@ import type {
 import { isEnabled, featureSummary } from "@hermes/shared";
 import { env } from "./env.js";
 import { EMB } from "./embeddings.js";
+import { modelSummary } from "./agent/models.js";
 import { verifySupabaseToken } from "./auth.js";
 import { activityHourly, emit, recentEvents, subscribe } from "./events.js";
 import { getPresence, listPresence, pushPresence, selfBaseUrl } from "./presence.js";
@@ -2617,4 +2618,7 @@ serve({ fetch: app.fetch, port: env.PORT, hostname, websocket: { server: wss } }
   const feats = featureSummary();
   if (feats.off.length) console.log(`   apagadas: ${feats.off.join(", ")}`);
   console.log(`   embeddings: ${EMB.provider} (${EMB.dims}d → ${EMB.col})`);
+  // La política de modelos, explícita: qué rol usa qué. Sin esto, saber por
+  // qué un turno salió caro obliga a leer el .env y tres archivos.
+  console.log(`   modelos: ${modelSummary()}`);
 });

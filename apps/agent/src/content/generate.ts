@@ -15,6 +15,7 @@ import { env } from "../env.js";
 import { buildCreativeContext } from "./context.js";
 import { getPiece, updatePiece } from "./store.js";
 import { OWNER, ownerBlurb } from "../owner.js";
+import { optionsFor } from "../agent/models.js";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
@@ -118,7 +119,7 @@ Genera el kit completo y llama a record_content_kit.`,
       options: {
         cwd: env.VAULT_PATH || process.cwd(),
         systemPrompt: SYSTEM_PROMPT,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("contentKit"),
         maxTurns: 6,
         settingSources: [],
         mcpServers: { content: server },

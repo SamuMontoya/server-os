@@ -28,6 +28,7 @@ import { getProjectBriefing, readProjects } from "../vault/projects.js";
 import { saveMeeting } from "./store.js";
 import { transcribe } from "./stt.js";
 import { OWNER } from "../owner.js";
+import { optionsFor } from "../agent/models.js";
 
 const MAX_TRANSCRIPT_CHARS = 120_000; // ~30k tokens: cabe de sobra en el contexto
 
@@ -135,7 +136,7 @@ export async function ingestMeeting(opts: IngestOptions): Promise<Meeting> {
       options: {
         cwd: env.VAULT_PATH || process.cwd(),
         systemPrompt,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("meetingIngest"),
         // 6 se quedaba corto con transcripciones largas (el modelo razona un
         // par de turnos antes de llamar a la tool) y el SDK LANZA al topar el
         // límite → se perdían juntas enteras. Con el catch de abajo el límite

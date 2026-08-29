@@ -29,6 +29,7 @@ import { safeName } from "../conversations.js";
 import { extractSection, readProjects } from "../vault/projects.js";
 import type { ClaudeLine } from "../agent/claude-cli.js";
 import { OWNER } from "../owner.js";
+import { optionsFor } from "../agent/models.js";
 
 // ── Entrada desde el punto de captura (launch en tasks/store.ts) ────────
 
@@ -202,7 +203,7 @@ Analiza la ejecución y llama a record_execution_analysis.`;
       options: {
         cwd: env.VAULT_PATH || process.cwd(),
         systemPrompt,
-        model: process.env.HERMES_MODEL || undefined,
+        ...optionsFor("analyst"),
         maxTurns: 4,
         settingSources: [],
         mcpServers: { execanalysis: server },
