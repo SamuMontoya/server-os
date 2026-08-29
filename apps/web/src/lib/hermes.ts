@@ -51,8 +51,31 @@ const DEFAULT_HERMES_URL = (
 
 const AGENT_URL_KEY = "hermes_agent_url";
 
+/**
+ * Agente FIJO: el dashboard habla siempre con el suyo y no se puede cambiar.
+ * Es lo correcto cuando el dashboard lo sirve el mismo servidor que corre el
+ * agente — ahí un selector de máquinas solo sirve para apuntar a un agente
+ * apagado y quedarse "Desconectado" sin explicación.
+ */
+export const AGENT_PINNED = process.env.NEXT_PUBLIC_HERMES_PIN_AGENT === "1";
+
+// Un override viejo sobrevive en el navegador aunque se quite el selector, así
+// que al fijar el agente se PURGA al cargar. Sin esto, quien ya tenía uno
+// guardado seguía apuntando a la máquina equivocada para siempre.
+if (AGENT_PINNED && typeof window !== "undefined") {
+  try {
+    if (localStorage.getItem(AGENT_URL_KEY)) {
+      localStorage.removeItem(AGENT_URL_KEY);
+      console.info("[hermes] agente fijo: se descartó el override guardado");
+    }
+  } catch {
+    /* sin localStorage */
+  }
+}
+
 /** URL del agente activo: override del selector de máquina o el env local. */
 export function getHermesUrl(): string {
+  if (AGENT_PINNED) return DEFAULT_HERMES_URL;
   try {
     const override = localStorage.getItem(AGENT_URL_KEY);
     if (override) return override.replace(/\/$/, "");

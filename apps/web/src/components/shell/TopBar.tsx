@@ -17,6 +17,9 @@ import { LiveMeetingChip } from "./LiveMeetingChip";
 import { GestureChip } from "./GestureChip";
 import { UiHandsChip } from "./UiHandsChip";
 import { SpeakToggle } from "./SpeakToggle";
+// El selector solo tiene sentido si el dashboard puede apuntar a otro agente.
+// Con NEXT_PUBLIC_HERMES_PIN_AGENT=1 la condición es un literal inlineado y
+// webpack se lleva el componente entero del bundle.
 import { MachineSelector } from "@/components/MachineSelector";
 
 const ESTADO: Record<string, { txt: string; dot: string }> = {
@@ -85,7 +88,7 @@ export function TopBar() {
             <Vital label="SSD" pct={sys.diskUsedPct} />
           </div>
         )}
-        <MachineSelector />
+        {process.env.NEXT_PUBLIC_HERMES_PIN_AGENT !== "1" && <MachineSelector />}
         <button
           type="button"
           onClick={() => ws.setPaletteOpen(true)}
