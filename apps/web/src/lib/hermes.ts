@@ -33,6 +33,7 @@ import type {
   Wallet,
 } from "@hermes/shared";
 import { downloadText } from "./download";
+import { uuid } from "./uuid";
 
 /**
  * Cliente del agent server (local o remoto vía Tailscale).
@@ -106,11 +107,11 @@ export function getSessionId(): string {
   try {
     const existing = localStorage.getItem(SESSION_KEY);
     if (existing) return existing;
-    const created = crypto.randomUUID();
+    const created = uuid();
     localStorage.setItem(SESSION_KEY, created);
     return created;
   } catch {
-    return crypto.randomUUID();
+    return uuid();
   }
 }
 

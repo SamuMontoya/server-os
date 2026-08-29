@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { streamChat, type ChatMessage } from "@/lib/hermes";
 import { Markdown } from "@/components/Markdown";
 import { Pensando } from "@/components/Pensando";
+import { uuid } from "@/lib/uuid";
 
 // Sin datos del stream por este tiempo = turno colgado → se aborta solo.
 // Holgado a propósito: el asesor corre tools reales (consultas de finanzas).
@@ -43,7 +44,7 @@ export function AdvisorChat({
   const [failed, setFailed] = useState<string | null>(null);
   // Sesión: una clave estable por montaje; el SDK session id llega en el
   // primer turno y los siguientes resumen ESA conversación.
-  const sessionKey = useRef(crypto.randomUUID());
+  const sessionKey = useRef(uuid());
   const sdkSession = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 

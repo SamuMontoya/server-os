@@ -21,6 +21,7 @@ import { AgentSteps } from "./AgentSteps";
 import { Markdown } from "./Markdown";
 import { Pensando } from "./Pensando";
 import { PanelState } from "@/components/ui/PanelState";
+import { uuid } from "@/lib/uuid";
 
 /**
  * Consola con TABS: cada tab es una conversación (una sesión del Agent SDK).
@@ -52,7 +53,7 @@ interface TabsState {
 }
 
 const newTab = (): ChatTab => ({
-  key: crypto.randomUUID(),
+  key: uuid(),
   sdkSessionId: null,
   title: "",
   messages: [],
@@ -308,7 +309,7 @@ export function ChatPanel({
       return;
     }
     const t: ChatTab = {
-      key: crypto.randomUUID(),
+      key: uuid(),
       sdkSessionId: detail.id,
       title: detail.title.slice(0, 60),
       messages: detail.transcript,

@@ -50,9 +50,16 @@ const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const DEFAULT_THRESHOLD = 70;
 // El endpoint tiene rate limit propio: consultarlo por turno lo tumbaría.
 const TTL_MS = 5 * 60_000;
-const TTL_FAIL_MS = 15 * 60_000;
+// Los fallos se reintentan RÁPIDO al principio y se van espaciando. Con un TTL
+// fijo de 15 min, el fallo típico —la primera consulta corre antes de que la
+// red esté lista al arrancar— dejaba al agente 15 minutos ciego al consumo:
+// si el servidor arranca con la sesión al 90%, no se enteraría. Verificado en
+// el despliegue real: el arranque decía "uso no disponible" y un reinicio
+// leía 15% sin problema.
+const FAIL_BACKOFF_MS = [15_000, 60_000, 5 * 60_000, 15 * 60_000];
 
 let cache: { at: number; ttl: number; state: BudgetState } | null = null;
+let consecutiveFailures = 0;
 
 function threshold(): number {
   const n = Number(process.env.HERMES_LOW_POWER_AT);
@@ -161,7 +168,14 @@ export async function budgetState(): Promise<BudgetState> {
         ? { mode: "low", sessionUtilization: util, reason: `sesión al ${util}% (umbral ${threshold()}%)` }
         : { mode: "normal", sessionUtilization: util, reason: `sesión al ${util}%` };
 
-  cache = { at: now, ttl: util === null ? TTL_FAIL_MS : TTL_MS, state };
+  if (util === null) {
+    const ttl = FAIL_BACKOFF_MS[Math.min(consecutiveFailures, FAIL_BACKOFF_MS.length - 1)];
+    consecutiveFailures++;
+    cache = { at: now, ttl, state };
+  } else {
+    consecutiveFailures = 0;
+    cache = { at: now, ttl: TTL_MS, state };
+  }
   return state;
 }
 
