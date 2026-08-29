@@ -15,6 +15,7 @@ import { UiHandsProvider } from "@/state/UiHandsProvider";
 import { DocViewerProvider } from "@/components/DocViewer";
 import { AppShell } from "@/components/shell/AppShell";
 import { BootGate } from "@/components/boot/BootGate";
+import { usePathname } from "next/navigation";
 
 /**
  * Árbol ÚNICO de providers de toda la app (vive en el layout, persiste entre
@@ -36,6 +37,13 @@ import { BootGate } from "@/components/boot/BootGate";
  * y las alterna con CSS.
  */
 export function Providers({ children }: { children: React.ReactNode }) {
+  // El login va DESNUDO, fuera de todo el árbol. Montar los providers ahí
+  // arrancaría los polls al agente, la sesión de voz y el BootGate antes de
+  // que nadie haya entrado — trabajo (y errores en consola) de una pantalla
+  // cuyo único fin es autenticar.
+  const pathname = usePathname();
+  if (pathname === "/login") return <>{children}</>;
+
   return (
     <ConversationProvider>
       <VoiceBusyProvider>
