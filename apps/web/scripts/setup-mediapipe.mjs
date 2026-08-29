@@ -9,6 +9,16 @@ import { writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Este script corre como proceso APARTE del build, así que nadie ha cargado el
+// .env de la raíz todavía — eso lo hace next.config.ts, ya dentro de `next
+// build`. Sin esta línea la guarda de abajo lee undefined y descarga igual
+// (comprobado en el servidor: bajó los 7.5MB con los gestos apagados).
+try {
+  process.loadEnvFile(new URL("../../../.env", import.meta.url).pathname);
+} catch {
+  /* sin .env en la raíz: se usan los defaults */
+}
+
 // Con los gestos apagados esto son ~40MB de wasm y una descarga de 7.5MB que
 // nadie va a usar. En el servidor (sin cámara y con disco justo) es puro
 // desperdicio, y además alarga cada build.
