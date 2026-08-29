@@ -1,7 +1,12 @@
 import "../env.js";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { join } from "node:path";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Modo de bajo consumo.
@@ -10,7 +15,10 @@ import { join } from "node:path";
  * "sesión") y varias semanales. Anthropic las expone en el endpoint privado
  * `/api/oauth/usage` como `utilization` 0-100 — el mismo que alimenta el widget
  * del dashboard. Aquí se lee desde el AGENTE, para que la decisión no dependa
- * de que la web esté arriba (el loop nocturno corre sin nadie mirando).
+ * de que la web esté arriba (el loop desatendido corre sin nadie mirando).
+ *
+ * Se activa de dos formas y ninguna es por horario: automáticamente al pasar el
+ * umbral de la ventana de 5 h, o a mano con HERMES_LOW_POWER=1.
  *
  * Qué hace el modo bajo, y por qué cada cosa (la idea es máximo rendimiento por
  * token, no "responder peor"):
@@ -51,36 +59,61 @@ function threshold(): number {
   return Number.isFinite(n) && n > 0 && n <= 100 ? n : DEFAULT_THRESHOLD;
 }
 
-/**
- * Ventana nocturna `HERMES_LOW_POWER_HOURS=23-7` (hora local). Pensada para el
- * loop desatendido: de noche nadie está esperando la respuesta, así que la
- * calidad marginal no vale lo que cuesta.
- */
-function inNightWindow(now = new Date()): boolean {
-  const raw = (process.env.HERMES_LOW_POWER_HOURS || "").trim();
-  if (!raw) return false;
-  const m = raw.match(/^(\d{1,2})\s*-\s*(\d{1,2})$/);
-  if (!m) {
-    console.warn(`[budget] HERMES_LOW_POWER_HOURS="${raw}" inválido (formato: 23-7)`);
-    return false;
-  }
-  const [from, to] = [Number(m[1]), Number(m[2])];
-  const h = now.getHours();
-  // Una ventana que cruza medianoche (23-7) no es un rango normal: es la unión
-  // de [23,24) y [0,7). Compararla con from<=h<to daría siempre false.
-  return from <= to ? h >= from && h < to : h >= from || h < to;
-}
-
 async function readToken(): Promise<string | null> {
-  const env = (process.env.CLAUDE_OAUTH_TOKEN || "").trim();
-  if (env) return env;
-  // Mismo archivo que usa el dashboard: una sola fuente para las dos apps.
-  try {
-    const t = (await readFile(join(homedir(), ".hermes-os", "claude-token"), "utf8")).trim();
-    return t || null;
-  } catch {
-    return null;
+  // Override explícito, si alguien quiere aislar este lector.
+  const fromEnv = (process.env.CLAUDE_OAUTH_TOKEN || "").trim();
+  if (fromEnv) return fromEnv;
+
+  // Se reusa la credencial del PROPIO CLI: es el mismo token OAuth con el que
+  // ya infiere y sirve tal cual contra /api/oauth/usage. Pedir un archivo
+  // aparte era trabajo inventado.
+  //
+  // El ORDEN importa y depende de la plataforma: en macOS la fuente viva es el
+  // Keychain y ~/.claude/.credentials.json suele ser un remanente RANCIO — si
+  // se lee primero, devuelve un token vencido que da 401 y nunca se llega al
+  // Keychain. En Linux (el servidor) no hay Keychain y el archivo ES la fuente.
+  const readers: (() => Promise<string | null>)[] = [];
+  const fromKeychain = async () => {
+    try {
+      const { stdout } = await execFileAsync("security", [
+        "find-generic-password",
+        "-s",
+        "Claude Code-credentials",
+        "-w",
+      ]);
+      const tok = JSON.parse(stdout)?.claudeAiOauth?.accessToken;
+      return typeof tok === "string" && tok ? tok : null;
+    } catch {
+      return null;
+    }
+  };
+  const fromFile = async () => {
+    try {
+      const raw = await readFile(join(homedir(), ".claude", ".credentials.json"), "utf8");
+      const tok = JSON.parse(raw)?.claudeAiOauth?.accessToken;
+      return typeof tok === "string" && tok ? tok : null;
+    } catch {
+      return null;
+    }
+  };
+  if (process.platform === "darwin") readers.push(fromKeychain, fromFile);
+  else readers.push(fromFile);
+
+  // Archivo heredado del dashboard (compatibilidad).
+  readers.push(async () => {
+    try {
+      const t = (await readFile(join(homedir(), ".hermes-os", "claude-token"), "utf8")).trim();
+      return t || null;
+    } catch {
+      return null;
+    }
+  });
+
+  for (const read of readers) {
+    const tok = await read();
+    if (tok) return tok;
   }
+  return null;
 }
 
 async function fetchUtilization(): Promise<number | null> {
@@ -107,7 +140,7 @@ async function fetchUtilization(): Promise<number | null> {
 /**
  * Estado actual. Cachea porque el endpoint limita, y **falla hacia `normal`**:
  * si no se puede leer el uso, degradar la calidad a ciegas sería peor que
- * gastar de más. El modo forzado y la ventana nocturna no dependen de la red.
+ * gastar de más. El modo forzado no depende de la red.
  */
 export async function budgetState(): Promise<BudgetState> {
   const forced = (process.env.HERMES_LOW_POWER || "").toLowerCase();
@@ -116,12 +149,6 @@ export async function budgetState(): Promise<BudgetState> {
   if (forced === "off")
     return { mode: "normal", sessionUtilization: null, reason: "desactivado por HERMES_LOW_POWER=off" };
 
-  if (inNightWindow())
-    return {
-      mode: "low",
-      sessionUtilization: null,
-      reason: `ventana nocturna (${process.env.HERMES_LOW_POWER_HOURS})`,
-    };
 
   const now = Date.now();
   if (cache && now - cache.at < cache.ttl) return cache.state;
