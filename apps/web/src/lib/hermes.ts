@@ -49,6 +49,8 @@ const DEFAULT_HERMES_URL = (
   process.env.NEXT_PUBLIC_HERMES_URL || "http://localhost:8650"
 ).replace(/\/$/, "");
 
+import { getAccessToken } from "@/lib/auth/token";
+
 const AGENT_URL_KEY = "hermes_agent_url";
 
 /**
@@ -98,8 +100,19 @@ export function setHermesUrl(url: string | null): void {
   }
 }
 
-/** API key compartida entre agentes (multi-Mac). Vacía = sin auth (local). */
+/**
+ * Credencial para el agente. Prefiere el JWT de la sesión y solo cae a la
+ * HERMES_API_KEY estática si no hay sesión.
+ *
+ * El orden importa: la key va INCRUSTADA en el bundle, así que cualquiera que
+ * cargue la página se la lleva y revocarla obliga a rotarla en todas las
+ * máquinas. El JWT ata cada petición a una identidad, caduca solo y se revoca
+ * quitando el usuario. La key se mantiene como respaldo para el modo sin
+ * login (LAN de casa) y para clientes que no son el navegador.
+ */
 export function getHermesKey(): string {
+  const jwt = getAccessToken();
+  if (jwt) return jwt;
   return process.env.NEXT_PUBLIC_HERMES_API_KEY || "";
 }
 

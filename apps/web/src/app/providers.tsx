@@ -16,6 +16,7 @@ import { DocViewerProvider } from "@/components/DocViewer";
 import { AppShell } from "@/components/shell/AppShell";
 import { BootGate } from "@/components/boot/BootGate";
 import { usePathname } from "next/navigation";
+import { iniciarTokenSync } from "@/lib/auth/token";
 
 /**
  * Árbol ÚNICO de providers de toda la app (vive en el layout, persiste entre
@@ -43,6 +44,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
   // cuyo único fin es autenticar.
   const pathname = usePathname();
   if (pathname === "/login") return <>{children}</>;
+
+  // Mantiene el access token al día para que hermesFetch/sseUrl —que son
+  // síncronas— puedan leerlo sin volverse promesas.
+  iniciarTokenSync();
 
   return (
     <ConversationProvider>

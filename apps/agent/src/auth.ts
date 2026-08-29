@@ -23,6 +23,22 @@ export function looksLikeJwt(token: string): boolean {
   return token.split(".").length === 3;
 }
 
+/**
+ * Correos con permiso. Es la barrera REAL: la lista del dashboard vive en el
+ * navegador (NEXT_PUBLIC_) y solo sirve de experiencia de usuario — quien
+ * llame directo a :8650 con un JWT válido no pasa por ella.
+ *
+ * Vacío = no se filtra por correo (cualquier usuario del proyecto Supabase
+ * entra). Se deja así por compatibilidad con el móvil, que ya usaba JWT sin
+ * lista; poner la variable la activa.
+ */
+function correosPermitidos(): string[] {
+  return (process.env.HERMES_ALLOWED_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 /** Devuelve el user id si el token es un JWT válido de Supabase; null si no. */
 export async function verifySupabaseToken(token: string): Promise<string | null> {
   if (!supabase || !looksLikeJwt(token)) return null;
@@ -34,7 +50,17 @@ export async function verifySupabaseToken(token: string): Promise<string | null>
   let userId: string | null = null;
   try {
     const { data, error } = await supabase.auth.getUser(token);
-    userId = error ? null : (data.user?.id ?? null);
+    if (!error && data.user) {
+      const permitidos = correosPermitidos();
+      const correo = (data.user.email || "").toLowerCase();
+      if (permitidos.length === 0 || permitidos.includes(correo)) {
+        userId = data.user.id;
+      } else {
+        // Autenticado pero sin permiso. Se registra: un JWT válido de alguien
+        // que no debería entrar es justo lo que se quiere ver en el log.
+        console.warn(`[auth] JWT válido pero correo no autorizado: ${correo || "(sin correo)"}`);
+      }
+    }
   } catch {
     userId = null;
   }
