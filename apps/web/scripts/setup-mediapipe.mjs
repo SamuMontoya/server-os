@@ -9,6 +9,14 @@ import { writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Con los gestos apagados esto son ~40MB de wasm y una descarga de 7.5MB que
+// nadie va a usar. En el servidor (sin cámara y con disco justo) es puro
+// desperdicio, y además alarga cada build.
+if (process.env.NEXT_PUBLIC_FEATURE_GESTOS === "0") {
+  console.log("[mediapipe] gestos desactivados — no se descargan los assets");
+  process.exit(0);
+}
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const wasmSrc = resolve(root, "node_modules/@mediapipe/tasks-vision/wasm");
 const outDir = resolve(root, "public/mediapipe");

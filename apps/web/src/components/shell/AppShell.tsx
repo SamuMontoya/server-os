@@ -12,6 +12,7 @@
 // tenía una cajita del 2%, mientras ~15 paneles con el mismo peso visual
 // competían con la consola.
 
+import dynamic from "next/dynamic";
 import { usePathname } from "next/navigation";
 import { useWorkspace } from "@/state/WorkspaceContext";
 import { useHermesData } from "@/hooks/useHermesData";
@@ -28,11 +29,41 @@ import { VoiceEventsBridge } from "@/components/VoiceEventsBridge";
 import { VoiceSessionBridge } from "@/components/VoiceSessionBridge";
 import { VoiceScopeRouter } from "@/components/VoiceScopeRouter";
 import { OrquestadorView } from "@/components/views/OrquestadorView";
-import { FinanzasView } from "@/components/views/FinanzasView";
-import { HabitosView } from "@/components/views/HabitosView";
-import { InglesView } from "@/components/views/InglesView";
-import { AgendaView } from "@/components/views/AgendaView";
-import { EstudioView } from "@/components/views/EstudioView";
+
+// La consola (Orquestador) es el núcleo y va estática. Las demás entran por
+// import dinámico DENTRO de un ternario sobre un flag inlineado: con la
+// feature apagada la condición es un `false` literal y webpack descarta la
+// rama con su chunk. Con un import estático seguirían en el bundle aunque
+// nunca se rendericen — que es justo lo que hace que el build no quepa en
+// la RAM del servidor.
+const Nada = () => null;
+
+// El chequeo va con `process.env.NEXT_PUBLIC_*` LITERAL en cada ternario, no
+// a través de un objeto importado. Next sustituye esa expresión exacta por su
+// valor al compilar, la condición queda en `"0" !== "0"` y webpack pliega la
+// rama con su import(). Con `FEAT.estudio` (propiedad de un objeto de otro
+// módulo) el plegado no atraviesa la indirección: medido, los chunks salían
+// byte a byte idénticos con la feature encendida y apagada.
+const FinanzasView =
+  process.env.NEXT_PUBLIC_FEATURE_VIDA !== "0"
+    ? dynamic(() => import("@/components/views/FinanzasView").then((m) => m.FinanzasView))
+    : Nada;
+const HabitosView =
+  process.env.NEXT_PUBLIC_FEATURE_VIDA !== "0"
+    ? dynamic(() => import("@/components/views/HabitosView").then((m) => m.HabitosView))
+    : Nada;
+const InglesView =
+  process.env.NEXT_PUBLIC_FEATURE_INGLES !== "0"
+    ? dynamic(() => import("@/components/views/InglesView").then((m) => m.InglesView))
+    : Nada;
+const AgendaView =
+  process.env.NEXT_PUBLIC_FEATURE_AGENDA !== "0"
+    ? dynamic(() => import("@/components/views/AgendaView").then((m) => m.AgendaView))
+    : Nada;
+const EstudioView =
+  process.env.NEXT_PUBLIC_FEATURE_ESTUDIO !== "0"
+    ? dynamic(() => import("@/components/views/EstudioView").then((m) => m.EstudioView))
+    : Nada;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -75,7 +106,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <VoiceSessionBridge events={events} />
       <VoiceScopeRouter />
       {/* 👏👏 = toggle de la tira de luces mientras la llamada está activa. */}
-      <ClapToLights />
+      {process.env.NEXT_PUBLIC_FEATURE_VOZ !== "0" && <ClapToLights />}
 
       <div className="relative z-2 flex h-screen">
         <SideRail />
