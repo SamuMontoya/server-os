@@ -1,0 +1,36 @@
+[Unit]
+Description=server-os · dashboard (Next.js)
+After=network-online.target hermes-agent.service
+Wants=network-online.target
+# Ojo: StartLimit* va en [Unit], no en [Service] — systemd los movió y en
+# [Service] quedan ignorados. Si se reinicia 5 veces en 5 min algo está
+# roto de verdad: mejor parar y que quede en el journal que un bucle
+# que llena el disco de logs.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOT__
+
+Environment=HOME=__HOME__
+Environment=NODE_ENV=production
+Environment=PATH=__PATH__
+
+# `start` sirve el build ya compilado. Compilar aquí es otra historia: ver
+# scripts/install-linux.sh, que sube swap antes de `next build` porque con
+# 3.2 GB de RAM el build se queda sin memoria.
+ExecStart=__PNPM__ --filter @hermes/web start
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-os-web
+
+MemoryMax=900M
+MemoryHigh=700M
+
+[Install]
+WantedBy=default.target

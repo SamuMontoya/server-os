@@ -23,9 +23,6 @@ importers:
       '@hono/node-server':
         specifier: ^2.1.1
         version: 2.1.1(hono@4.13.5)
-      '@jitsi/robotjs':
-        specifier: ^0.6.24
-        version: 0.6.24
       '@supabase/supabase-js':
         specifier: ^2.112.4
         version: 2.112.4
@@ -66,6 +63,10 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+    optionalDependencies:
+      '@jitsi/robotjs':
+        specifier: ^0.6.24
+        version: 0.6.24
 
   apps/web:
     dependencies:
@@ -1853,6 +1854,7 @@ snapshots:
     dependencies:
       node-addon-api: 8.9.2
       node-gyp-build: 4.8.4
+    optional: true
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -2539,9 +2541,11 @@ snapshots:
       - '@types/node'
       - babel-plugin-macros
 
-  node-addon-api@8.9.2: {}
+  node-addon-api@8.9.2:
+    optional: true
 
-  node-gyp-build@4.8.4: {}
+  node-gyp-build@4.8.4:
+    optional: true
 
   node-ical@0.27.1:
     dependencies:

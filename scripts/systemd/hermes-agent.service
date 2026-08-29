@@ -1,0 +1,44 @@
+[Unit]
+Description=server-os · agente (Hono + Claude Agent SDK)
+Documentation=https://github.com/ruloCode/hermes-os
+# Sin red no arranca: Supabase y la API de Anthropic son remotas.
+After=network-online.target
+Wants=network-online.target
+# Ojo: StartLimit* va en [Unit], no en [Service] — systemd los movió y en
+# [Service] quedan ignorados. Si se reinicia 5 veces en 5 min algo está
+# roto de verdad: mejor parar y que quede en el journal que un bucle
+# que llena el disco de logs.
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOT__
+
+# El CLI `claude` lee su login OAuth de ~/.claude: sin HOME explícito, systemd
+# arranca con uno vacío y el agente responde "Failed to authenticate" sin que
+# la cuenta tenga nada malo. Es el equivalente al gotcha del plist en macOS.
+Environment=HOME=__HOME__
+Environment=NODE_ENV=production
+# El PATH debe traer node Y claude. Lleva el número de versión de nvm: un
+# upgrade de node lo invalida y hay que regenerar esta unidad.
+Environment=PATH=__PATH__
+
+ExecStart=__PNPM__ --filter @hermes/agent start
+
+# Un agente que se cae de madrugada y no vuelve no sirve de cerebro.
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-os-agent
+
+# La máquina tiene 3.2 GB y también corre el dashboard: un run desbocado no
+# debe llevarse el sistema por delante. Al pasarse, lo mata el OOM del cgroup
+# y Restart lo levanta — mejor eso que congelar la caja entera.
+MemoryMax=1500M
+MemoryHigh=1200M
+
+[Install]
+WantedBy=default.target

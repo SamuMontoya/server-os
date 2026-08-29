@@ -1,11 +1,18 @@
 import { config } from "dotenv";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // El .env vive en la raíz del monorepo para compartirlo entre apps.
 const root = resolve(fileURLToPath(import.meta.url), "../../../..");
 config({ path: resolve(root, ".env") });
+
+/**
+ * ¿Corremos en macOS? Varias features son CGEvents u osascript y no existen
+ * fuera de ahí. server-os corre en Linux: en vez de fallar al usarlas, se
+ * apagan de entrada para que `capabilities` diga la verdad.
+ */
+export const IS_MAC = platform() === "darwin";
 
 export const env = {
   PORT: Number(process.env.HERMES_PORT || 8642),
@@ -74,11 +81,17 @@ export const env = {
   WEATHER_LON: Number(process.env.WEATHER_LON || -74.0721),
   WEATHER_PLACE: process.env.WEATHER_PLACE || "Bogotá",
   // Control por gestos (mano → cursor vía webcam + robotjs). "off" desactiva
-  // las rutas /input/gestures por completo; cualquier otro valor las deja.
-  GESTURES_ENABLED: (process.env.HERMES_GESTURES || "").toLowerCase() !== "off",
+  // las rutas /input/gestures por completo.
+  // Fuera de macOS se apaga SIEMPRE: robotjs inyecta CGEvents y no existe en
+  // Linux. Antes dependía solo de que el require() fallara, y hasta entonces
+  // el agente anunciaba una capacidad que no tiene.
+  GESTURES_ENABLED:
+    IS_MAC && (process.env.HERMES_GESTURES || "").toLowerCase() !== "off",
   // Navegación profunda por voz (chrome-devtools-mcp sobre un Chrome CDP
   // dedicado). "off" no registra el MCP ni expone /browser/navigate.
-  BROWSER_AGENT_ENABLED: (process.env.HERMES_BROWSER_AGENT || "").toLowerCase() !== "off",
+  // También mac-only: ensureCdpChrome() lanza Chrome con `open -a`.
+  BROWSER_AGENT_ENABLED:
+    IS_MAC && (process.env.HERMES_BROWSER_AGENT || "").toLowerCase() !== "off",
   // Linear (manejo de tareas). Personal API key (Settings → API en Linear).
   // Sin key, las tools de Linear responden con el CTA de configuración.
   LINEAR_API_KEY: process.env.LINEAR_API_KEY || "",
