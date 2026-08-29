@@ -47,6 +47,12 @@ function esPublica(pathname: string): boolean {
 }
 
 export async function middleware(request: NextRequest) {
+  // Las públicas salen ANTES de construir el cliente de Supabase. En
+  // /auth/callback importa: ahí las cookies llevan el verificador de PKCE que
+  // el handler necesita intacto, y un getUser() sin sesión puede tocarlas.
+  // Además evita una llamada de red por cada carga del login.
+  if (esPublica(request.nextUrl.pathname)) return NextResponse.next({ request });
+
   // La respuesta se crea ANTES del cliente: `setAll` escribe las cookies del
   // token refrescado sobre este objeto, y devolver otro las perdería.
   let response = NextResponse.next({ request });
@@ -77,8 +83,6 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname, search } = request.nextUrl;
-
-  if (esPublica(pathname)) return response;
 
   if (!user) {
     const url = request.nextUrl.clone();

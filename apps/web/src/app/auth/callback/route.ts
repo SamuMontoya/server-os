@@ -41,7 +41,15 @@ export async function GET(request: Request) {
   // Google avisa por querystring cuando cancelas en su pantalla.
   if (errorOAuth) {
     const motivo = errorOAuth === "access_denied" ? "cancelado" : "1";
-    console.warn("[auth/callback] OAuth devolvió error:", errorOAuth);
+    // `error_description` es donde viene el MOTIVO real (p.ej. un secreto que
+    // no cuadra con Google). Sin registrarlo, un `server_error` genérico deja
+    // sin nada por dónde empezar. Va al log, nunca a la URL.
+    const detalle = searchParams.get("error_description") ?? "(sin descripción)";
+    const codigo = searchParams.get("error_code") ?? "";
+    console.warn(
+      `[auth/callback] OAuth devolvió error: ${errorOAuth}` +
+        `${codigo ? ` (${codigo})` : ""} — ${detalle}`,
+    );
     return NextResponse.redirect(urlAbsoluta(request, `/login?error=${motivo}`), {
       headers: SIN_CACHE,
     });
