@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { FINANCE_CATEGORIES } from "@hermes/shared";
+import { FINANCE_CATEGORIES, isEnabled, type Feature } from "@hermes/shared";
 import { env } from "../env.js";
 import { queryCodeGraph } from "../code-graph.js";
 import { saveMemory, searchMemory, savePreference } from "../memory.js";
@@ -699,67 +699,59 @@ const controlLightsTool = tool(
   },
 );
 
+/**
+ * Cada tool declara a qué feature pertenece. Las de features apagadas NO se
+ * registran: no basta con que su ruta responda 404 — una tool en el catálogo
+ * gasta contexto en cada turno y tienta al modelo a llamarla para nada. Menos
+ * tools también significa mejores decisiones, sobre todo en modelos chicos.
+ * `null` = núcleo, nunca se apaga.
+ */
+// El tipo sale de la firma del propio SDK: cada tool tiene su schema y
+// tiparlas con el de UNA sola las hace incompatibles entre sí.
+// `tools` es opcional en la firma, de ahí el NonNullable antes de indexar.
+type AnyTool = NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>[number];
+
+const TOOL_FEATURE: [AnyTool, Feature | null][] = [
+  [searchKnowledgeTool, null],
+  [saveMemoryTool, null],
+  [searchMemoryTool, null],
+  [savePreferenceTool, null],
+  [getProjectStatusTool, null],
+  [updateProjectNoteTool, null],
+  [searchVaultTool, null],
+  [captureIdeaTool, null],
+  [getRecentActivityTool, null],
+  [searchMeetingsTool, "juntas"],
+  [analyzeYouTubeTool, "estudio"],
+  [queryCodeGraphTool, "codegraph"],
+  [createLinearIssueTool, "linear"],
+  [listLinearIssuesTool, "linear"],
+  [logTransactionTool, "vida"],
+  [listTransactionsTool, "vida"],
+  [getFinanceSummaryTool, "vida"],
+  [getBalanceTool, "vida"],
+  [setWalletBalanceTool, "vida"],
+  [setBudgetTool, "vida"],
+  [logHabitTool, "vida"],
+  [getHabitsTodayTool, "vida"],
+  [manageHabitTool, "vida"],
+  [updateGoalTool, "vida"],
+  [createContentIdeaTool, "estudio"],
+  [listContentPiecesTool, "estudio"],
+  // Las luces son control por red (no osascript): funcionan igual en Linux.
+  [controlLightsTool, null],
+];
+
+const ACTIVE_TOOLS = TOOL_FEATURE.filter(([, f]) => f === null || isEnabled(f)).map(([tool]) => tool);
+
 export const hermesMcpServer = createSdkMcpServer({
   name: "hermes",
   version: "0.1.0",
-  tools: [
-    searchKnowledgeTool,
-    saveMemoryTool,
-    searchMemoryTool,
-    savePreferenceTool,
-    getProjectStatusTool,
-    updateProjectNoteTool,
-    searchVaultTool,
-    captureIdeaTool,
-    getRecentActivityTool,
-    searchMeetingsTool,
-    analyzeYouTubeTool,
-    queryCodeGraphTool,
-    createLinearIssueTool,
-    listLinearIssuesTool,
-    logTransactionTool,
-    listTransactionsTool,
-    getFinanceSummaryTool,
-    getBalanceTool,
-    setWalletBalanceTool,
-    setBudgetTool,
-    logHabitTool,
-    getHabitsTodayTool,
-    manageHabitTool,
-    updateGoalTool,
-    createContentIdeaTool,
-    listContentPiecesTool,
-    controlLightsTool,
-  ],
+  tools: ACTIVE_TOOLS,
 });
 
-/** Nombres completos para allowedTools. */
-export const HERMES_TOOL_NAMES = [
-  "mcp__hermes__search_knowledge",
-  "mcp__hermes__save_memory",
-  "mcp__hermes__search_memory",
-  "mcp__hermes__save_preference",
-  "mcp__hermes__get_project_status",
-  "mcp__hermes__update_project_note",
-  "mcp__hermes__search_vault",
-  "mcp__hermes__capture_idea",
-  "mcp__hermes__get_recent_activity",
-  "mcp__hermes__search_meetings",
-  "mcp__hermes__analyze_youtube",
-  "mcp__hermes__query_code_graph",
-  "mcp__hermes__create_linear_issue",
-  "mcp__hermes__list_linear_issues",
-  "mcp__hermes__log_transaction",
-  "mcp__hermes__list_transactions",
-  "mcp__hermes__get_finance_summary",
-  "mcp__hermes__get_balance",
-  "mcp__hermes__set_wallet_balance",
-  "mcp__hermes__set_budget",
-  "mcp__hermes__log_habit",
-  "mcp__hermes__get_habits_today",
-  "mcp__hermes__manage_habit",
-  "mcp__hermes__update_goal",
-  "mcp__hermes__create_content_idea",
-  "mcp__hermes__list_content_pieces",
-  "mcp__hermes__control_lights",
-];
+/**
+ * Nombres completos para allowedTools. Se DERIVAN de las tools activas: una
+ * lista fija autorizaría herramientas que ya no se registran.
+ */
+export const HERMES_TOOL_NAMES = ACTIVE_TOOLS.map((tool) => `mcp__hermes__${tool.name}`);

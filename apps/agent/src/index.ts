@@ -11,8 +11,11 @@ import type {
   MeetingSource,
   TaskState,
   TransactionKind,
+  Feature,
 } from "@hermes/shared";
+import { isEnabled, featureSummary } from "@hermes/shared";
 import { env } from "./env.js";
+import { EMB } from "./embeddings.js";
 import { verifySupabaseToken } from "./auth.js";
 import { activityHourly, emit, recentEvents, subscribe } from "./events.js";
 import { getPresence, listPresence, pushPresence, selfBaseUrl } from "./presence.js";
@@ -288,6 +291,37 @@ app.use("*", async (c, next) => {
       const userId = await verifySupabaseToken(bearer || queryKey);
       if (!userId) return c.json({ error: "unauthorized" }, 401);
     }
+  }
+  await next();
+});
+
+// ── Features apagadas ─────────────────────────────────────────────────
+// Un solo guardia por PREFIJO en vez de tocar cada una de las ~80 rutas: son
+// planas y están repartidas por todo el archivo, así que gatearlas de a una
+// se desincronizaría a la primera ruta nueva. El código de la feature queda
+// intacto — solo deja de ser alcanzable.
+const FEATURE_PREFIX: [string, Feature][] = [
+  ["/content", "estudio"],
+  ["/meetings", "juntas"],
+  ["/english", "ingles"],
+  ["/linear", "linear"],
+  ["/calendar", "agenda"],
+  ["/weather", "agenda"],
+  ["/habits", "vida"],
+  ["/finance", "vida"],
+  ["/goals", "vida"],
+  ["/code-graph", "codegraph"],
+  ["/elevenlabs", "voz"],
+  ["/input", "gestos"],
+];
+
+app.use("*", async (c, next) => {
+  const path = c.req.path;
+  const hit = FEATURE_PREFIX.find(([prefix]) => path === prefix || path.startsWith(`${prefix}/`));
+  if (hit && !isEnabled(hit[1])) {
+    // 404 con motivo, no 500 ni un silencio: quien llama debe poder distinguir
+    // "no existe aquí" de "se rompió".
+    return c.json({ error: `feature "${hit[1]}" desactivada en ${env.MACHINE_NAME}` }, 404);
   }
   await next();
 });
@@ -2578,4 +2612,9 @@ serve({ fetch: app.fetch, port: env.PORT, hostname, websocket: { server: wss } }
   );
   console.log(`   vault: ${env.VAULT_PATH || "(sin configurar)"}`);
   console.log(`   supabase: ${hasSupabase() ? "conectado" : "no configurado"}`);
+  // Qué quedó apagado, explícito al arrancar: si una ruta responde 404 más
+  // tarde, esta línea es la respuesta y no hay que ir a leer el .env.
+  const feats = featureSummary();
+  if (feats.off.length) console.log(`   apagadas: ${feats.off.join(", ")}`);
+  console.log(`   embeddings: ${EMB.provider} (${EMB.dims}d → ${EMB.col})`);
 });
