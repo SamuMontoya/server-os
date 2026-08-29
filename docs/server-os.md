@@ -130,6 +130,40 @@ que mantener ningún token aparte.
 
 ---
 
+## HTTPS con Tailscale (obligatorio, no opcional)
+
+El dashboard **no puede servirse por HTTP**. Dos APIs del navegador solo existen
+en contexto seguro y las dos se usan aquí:
+
+- `crypto.randomUUID` → la app moría antes de pintar nada.
+- `crypto.subtle` → sin él, supabase-js cae a PKCE `code_challenge_method=plain`
+  y **Cloudflare bloquea la petición** por considerarlo inseguro. El síntoma es
+  un "Sorry, you have been blocked" al pulsar el botón de Google, que no
+  aparenta tener nada que ver con el protocolo.
+
+Tailscale da certificado real gratis sobre el nombre MagicDNS:
+
+```bash
+sudo tailscale serve --bg --https=443  localhost:31415   # dashboard
+sudo tailscale serve --bg --https=8443 localhost:8650    # agente
+```
+
+> [!warning] El puerto de fuera NO puede ser el mismo que el de dentro
+> `tailscale serve --https=8650 localhost:8650` se pisa a sí mismo: Tailscale
+> se queda con el 8650 en las IPs del tailnet y el agente ya no puede bindear
+> `0.0.0.0:8650` — muere con EADDRINUSE en bucle hasta que systemd se rinde.
+> El síntoma es un 502 del proxy y un servicio "failed" que parece un problema
+> del agente. De ahí el 8443.
+
+Los DOS tienen que ir por HTTPS: una página HTTPS no puede llamar a un `http://`
+(contenido mixto), así que servir solo el dashboard deja el agente inalcanzable.
+
+Después: `NEXT_PUBLIC_HERMES_URL=https://<host>.ts.net:8443` y en Supabase el
+`site_url` y la lista de URLs con la dirección HTTPS. El allowlist de CORS del
+agente ya acepta `*.ts.net`.
+
+---
+
 ## Operación
 
 ```bash
