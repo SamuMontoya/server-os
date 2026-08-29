@@ -66,6 +66,14 @@ El usuario está en su página VIDA (finanzas personales + hábitos + metas) hab
 export async function buildSystemPrompt(
   firstUserMessage?: string,
   focusSlug?: string,
+  /** Cuánto contexto PRECARGAR. Lo fija el perfil de consumo (budget.ts):
+   * en modo bajo se precarga poco y el agente amplía con search_knowledge
+   * solo si lo necesita — se paga contexto pedido, no especulativo. */
+  retrieval: { recent: number; relevant: number; chars: number } = {
+    recent: 5,
+    relevant: 8,
+    chars: 300,
+  },
 ): Promise<string> {
   const parts: string[] = [];
 
@@ -177,14 +185,14 @@ Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en
   // Memorias recientes + conocimiento relevante al primer mensaje.
   // El retrieval es UNIFICADO (match_knowledge): memorias, reuniones,
   // ejecuciones, conversaciones pasadas (texto/voz) y notas del vault.
-  const recent = await recentMemories(5);
+  const recent = await recentMemories(retrieval.recent);
   const relevant = firstUserMessage
-    ? await searchKnowledge(firstUserMessage, { limit: 8 })
+    ? await searchKnowledge(firstUserMessage, { limit: retrieval.relevant })
     : [];
   const seenMemories = new Set<string>(recent.map((m) => m.id));
   const lines = recent.map(
     (m) =>
-      `- [memoria·${m.type}${m.project_slug ? `·${m.project_slug}` : ""}] ${(m.summary || m.content).slice(0, 300)}`,
+      `- [memoria·${m.type}${m.project_slug ? `·${m.project_slug}` : ""}] ${(m.summary || m.content).slice(0, retrieval.chars)}`,
   );
   const labels: Record<string, string> = {
     memory: "memoria",
@@ -197,7 +205,7 @@ Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en
     if (h.source === "memory" && seenMemories.has(h.ref)) continue;
     const label = labels[h.source] ?? h.source;
     const scope = h.project_slug ? `·${h.project_slug}` : "";
-    const body = h.content.replace(/\s+/g, " ").trim().slice(0, 300);
+    const body = h.content.replace(/\s+/g, " ").trim().slice(0, retrieval.chars);
     lines.push(`- [${label}${scope} ${h.created_at.slice(0, 10)}] ${body}`);
   }
   if (lines.length) {

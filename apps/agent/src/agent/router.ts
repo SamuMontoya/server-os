@@ -115,3 +115,23 @@ export function nextTier(t: Tier): Tier | null {
 export function routerEnabled(): boolean {
   return (process.env.HERMES_ROUTER || "").toLowerCase() !== "off";
 }
+
+// ── Techo por modo de consumo ─────────────────────────────────────────
+
+const ORDER: Tier[] = ["light", "standard", "deep"];
+
+/**
+ * Baja el nivel si supera el techo del perfil activo. Nunca lo SUBE: el modo
+ * de bajo consumo solo puede restringir, no encarecer un turno que el router
+ * ya había clasificado como barato.
+ */
+export function capTier(tier: Tier, max: Tier): Tier {
+  return ORDER.indexOf(tier) > ORDER.indexOf(max) ? max : tier;
+}
+
+const EFFORT_ORDER: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+
+export function capEffort(effort: Effort | undefined, max: Effort): Effort | undefined {
+  if (!effort) return effort;
+  return EFFORT_ORDER.indexOf(effort) > EFFORT_ORDER.indexOf(max) ? max : effort;
+}

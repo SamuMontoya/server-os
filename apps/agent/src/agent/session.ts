@@ -13,7 +13,17 @@ import { checkTool } from "./guardrails.js";
 import { hermesMcpServer, HERMES_TOOL_NAMES } from "./tools.js";
 import { linearEnabled } from "../linear.js";
 import { ensureCdpChrome, CDP_URL } from "../browser.js";
-import { TIERS, escalateSession, nextTier, routeTurn, routerEnabled, type Tier } from "./router.js";
+import {
+  TIERS,
+  capEffort,
+  capTier,
+  escalateSession,
+  nextTier,
+  routeTurn,
+  routerEnabled,
+  type Tier,
+} from "./router.js";
+import { currentProfile } from "./budget.js";
 import { subagentsEnabled } from "./models.js";
 
 /**
@@ -126,7 +136,9 @@ export interface RunTurnResult {
 }
 
 export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
-  const systemPrompt = await buildSystemPrompt(opts.prompt, opts.project);
+  // El perfil decide cuánto contexto se PRECARGA (ver budget.ts).
+  const _profile = await currentProfile();
+  const systemPrompt = await buildSystemPrompt(opts.prompt, opts.project, _profile.retrieval);
 
   // Enrutamiento del turno. La clasificación es local (cero tokens) y el nivel
   // queda FIJO por sesión: el caché de prompt es por modelo, así que cambiarlo
@@ -134,16 +146,23 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   const route = routerEnabled()
     ? routeTurn(opts.prompt, opts.resumeSessionId)
     : { tier: "deep" as Tier, reason: "router desactivado", pinned: false };
-  const tierOpts = TIERS[route.tier];
+
+  // Modo de consumo: al pasar el umbral de la ventana de 5 h (o de noche) el
+  // perfil BAJA el techo del turno. Solo restringe — nunca encarece un turno
+  // que el router ya había clasificado como barato.
+  const profile = _profile;
+  const tier = capTier(route.tier, profile.maxTier);
+  const tierOpts = TIERS[tier];
+  const effort = capEffort(tierOpts.effort, profile.maxEffort);
   const modelOpts = {
     model: tierOpts.model,
-    ...(tierOpts.effort && tierOpts.model !== "haiku" ? { effort: tierOpts.effort } : {}),
+    ...(effort && tierOpts.model !== "haiku" ? { effort } : {}),
   };
   if (!route.pinned) {
     emit({
       kind: "text",
       taskId: opts.taskId,
-      detail: `[router] ${route.tier} (${tierOpts.model}) — ${route.reason}`,
+      detail: `[router] ${tier} (${tierOpts.model}${effort ? `/${effort}` : ""}) — ${route.reason}${profile.mode === "low" ? ` · BAJO CONSUMO: ${profile.reason}` : ""}`,
     });
   }
   let sdkSessionId: string | undefined;
@@ -161,7 +180,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         cwd: opts.cwd || env.VAULT_PATH || process.cwd(),
         systemPrompt,
         ...modelOpts,
-        maxTurns: 40,
+        maxTurns: profile.maxTurns,
         includePartialMessages: true,
         settingSources: [],
         resume: opts.resumeSessionId,
@@ -177,7 +196,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         // contexto del hilo principal — que es donde el costo se acumula turno
         // a turno. El subagente corre en su propio contexto y devuelve solo su
         // conclusión.
-        agents: subagentsEnabled()
+        agents: subagentsEnabled() || profile.forceSubagents
           ? {
               scout: {
                 description:
@@ -194,7 +213,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
           "Glob",
           "Grep",
           // Task es cómo el agente principal invoca a los subagentes.
-          ...(subagentsEnabled() ? ["Task"] : []),
+          ...(subagentsEnabled() || profile.forceSubagents ? ["Task"] : []),
           "WebSearch",
           "WebFetch",
           "TodoWrite",
@@ -321,13 +340,13 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // Escalado. El router es heurístico y a veces se queda corto; en vez de
   // devolver un turno fallido, se reintenta UNA vez en el nivel de arriba.
   // Solo ante fallo real: reintentar por gusto duplica el costo del turno.
-  const up = nextTier(route.tier);
+  const up = nextTier(tier);
   if (isError && up && routerEnabled() && !opts._escalated) {
     escalateSession(opts.resumeSessionId ?? sdkSessionId, up);
     emit({
       kind: "error",
       taskId: opts.taskId,
-      detail: `[router] turno falló en ${route.tier} — escalando a ${up}`,
+      detail: `[router] turno falló en ${tier} — escalando a ${up}`,
     });
     return runAgentTurn({ ...opts, resumeSessionId: sdkSessionId ?? opts.resumeSessionId, _escalated: true });
   }

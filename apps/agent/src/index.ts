@@ -17,6 +17,7 @@ import { isEnabled, featureSummary } from "@hermes/shared";
 import { env } from "./env.js";
 import { EMB } from "./embeddings.js";
 import { modelSummary } from "./agent/models.js";
+import { budgetState } from "./agent/budget.js";
 import { verifySupabaseToken } from "./auth.js";
 import { activityHourly, emit, recentEvents, subscribe } from "./events.js";
 import { getPresence, listPresence, pushPresence, selfBaseUrl } from "./presence.js";
@@ -2621,4 +2622,11 @@ serve({ fetch: app.fetch, port: env.PORT, hostname, websocket: { server: wss } }
   // La política de modelos, explícita: qué rol usa qué. Sin esto, saber por
   // qué un turno salió caro obliga a leer el .env y tres archivos.
   console.log(`   modelos: ${modelSummary()}`);
+  // El modo de consumo, visible al arrancar: si el agente responde más corto
+  // de lo normal, esta línea es la explicación.
+  void budgetState().then((b) =>
+    console.log(
+      `   consumo: ${b.mode}${b.sessionUtilization != null ? ` (sesión ${b.sessionUtilization}%)` : ""} — ${b.reason}`,
+    ),
+  );
 });
