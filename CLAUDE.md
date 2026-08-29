@@ -1,6 +1,29 @@
-# Hermes OS — contexto para Claude Code
+# server-os — contexto para Claude Code
 
-Monorepo pnpm. Dos procesos: `apps/web` (Next.js 15, dashboard "AGENTIC OS") y `apps/agent` (Hono, Claude Agent SDK; producción en :8650 vía launchd `com.hermes-os.agent`). Tipos compartidos en `packages/shared`.
+> **Esto es un FORK de hermes-os adaptado a servidor headless.** Lee primero
+> `docs/server-os.md`: varias cosas que este archivo describe abajo están
+> APAGADAS aquí, y el arranque es distinto. El resto del documento es el
+> contexto heredado del upstream y sigue siendo válido para lo que no cambió.
+>
+> Diferencias que invalidan partes de lo que sigue:
+> - **Arranque: systemd `--user`, no launchd.** `./scripts/install-linux.sh`;
+>   logs con `journalctl --user -u hermes-agent`. Todo lo que diga `launchctl`
+>   o `com.hermes-os.*` aplica al upstream, no aquí.
+> - **9 features apagadas** por `HERMES_DISABLED` (Estudio, juntas, inglés,
+>   voz, Linear, agenda, vida, grafo de código, gestos). Sus rutas dan 404 y
+>   sus tools no se registran. El código sigue ahí: se apaga, no se borra.
+> - **Embeddings locales** (Ollama, 768 dims, columnas `*_local` de la
+>   migración 025) en vez de OpenAI 1536. Ambos esquemas conviven en la misma
+>   base; pgvector no cruza dimensiones.
+> - **Modelo por rol + router dinámico + modo de bajo consumo**
+>   (`agent/models.ts`, `agent/router.ts`, `agent/budget.ts`). Ningún call site
+>   pasa ya `HERMES_MODEL` a pelo.
+> - **Vault en solo-lectura**: `VAULT_PATH` vacío, lee del espejo de Supabase y
+>   nunca escribe notas.
+> - **Features mac-only fuera**: gestos, control de Chrome, ventanas, Terminal
+>   y notificaciones no existen en Linux. `@jitsi/robotjs` es opcional.
+
+Monorepo pnpm. Dos procesos: `apps/web` (Next.js 15, dashboard "AGENTIC OS") y `apps/agent` (Hono, Claude Agent SDK; en este fork corre en :8650 vía systemd `hermes-agent.service`). Tipos compartidos en `packages/shared`.
 
 ## Arquitectura
 - La voz (ElevenLabs Agents) usa **client tools que corren en el browser** y llaman al agente local — sin túnel. El LLM de voz solo rutea; el trabajo real lo hace el Agent SDK vía `POST /tasks` (async, `task_id` inmediato).
