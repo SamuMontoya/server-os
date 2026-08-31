@@ -1056,12 +1056,12 @@ export default function Laboratorio() {
                 // "Pensando" solo hasta el primer bloque: a partir de ahí los
                 // pasos ya cuentan qué está haciendo (igual que ChatPanel).
                 // Antes eran tres puntos grises saltando; ahora es el orbe en
-                // miniatura (sin ojos: no caben a este tamaño) para que
-                // "pensando" se lea como el mismo personaje en todo Hermes.
-                // Tamaño = el doble del botón circular de enviar (.lab-send,
-                // 28px), o sea 56px.
+                // miniatura, ya con ojos (a 56px caben) para que "pensando"
+                // se lea como el mismo personaje en todo Hermes (igual que
+                // en el arranque). Tamaño = el doble del botón circular de
+                // enviar (.lab-send, 28px), o sea 56px.
                 <span role="status" aria-label="Hermes está pensando">
-                  <OrbeIA tam="56px" ojos={false} ariaLabel="" />
+                  <OrbeIA tam="56px" ojos ariaLabel="" />
                 </span>
               ) : null}
             </div>
