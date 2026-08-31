@@ -17,6 +17,15 @@ import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
 import { uuid } from "@/lib/uuid";
 import { isSupportedImage, uploadChatImage } from "@/lib/chat-attachments";
+import { OrbeIA } from "@/components/orbe/OrbeIA";
+import {
+  loadLab,
+  saveLab,
+  type LabBlock,
+  type LabMessage,
+  type LabThread,
+  type PendingLabTurn,
+} from "@/lib/lab-persist";
 
 /**
  * Un tramo de la respuesta, EN EL ORDEN EN QUE PASÓ.
@@ -32,22 +41,11 @@ import { isSupportedImage, uploadChatImage } from "@/lib/chat-attachments";
  * `seq`, ver lib/chat-turns.ts): deltas de texto se pegan al bloque de texto
  * de arriba, tools al bloque de pasos de arriba, y cada cambio de tipo abre
  * un bloque nuevo. Así el hilo queda: acciones → texto → acciones → texto.
+ *
+ * LabBlock/LabMessage viven en lib/lab-persist.ts (no aquí): ese módulo es el
+ * que además sabe guardarlos y recortarlos para localStorage, y necesita los
+ * tipos para su propio contrato — mejor una sola definición que dos copias.
  */
-type LabBlock =
-  | { kind: "text"; text: string }
-  | { kind: "steps"; steps: ChatToolStep[] };
-
-type LabMessage = {
-  id: number;
-  role: "user" | "assistant";
-  /** Texto plano del mensaje del usuario. En el asistente vive en `blocks`. */
-  content: string;
-  /** Respuesta del asistente, en orden cronológico (ver LabBlock). */
-  blocks?: LabBlock[];
-  /** Imágenes que iban con el mensaje (solo en mensajes del usuario): quedan
-   *  visibles en la burbuja, como el adjunto que fueron. */
-  images?: { url: string; name: string }[];
-};
 
 /** ¿Ya escribió algo el asistente? (para el "pensando" y los avisos de error). */
 function blocksText(blocks: LabBlock[] | undefined): string {
@@ -77,19 +75,50 @@ type LabAttachment = {
 
 export default function Laboratorio() {
   const { selectedProject } = useWorkspace();
-  const [draft, setDraft] = useState("");
-  const [messages, setMessages] = useState<LabMessage[]>([]);
+  const projKey = selectedProject || "general";
+
+  // Hidratación: UNA lectura del navegador en el primer render. Sin esto,
+  // cada remontaje —y iOS remonta cada vez que recupera la pestaña que mató
+  // en segundo plano, o simplemente al volver a abrir la app— arrancaba un
+  // chat nuevo y vacío sobre una conversación que seguía existiendo en el
+  // servidor. Mismo patrón que ChatPanel (lib/chat-persist.ts), en su propio
+  // storage (lib/lab-persist.ts) para no mezclar los dos historiales.
+  const hydratedRef = useRef<Record<string, LabThread> | null | undefined>(undefined);
+  if (hydratedRef.current === undefined) hydratedRef.current = loadLab();
+  const initialThread = hydratedRef.current?.[projKey];
+
+  const [draft, setDraft] = useState(initialThread?.draft ?? "");
+  const [messages, setMessages] = useState<LabMessage[]>(initialThread?.messages ?? []);
+  // `busy` NUNCA se hidrata como true: al rehidratar, quien decide si hay algo
+  // corriendo es el turno pendiente (verificable contra el servidor vía
+  // `resumePending`), no un booleano viejo — un `busy` fósil dejaba el
+  // composer bloqueado para siempre.
   const [busy, setBusy] = useState(false);
   // Modelo con el que está respondiendo AHORA (lo dice el servidor por el
   // stream, y cambia si el router escala a mitad del turno). Se conserva al
   // terminar: entre mensajes sigue mostrando con qué se respondió el último,
   // que es más informativo que volver a un guion.
-  const [model, setModel] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(initialThread?.model ?? null);
   /**
    * Turno vivo AHORA. Lo necesita el botón ⏹ (el mismo botón de enviar
    * mientras se está generando): sin el id no hay a quién mandarle el stop.
+   * Arranca en null aunque hubiera un turno pendiente guardado: se confirma
+   * contra el servidor en `resumePending` antes de darlo por vivo.
    */
   const turnIdRef = useRef<string | null>(null);
+  /**
+   * Turno que este hilo dejó corriendo, tal como se guardó (o null si no
+   * había). Es lo que `resumePending` intenta reenganchar al montar y al
+   * volver de segundo plano; se limpia cuando el turno cierra de verdad.
+   */
+  const pendingTurnRef = useRef<PendingLabTurn | null>(initialThread?.pendingTurn ?? null);
+  /**
+   * Cursor `seq` más alto visto del turno EN VUELO. Se persiste como parte de
+   * `pendingTurn` para que un reenganche futuro pida el replay exacto desde
+   * ahí (ni de más — duplicaría texto ya pintado — ni de menos — perdería
+   * texto). Monótono: solo sube.
+   */
+  const lastSeqRef = useRef(0);
   /** Se pidió parar y aún no llegó el `stopped`: el botón se apaga mientras. */
   const [stopping, setStopping] = useState(false);
   /**
@@ -137,14 +166,68 @@ export default function Laboratorio() {
   /** true = tirar la próxima transcripción que llegue (ver `endDictation`). */
   const dictationDropRef = useRef(false);
 
-  // Una sesión por visita a la página (igual que un tab nuevo del chat
-  // principal). `resume` guarda la sesión del SDK una vez que el primer
-  // turno la devuelve, así el segundo mensaje YA tiene el contexto del
-  // primero — sin esto, cada envío sería una conversación nueva y suelta.
+  // Una sesión por HILO persistido (antes era "una por visita a la página":
+  // con la persistencia, recargar ya no debe partir la conversación en dos).
+  // `resume` guarda la sesión del SDK una vez que el primer turno la
+  // devuelve, así el segundo mensaje YA tiene el contexto del primero — sin
+  // esto, cada envío sería una conversación nueva y suelta.
   const sessionKeyRef = useRef<string | null>(null);
-  if (sessionKeyRef.current === null) sessionKeyRef.current = uuid();
-  const sdkSessionIdRef = useRef<string | null>(null);
+  if (sessionKeyRef.current === null) {
+    sessionKeyRef.current = initialThread?.sessionKey || uuid();
+  }
+  const sdkSessionIdRef = useRef<string | null>(initialThread?.sdkSessionId ?? null);
   const unfollowRef = useRef<(() => void) | null>(null);
+
+  // Hilos de OTROS proyectos, guardados por referencia (no en estado: nadie
+  // los pinta mientras no están en foco). Al cambiar `selectedProject` se
+  // guarda el actual aquí y se restaura el que corresponda — igual que
+  // `byProject` en ChatPanel.
+  const byProjectRef = useRef(
+    new Map<string, LabThread>(
+      Object.entries(hydratedRef.current ?? {}).filter(([k]) => k !== projKey),
+    ),
+  );
+  const prevProjRef = useRef(projKey);
+
+  // Refs-espejo del estado React: `persistNow` necesita leer el valor MÁS
+  // RECIENTE aunque se dispare fuera de un render (debounce, pagehide). Se
+  // actualizan en cada render, igual que `stateRef.current = state` en
+  // ChatPanel.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const modelRef = useRef(model);
+  modelRef.current = model;
+
+  /** Snapshot del hilo actual, tal como debe guardarse ahora mismo. */
+  const buildThread = (): LabThread => ({
+    sdkSessionId: sdkSessionIdRef.current,
+    sessionKey: sessionKeyRef.current ?? "",
+    messages: messagesRef.current,
+    draft: draftRef.current,
+    model: modelRef.current,
+    pendingTurn: pendingTurnRef.current ?? undefined,
+  });
+
+  const persistNow = () => {
+    const all = Object.fromEntries(byProjectRef.current);
+    all[projKey] = buildThread();
+    saveLab(all);
+  };
+  const persistNowRef = useRef(persistNow);
+  persistNowRef.current = persistNow;
+  /** Guardar tras una mutación fuera de render (setState es asíncrono: llamar
+   *  a persistNow() en la misma línea guardaría el estado ANTERIOR). */
+  const schedulePersist = () => setTimeout(() => persistNowRef.current(), 0);
+
+  /**
+   * Reenganche perezoso: `follow` (más abajo) necesita poder llamar a
+   * `resumePending` (definida más abajo aún, ya que usa `follow`) apenas se
+   * desconecta. Un ref indirecto rompe el ciclo sin reordenar todo el
+   * archivo — se asigna la función real más abajo, en cada render.
+   */
+  const resumePendingRef = useRef<() => void>(() => {});
 
   // Textarea auto-crecible (hasta ~5 líneas), igual que en ChatPanel.
   //
@@ -267,24 +350,35 @@ export default function Laboratorio() {
         // en curso el pie no queda en "—" esperando el próximo evento.
         if (st.model) setModel(st.model);
         if (st.sdkSessionId) sdkSessionIdRef.current ??= st.sdkSessionId;
+        // Cursor de replay: se persiste como parte de `pendingTurn` para que
+        // un reenganche futuro (recargar, volver de segundo plano) pida el
+        // replay exacto desde aquí — ni de más (duplicaría texto), ni de
+        // menos (perdería texto). Monótono, igual que en chat-turns.ts.
+        lastSeqRef.current = Math.max(lastSeqRef.current, st.seq);
+        pendingTurnRef.current =
+          st.status === "running" ? { id: turnId, seq: lastSeqRef.current } : null;
         // OJO: aquí NO se scrollea. La respuesta crece bajo el mensaje
         // anclado; solo se recorta el colchón sobrante (ver shrinkSpacer).
         shrinkSpacer();
       },
-      onDelta: (text) => {
+      onDelta: (text, seq) => {
         appendText(replyId, text);
         // Un bloque de texto NUEVO (el primero, o el que sigue a unas
         // acciones) sube al borde superior; los deltas siguientes solo
         // recortan el colchón, así se lee sin que la vista persiga al texto.
         if (text) noteBlock(replyId, "text");
+        lastSeqRef.current = seq;
+        pendingTurnRef.current = { id: turnId, seq };
         shrinkSpacer();
       },
-      onTool: (step) => {
+      onTool: (step, seq) => {
         // Los pasos (tool_use reales) llegan ANTES del primer texto: son lo
         // que reemplaza al "pensando" mudo mientras el agente trabaja. Y si
         // llegan DESPUÉS de un texto, abren un bloque nuevo debajo de él.
         appendStep(replyId, step);
         noteBlock(replyId, "steps");
+        lastSeqRef.current = seq;
+        pendingTurnRef.current = { id: turnId, seq };
         shrinkSpacer();
       },
       onSession: (sid) => {
@@ -293,9 +387,11 @@ export default function Laboratorio() {
       // El router avisa qué modelo puso a correr, y VUELVE a avisar si escala
       // (haiku→sonnet→opus) a mitad del turno: el pie lo refleja en vivo.
       onModel: (m) => setModel(m),
-      onEnd: (status) => {
+      onEnd: (status, seq) => {
         unfollowRef.current = null;
         turnIdRef.current = null;
+        lastSeqRef.current = seq;
+        pendingTurnRef.current = null;
         setStopping(false);
         setBusy(false);
         // Terminó un turno = se gastó consumo: el pie se entera ya, no en el
@@ -304,24 +400,24 @@ export default function Laboratorio() {
         if (status === "error") {
           void fetchTurn(turnId).then((st) => {
             appendNotice(replyId, st?.error ? `⚠ ${st.error}` : "⚠ el turno falló");
+            schedulePersist();
           });
         }
         shrinkSpacer();
+        // El hilo queda completo justo aquí: es el guardado que importa (no
+        // esperar el debounce de 400ms si justo ahora se cierra la pestaña).
+        schedulePersist();
       },
-      onDisconnected: () => {
-        // Se agotaron los reintentos del navegador; el turno puede seguir
-        // vivo en el servidor. De momento se avisa y ya — reengancharse
-        // solo al volver es uno de los "ajustes posteriores" pendientes.
-        turnIdRef.current = null;
-        setStopping(false);
-        setBusy(false);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === replyId && !blocksText(m.blocks).trim()
-              ? { ...m, blocks: [{ kind: "text", text: "⚠ se perdió la conexión con Hermes." }] }
-              : m,
-          ),
-        );
+      onDisconnected: (lastSeq) => {
+        // Se agotaron los reintentos del navegador; el turno sigue vivo en el
+        // servidor. Se guarda el cursor y se intenta reenganchar YA MISMO
+        // (mismo mount); si esto también falla, `pendingTurn` queda guardado
+        // para que `resumePending` lo recupere al volver de segundo plano.
+        unfollowRef.current = null;
+        lastSeqRef.current = lastSeq;
+        pendingTurnRef.current = { id: turnId, seq: lastSeq };
+        schedulePersist();
+        resumePendingRef.current();
       },
     });
     unfollowRef.current = close;
@@ -584,9 +680,16 @@ export default function Laboratorio() {
         attachments: sent.map((a) => a.id!),
       });
       turnIdRef.current = turnId;
+      lastSeqRef.current = 0;
+      // Se guarda YA, antes de que llegue el primer evento: si la pestaña se
+      // cierra en el primer segundo, `resumePending` igual sabe qué turno
+      // reenganchar (igual que ChatPanel al arrancar un turno).
+      pendingTurnRef.current = { id: turnId, seq: 0 };
+      schedulePersist();
       follow(turnId, 0, replyMsg.id);
     } catch (err) {
       turnIdRef.current = null;
+      pendingTurnRef.current = null;
       setBusy(false);
       const detail = err instanceof Error ? err.message : "no se pudo enviar el mensaje";
       appendNotice(replyMsg.id, `⚠ ${detail}`);
@@ -613,14 +716,133 @@ export default function Laboratorio() {
       setStopping(false);
       setBusy(false);
       turnIdRef.current = null;
+      pendingTurnRef.current = null;
       unfollowRef.current?.();
       unfollowRef.current = null;
+      schedulePersist();
     }
   };
 
-  // Se cierra el stream (no se cancela el turno: sigue vivo en el servidor)
-  // al desmontar, para no seguir escribiendo en un componente que ya no está.
-  useEffect(() => () => unfollowRef.current?.(), []);
+  /**
+   * Reengancha el turno que quedó a medias. Se llama al montar y al volver de
+   * segundo plano: si el turno terminó mientras no estábamos, se pinta su
+   * respuesta completa; si sigue, se sigue en vivo. Es lo que hace que volver
+   * al Laboratorio —recargar, o que iOS mate la pestaña en segundo plano y la
+   * resucite— muestre la conversación real en vez de un hilo cortado, o peor,
+   * un chat en blanco.
+   */
+  const resumePending = () => {
+    const pending = pendingTurnRef.current;
+    if (!pending || unfollowRef.current) return; // nada pendiente, o ya enganchado
+    // El turno escribe en el ÚLTIMO mensaje del asistente. Si por lo que sea
+    // no hay uno (se guardó entre el envío y el placeholder), se crea: sin
+    // hueco donde escribir, la respuesta recuperada no se vería.
+    const current = messagesRef.current;
+    const last = current[current.length - 1];
+    let replyId: number;
+    if (last?.role === "assistant") {
+      replyId = last.id;
+    } else {
+      replyId = Date.now();
+      setMessages((prev) => [...prev, { id: replyId, role: "assistant", content: "", blocks: [] }]);
+    }
+    turnIdRef.current = pending.id;
+    setBusy(true);
+    void fetchTurn(pending.id, pending.seq).then((st) => {
+      if (!st) {
+        // El agente se reinició y el turno ya no existe. Lo honesto es
+        // decirlo, no dejar el composer bloqueado para siempre.
+        turnIdRef.current = null;
+        pendingTurnRef.current = null;
+        setBusy(false);
+        appendNotice(replyId, "⚠ el turno se perdió al reiniciarse el agente. Vuelve a preguntar.");
+        schedulePersist();
+        return;
+      }
+      // Corriendo o ya cerrado, `follow` resuelve los dos casos: replayea
+      // desde `pending.seq` (ni de más ni de menos, ver comentarios en
+      // `follow`) y su primer `state` cierra de una si ya había terminado.
+      follow(pending.id, pending.seq, replyId);
+    });
+  };
+  resumePendingRef.current = resumePending;
+
+  // Al montar: recuperar lo que quedó corriendo (equivalente a lo que
+  // ChatPanel hace al abrir el dashboard). Al desmontar se cierra el stream
+  // (no se cancela el turno: sigue vivo en el servidor) para no seguir
+  // escribiendo en un componente que ya no está.
+  useEffect(() => {
+    resumePending();
+    return () => unfollowRef.current?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Al volver del segundo plano: iOS cierra las conexiones de una pestaña
+  // congelada sin avisar, así que al recuperar visibilidad (o red) se
+  // reengancha.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resumePendingRef.current();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onVisible);
+    };
+  }, []);
+
+  // Persistencia: guarda tras cada cambio visible, agrupado (escribir en cada
+  // token del stream sería absurdo). Lo importante es que el turno cerrado se
+  // guarde ya — de eso se encargan los `schedulePersist()` explícitos.
+  useEffect(() => {
+    const t = setTimeout(() => persistNowRef.current(), 400);
+    return () => clearTimeout(t);
+  }, [messages, draft, model, projKey]);
+
+  // Al irse (cerrar, cambiar de app en iOS) se guarda ya, sin esperar el
+  // debounce: "pagehide" es el único evento fiable en Safari móvil.
+  useEffect(() => {
+    const flush = () => persistNowRef.current();
+    const onHidden = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHidden);
+    };
+  }, []);
+
+  // Cambio de proyecto en foco: guarda el hilo actual bajo su clave y
+  // restaura el del proyecto nuevo (o uno en blanco si nunca habló ahí). El
+  // turno en vuelo pertenece al hilo VIEJO — se suelta el stream, no se
+  // cancela el turno del servidor, y su `pendingTurn` viaja guardado por si
+  // se vuelve a ese proyecto más tarde.
+  useEffect(() => {
+    if (prevProjRef.current === projKey) return;
+    byProjectRef.current.set(prevProjRef.current, buildThread());
+    prevProjRef.current = projKey;
+
+    unfollowRef.current?.();
+    unfollowRef.current = null;
+    turnIdRef.current = null;
+    setStopping(false);
+
+    const next = byProjectRef.current.get(projKey);
+    sdkSessionIdRef.current = next?.sdkSessionId ?? null;
+    sessionKeyRef.current = next?.sessionKey || uuid();
+    pendingTurnRef.current = next?.pendingTurn ?? null;
+    lastSeqRef.current = next?.pendingTurn?.seq ?? 0;
+    setMessages(next?.messages ?? []);
+    setDraft(next?.draft ?? "");
+    setModel(next?.model ?? null);
+    setBusy(false);
+    // Si el hilo del proyecto nuevo tenía un turno vivo, intenta reengancharse.
+    resumePendingRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projKey]);
 
   // Suelta TODOS los object URLs (composer + burbujas ya enviadas) al salir
   // de la página. Es el único momento seguro: mientras la página vive, una
@@ -833,10 +1055,11 @@ export default function Laboratorio() {
               {streaming && blocks.length === 0 ? (
                 // "Pensando" solo hasta el primer bloque: a partir de ahí los
                 // pasos ya cuentan qué está haciendo (igual que ChatPanel).
-                <span className="lab-thinking" role="status" aria-label="Hermes está pensando">
-                  <span />
-                  <span />
-                  <span />
+                // Antes eran tres puntos grises saltando; ahora es el orbe en
+                // miniatura (sin ojos: a 20px no caben) para que "pensando" se
+                // lea como el mismo personaje en todo Hermes.
+                <span role="status" aria-label="Hermes está pensando">
+                  <OrbeIA tam="20px" ojos={false} ariaLabel="" />
                 </span>
               ) : null}
             </div>

@@ -1,6 +1,6 @@
 "use client";
 
-// Conecta el <BootLoader/> a la carga REAL de la app. Vive dentro del árbol de
+// Conecta el <BootOrb/> a la carga REAL de la app. Vive dentro del árbol de
 // providers, así que lee las mismas señales que ya alimentan el dashboard —
 // sin abrir polls nuevos:
 //   · HermesData `online`  → datos críticos listos (proyectos + memoria + stats)
@@ -10,12 +10,17 @@
 // piso de exhibición anti-parpadeo) se completa, hace fade y se desmonta. Si el
 // agente está offline nada de esto resuelve: un tope duro dispara igual para no
 // dejar la cortina colgada.
+//
+// La pantalla en sí (BootOrb: fondo blanco + orbe centrado, sin porcentaje
+// visible) reemplazó al HUD oscuro de BootLoader.tsx — ese archivo queda sin
+// usar en el repo por si hay que revertir. Este archivo es el único punto
+// que decide cuál de los dos se monta.
 
 import { useEffect, useRef, useState } from "react";
 import { useHermesDataContext } from "@/state/HermesDataProvider";
 import { useDashboard } from "@/state/DashboardProvider";
 import { useAgentEventsContext } from "@/state/AgentEventsProvider";
-import { BootLoader } from "./BootLoader";
+import { BootOrb } from "./BootOrb";
 
 const MIN_MS = 1200;   // exhibición mínima antes de completar (anti-parpadeo)
 const SOFT_MS = 2400;  // ya hay datos críticos pero falta el snapshot → no esperes más
@@ -90,7 +95,7 @@ export function BootGate({ children }: { children: React.ReactNode }) {
     <>
       {children}
       {showLoader && (
-        <BootLoader
+        <BootOrb
           progress={progress}
           finish={finish}
           labels={labels}

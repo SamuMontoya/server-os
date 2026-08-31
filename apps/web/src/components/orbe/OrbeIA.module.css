@@ -1,0 +1,116 @@
+/* Orbe IA — la película de color viaja como textura medida del vídeo original.
+   Los tamaños se derivan del radio (--r) para que el componente escale entero. */
+
+.cuerpo {
+  /* --d lo inyecta el componente por style inline; este es el valor de reserva. */
+  --r: calc(var(--d) / 2);
+  --bucle: 7.0333s;
+  --ojo-an: calc(var(--r) * 0.092);
+  --ojo-al: calc(var(--r) * 0.185);
+  --ojo-cerrado: 0.497;
+
+  position: relative;
+  width: var(--d);
+  aspect-ratio: 1;
+  will-change: transform;
+}
+
+/* El lienzo mide 120 % del orbe: la película llega a 1,05 radios y la
+   deformación medida la estira hasta sx=1,092 → 1,147 radios en pantalla.
+   Con menos del 120 % se le corta el borde en la fase de estirado. */
+.lienzo {
+  position: absolute;
+  inset: -10%;
+  width: 120%;
+  height: 120%;
+  display: block;
+}
+
+/* Envoltura propia para el movimiento de los ojos: .cara ya usa `transform`
+   para la mirada, y dos animaciones sobre la misma propiedad no se suman. */
+.movOjos {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.cara {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-auto-flow: column;
+  gap: calc(var(--r) * 0.278);
+  align-content: center;
+  justify-content: center;
+  align-items: center;
+  animation: mirar var(--bucle) cubic-bezier(0.38, 0.03, 0.24, 1) infinite;
+}
+
+@keyframes mirar {
+  0%,
+  26% {
+    transform: translate3d(0, calc(var(--r) * -0.2), 0);
+  }
+  31.5% {
+    transform: translate3d(calc(var(--r) * 0.28), calc(var(--r) * -0.3), 0);
+  }
+  41% {
+    transform: translate3d(calc(var(--r) * 0.274), calc(var(--r) * -0.312), 0);
+  }
+  47%,
+  100% {
+    transform: translate3d(0, calc(var(--r) * -0.2), 0);
+  }
+}
+
+.ojo {
+  width: var(--ojo-an);
+  height: var(--ojo-al);
+  border-radius: 999px;
+  background: #141414;
+  box-shadow: 0 0 calc(var(--r) * 0.05) rgba(0, 0, 0, 0.35);
+  animation: parpadeo var(--bucle) ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes parpadeo {
+  0%,
+  15% {
+    transform: scaleY(1);
+  }
+  16% {
+    transform: scaleY(var(--ojo-cerrado));
+  }
+  17%,
+  64.5% {
+    transform: scaleY(1);
+  }
+  67.3%,
+  70% {
+    transform: scaleY(var(--ojo-cerrado));
+  }
+  72.5%,
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+/* Reserva si no hay WebGL: se congela un orbe plano, no se esconde. */
+.sinWebgl {
+  background: radial-gradient(
+    circle closest-side,
+    #015d55 42%,
+    #149ce6 80%,
+    transparent 94%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cara,
+  .ojo {
+    animation: none !important;
+  }
+  .cara {
+    transform: translate3d(0, calc(var(--r) * -0.2), 0);
+  }
+}

@@ -1636,30 +1636,8 @@ html.lab-route.lab-kb .lab-inputbar {
   .lab-steps--live .lab-step--current .lab-step-glyph,
   .lab-steps--live .lab-steps-summary .lab-step-glyph { animation: none; }
 }
-/* "Pensando": tres puntos grises saltando en cascada. Nada de violeta acá
-   (ese es el acento del HUD oscuro) — gris, como el placeholder del input. */
-.lab-thinking {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 15px;
-}
-.lab-thinking span {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #9b9a97;
-  animation: lab-thinking-bounce 1s ease-in-out infinite;
-}
-.lab-thinking span:nth-child(2) { animation-delay: 0.16s; }
-.lab-thinking span:nth-child(3) { animation-delay: 0.32s; }
-@keyframes lab-thinking-bounce {
-  0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lab-thinking span { animation: none; opacity: 0.7; }
-}
+/* "Pensando" ahora es <OrbeIA tam="20px"/> (ver laboratorio/page.tsx): los
+   tres puntos grises que vivían aquí quedaron sin uso. */
 
 /* Micrófono (dictado voz → texto): mismo círculo negro que el botón de
    enviar, a la izquierda del textarea. A diferencia del chat principal (que
@@ -1788,4 +1766,37 @@ html.lab-route.lab-kb .lab-inputbar {
 .chat-textarea {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* ── Ruta /orbe ──────────────────────────────────────────────────────────────
+   El orbe se midió sobre FONDO BLANCO y su shader pinta blanco opaco fuera de
+   la caja del orbe, así que la página tiene que ser blanco puro (255,255,255)
+   hasta las cuatro esquinas. Mismo criterio que `lab-route`: apagamos el tema
+   oscuro del dashboard entero para esta ruta, incluidas las scanlines
+   ambientales, que son un multiply negro a pantalla completa y sobre blanco lo
+   grisan todo (la comprobación de las esquinas fallaría por su culpa). */
+html.orbe-route .safe-top-blackout {
+  background: #fff;
+}
+html.orbe-route,
+html.orbe-route body {
+  background: #fff;
+  background-image: none;
+  color: #37352f;
+  overscroll-behavior: none;
+}
+html.orbe-route {
+  height: 100%;
+  overflow: hidden;
+}
+html.orbe-route body {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  margin: 0;
+  display: grid;
+  place-items: center;
+}
+html.orbe-route body::after {
+  content: none;
 }
