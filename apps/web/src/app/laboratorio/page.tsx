@@ -1055,6 +1055,28 @@ export default function Laboratorio() {
 
   return (
     <main className="lab-paper">
+      {/* Barra superior: antes tenía la flecha de "volver" (quitada el
+          2026-08-29 para dejar la pantalla en blanco puro). Vuelve, pero con
+          el icono cambiado por un menú hamburguesa — será la entrada para ver
+          los chats abiertos en otras sesiones. Por ahora es solo el botón, sin
+          esa lógica todavía. */}
+      <div className="lab-topbar">
+        <button
+          type="button"
+          className="lab-menu-btn"
+          aria-label="Ver chats abiertos"
+          title="Chats"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M4 6h16M4 12h16M4 18h16"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
       <div
         className="lab-messages"
         ref={listRef}

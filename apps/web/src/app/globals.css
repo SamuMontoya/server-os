@@ -1109,22 +1109,32 @@ html.lab-route body::after {
 }
 /* Flecha de volver: solo el glifo. Sin borde ni fondo hasta el hover, donde
    apenas se insinúa un gris muy tenue para dar feedback de que es clickeable. */
-.lab-back {
+/* Barra superior: solo el botón de menú por ahora (sin el panel de chats
+   abiertos todavía). `padding-top` con la safe-area, no un margin fijo: ya
+   nos pasó una vez que un número fijo dejaba el icono tapado por la barra de
+   estado del iPhone (notch) — ver el fix de 2026-08-31 en SideRail.tsx. */
+.lab-topbar {
   position: relative;
   z-index: 1;
+  flex-shrink: 0;
+  padding: max(16px, calc(env(safe-area-inset-top) + 10px)) 0 0 16px;
+}
+.lab-menu-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 34px;
   height: 34px;
-  margin: 16px 0 0 16px;
   border-radius: 6px;
+  border: none;
+  background: none;
   color: #787774;
+  cursor: pointer;
   transition:
     color 0.15s,
     background 0.15s;
 }
-.lab-back:hover {
+.lab-menu-btn:hover {
   color: #37352f;
   background: #f1f1ef;
 }
