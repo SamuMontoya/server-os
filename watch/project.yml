@@ -18,12 +18,16 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
-    # Se compila SIN firmar a propósito: quien firma es SideStore, ya en el
-    # iPhone y con tu Apple ID. Firmar aquí exigiría un equipo de desarrollo
-    # y no aportaría nada a este flujo.
-    CODE_SIGNING_ALLOWED: "NO"
-    CODE_SIGNING_REQUIRED: "NO"
-    CODE_SIGN_IDENTITY: ""
+    # La firma queda ACTIVA por defecto: es lo que necesita el camino de
+    # Xcode (instalar directo en el iPhone y el reloj con un Apple ID
+    # gratuito). build-ipa.sh la desactiva por línea de comandos cuando lo
+    # que se quiere es el .ipa sin firmar para SideStore.
+    CODE_SIGN_STYLE: Automatic
+    # El equipo va AQUÍ y no solo en la UI de Xcode: `xcodegen generate`
+    # reescribe el .xcodeproj entero, así que lo que se elige a mano en
+    # Signing & Capabilities se pierde en la siguiente regeneración y el
+    # build falla con "requires a development team".
+    DEVELOPMENT_TEAM: 7LNN85JY33
 
 targets:
   # ── Contenedor de iPhone ──────────────────────────────────────────────
@@ -40,6 +44,7 @@ targets:
         PRODUCT_NAME: Hermes
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Container/Info.plist
       properties:
@@ -69,6 +74,7 @@ targets:
         PRODUCT_NAME: HermesWatch
         TARGETED_DEVICE_FAMILY: "4"
         GENERATE_INFOPLIST_FILE: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: WatchApp/Info.plist
       properties:
