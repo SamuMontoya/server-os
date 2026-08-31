@@ -1392,6 +1392,16 @@ html.lab-route.lab-kb .lab-inputbar {
   overflow-y: auto;
   padding: 8px 20px 4px;
 }
+/* Colchón al final de la conversación. Su altura la escribe el JS (ver
+   syncSpacer en laboratorio/page.tsx): aporta los píxeles que faltan para
+   poder subir el mensaje recién enviado al borde superior, y se encoge a
+   medida que la respuesta los va ocupando. `flex:0 0 auto` es obligatorio:
+   dentro de un flex column, un div vacío con height inline se aplastaría a 0
+   por el flex-shrink por defecto (=1). */
+.lab-spacer {
+  flex: 0 0 auto;
+  height: 0;
+}
 /* Burbuja "enviado": gris clara + colita, el patrón clásico de mensajería.
    Alineada a la derecha porque es lo que Samu mandó, igual que un chat común. */
 .lab-bubble {
@@ -1505,19 +1515,123 @@ html.lab-route.lab-kb .lab-inputbar {
 .lab-answer .md-ref {
   color: #2563eb;
 }
-/* Pasos del turno (AgentSteps): el componente es el mismo que usa el chat
-   principal — mismos verbos, mismos glifos, sin duplicar ese mapa acá — pero
-   sus clases (text-violet, text-amber, text-text-dim, border-line) pintan
-   con `color: var(--color-violet)` etc, así que sobreescribir esas variables
-   CSS en este contenedor repinta TODO el componente a la paleta Notion sin
-   tocar una sola línea de AgentSteps.tsx. Cascada pura, cero JS. */
+/* ── Pasos del turno (LabSteps) ──────────────────────────────────────────
+   Un bloque de acciones seguidas. Mientras corre es UNA línea que se releva
+   sola (el paso en curso); al pasar a texto o terminar el turno queda un
+   "N pasos" plegado. El encabezado siempre es clickeable para ver la lista.
+
+   Antes esto reusaba <AgentSteps/> y le repintaba las variables de Tailwind
+   por cascada. Se dejó de hacer cuando la REGLA cambió (todos los pasos vs
+   solo el vivo): eso ya no es un color, es otro componente. */
 .lab-steps {
-  --color-violet: #2563eb; /* glifo/acento — mismo azul que los links del md */
-  --color-amber: #d9730d; /* glifo del paso EN CURSO (live) */
-  --color-text: #37352f; /* verbo del paso en curso */
-  --color-text-dim: #9b9a97; /* verbo terminado + objetivo (ruta/URL) */
-  --color-line: rgba(55, 53, 47, 0.13); /* el trazo vertical de la lista */
   font-family: var(--font-notion);
+  margin: 6px 0;
+}
+/* El BLOQUE ENTERO es el toggle (role="button" en LabSteps), no solo el
+   encabezado: se abre y se cierra tocando cualquier parte, incluida una fila
+   de la lista ya desplegada. Sin fondo ni borde: es una nota al margen, no un
+   control que compita con la respuesta. */
+.lab-steps {
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+.lab-steps:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.4);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.lab-steps-head {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  width: 100%;
+  padding: 2px 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #9b9a97;
+  text-align: left;
+}
+.lab-steps:hover .lab-step-verb,
+.lab-steps:hover .lab-steps-count { color: #37352f; }
+.lab-steps-summary {
+  /* El resumen usa el mismo grid glifo+texto que una fila de paso, para que
+     el icono quede en la MISMA columna que los de la lista al desplegarse. */
+  align-items: baseline;
+}
+.lab-steps-count {
+  /* El resumen final: discreto y en versalitas, para que se lea como
+     metadato del turno y no como una frase más de la respuesta. */
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* Una fila de paso: glifo · verbo · objetivo. El objetivo (ruta, query) va en
+   mono y se trunca — es contexto, nunca debe romper la línea. */
+.lab-step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.lab-step-glyph {
+  flex-shrink: 0;
+  /* El rojo del código inline de Notion (.md-code, arriba): la acción es de
+     la misma familia visual que un fragmento de código, no un link. */
+  color: #eb5757;
+  font-size: 11px;
+}
+.lab-step-verb {
+  flex-shrink: 0;
+  color: #6b6a67;
+}
+.lab-step-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: #9b9a97;
+}
+/* El paso EN CURSO: verbo en negro, para que se distinga del historial gris de
+   un vistazo. Entra con un desplazamiento mínimo — es el relevo de una línea
+   por otra, no una notificación. */
+.lab-step--current {
+  animation: lab-step-in 0.18s ease-out;
+}
+.lab-step--current .lab-step-verb { color: #37352f; }
+@keyframes lab-step-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+/* Pulso del glifo MIENTRAS el bloque está vivo: es la única señal de que la
+   acción todavía está corriendo (el texto no cambia hasta que la tool vuelve,
+   y una tool lenta —un Bash de 40s— parecía congelada). Solo late el glifo de
+   la línea viva o del resumen; los pasos ya cerrados de la lista quedan
+   quietos, si latieran todos parecería un error. */
+.lab-steps--live .lab-step--current .lab-step-glyph,
+.lab-steps--live .lab-steps-summary .lab-step-glyph {
+  animation: lab-glyph-pulse 1.15s ease-in-out infinite;
+}
+@keyframes lab-glyph-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.88); }
+}
+/* Lista desplegada: sin trazo vertical ni sangría — los glifos rojos ya
+   alinean en columna con el del encabezado y eso es lo que agrupa el bloque. */
+.lab-steps-list {
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.lab-steps-list .lab-step { padding: 1px 0; }
+@media (prefers-reduced-motion: reduce) {
+  .lab-step--current { animation: none; }
+  .lab-steps--live .lab-step--current .lab-step-glyph,
+  .lab-steps--live .lab-steps-summary .lab-step-glyph { animation: none; }
 }
 /* "Pensando": tres puntos grises saltando en cascada. Nada de violeta acá
    (ese es el acento del HUD oscuro) — gris, como el placeholder del input. */
@@ -1637,6 +1751,11 @@ html.lab-route.lab-kb .lab-inputbar {
   cursor: default;
 }
 .lab-send:not(:disabled):hover { background: #000; }
+/* Modo detener: mismo círculo, pero SIEMPRE encendido mientras hay turno vivo
+   (el de enviar se apaga sin texto; este nunca debe verse "muerto", porque es
+   la única salida para cortar una respuesta larga). */
+.lab-send--stop { background: #37352f; }
+.lab-send--stop:disabled { background: #d3d1cb; }
 /* iOS Safari hace auto-zoom al enfocar un input/textarea con font-size
    menor a 16px. Forzamos 16px solo en viewports táctiles/estrechos para
    no cambiar el tamaño visual en desktop. Mismo problema en el composer

@@ -12,25 +12,51 @@ import { useEffect, useRef, useState } from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { useWorkspace } from "@/state/WorkspaceContext";
-import { startTurn, attachTurn, fetchTurn } from "@/lib/chat-turns";
+import { startTurn, attachTurn, fetchTurn, stopTurn } from "@/lib/chat-turns";
 import { Markdown } from "@/components/Markdown";
-import { AgentSteps } from "@/components/AgentSteps";
+import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
 import { uuid } from "@/lib/uuid";
 import { isSupportedImage, uploadChatImage } from "@/lib/chat-attachments";
 
+/**
+ * Un tramo de la respuesta, EN EL ORDEN EN QUE PASÓ.
+ *
+ * Antes la respuesta eran dos campos sueltos —`content` (todo el texto) y
+ * `steps` (todas las tools)— y la pantalla los pintaba siempre igual: primero
+ * el bloque de pasos, luego el texto. Con eso, un turno que trabaja, explica,
+ * vuelve a trabajar y remata se veía como si hubiera hecho TODO al principio
+ * y hablado al final. La cronología real se perdía en el modelo de datos.
+ *
+ * Ahora la respuesta es una lista de bloques que se va armando con el mismo
+ * orden de llegada del stream (los eventos del turno vienen numerados por
+ * `seq`, ver lib/chat-turns.ts): deltas de texto se pegan al bloque de texto
+ * de arriba, tools al bloque de pasos de arriba, y cada cambio de tipo abre
+ * un bloque nuevo. Así el hilo queda: acciones → texto → acciones → texto.
+ */
+type LabBlock =
+  | { kind: "text"; text: string }
+  | { kind: "steps"; steps: ChatToolStep[] };
+
 type LabMessage = {
   id: number;
   role: "user" | "assistant";
+  /** Texto plano del mensaje del usuario. En el asistente vive en `blocks`. */
   content: string;
-  /** Pasos de herramientas del turno (solo en mensajes del asistente):
-   *  los tool_use REALES que el SDK reportó mientras generaba esta
-   *  respuesta — leer archivos, correr comandos, buscar en la memoria, etc. */
-  steps?: ChatToolStep[];
+  /** Respuesta del asistente, en orden cronológico (ver LabBlock). */
+  blocks?: LabBlock[];
   /** Imágenes que iban con el mensaje (solo en mensajes del usuario): quedan
    *  visibles en la burbuja, como el adjunto que fueron. */
   images?: { url: string; name: string }[];
 };
+
+/** ¿Ya escribió algo el asistente? (para el "pensando" y los avisos de error). */
+function blocksText(blocks: LabBlock[] | undefined): string {
+  return (blocks ?? [])
+    .filter((b): b is { kind: "text"; text: string } => b.kind === "text")
+    .map((b) => b.text)
+    .join("");
+}
 
 /**
  * Imagen pegada en el composer, mientras vive ahí.
@@ -60,11 +86,45 @@ export default function Laboratorio() {
   // terminar: entre mensajes sigue mostrando con qué se respondió el último,
   // que es más informativo que volver a un guion.
   const [model, setModel] = useState<string | null>(null);
+  /**
+   * Turno vivo AHORA. Lo necesita el botón ⏹ (el mismo botón de enviar
+   * mientras se está generando): sin el id no hay a quién mandarle el stop.
+   */
+  const turnIdRef = useRef<string | null>(null);
+  /** Se pidió parar y aún no llegó el `stopped`: el botón se apaga mientras. */
+  const [stopping, setStopping] = useState(false);
+  /**
+   * Contador de interacciones. Cada vez que sube, el pie vuelve a pedir el
+   * consumo: lo que se lee bajo el input es el gasto DESPUÉS del turno que se
+   * acaba de mandar, no el de la última vez que picó el reloj de un minuto.
+   */
+  const [usageKey, setUsageKey] = useState(0);
+  const bumpUsage = () => setUsageKey((k) => k + 1);
   // Imágenes pegadas que todavía no se han enviado.
   const [attachments, setAttachments] = useState<LabAttachment[]>([]);
   const [dropping, setDropping] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Contenedor scrolleable de la conversación + las piezas del "anclaje
+  // arriba" (ver scrollAnchorToTop): la burbuja del último mensaje enviado y
+  // el colchón elástico que hay debajo de todo para poder subirla.
+  const listRef = useRef<HTMLDivElement>(null);
+  const spacerRef = useRef<HTMLDivElement>(null);
+  /**
+   * Qué pieza debe quedar pegada arriba. Es la CLAVE de un `data-anchor` del
+   * DOM, no un ref a un nodo, porque el ancla ya no es solo el mensaje del
+   * usuario: también cada bloque que la IA va insertando (`${msgId}:${i}`).
+   * Con refs habría que colgar/quitar un ref condicional en N elementos que se
+   * re-renderizan en cada token; una query por atributo se resuelve al medir.
+   */
+  const anchorKeyRef = useRef<string | null>(null);
+  const shrinkPendingRef = useRef(false);
+  /**
+   * true = Samu scrolleó a mano hacia arriba, así que el auto-anclaje se
+   * calla hasta que vuelva al fondo (o envíe otro mensaje). Sin esto, leer
+   * una respuesta larga mientras el agente sigue trabajando era imposible:
+   * cada bloque nuevo tironeaba la vista.
+   */
+  const userPinnedRef = useRef(false);
   /**
    * TODOS los object URLs creados en esta visita. Un object URL mantiene el
    * blob vivo hasta que se revoca explícitamente, y las imágenes ya enviadas
@@ -75,6 +135,8 @@ export default function Laboratorio() {
   // Texto que ya había en el input al arrancar el mic: el dictado se pega
   // detrás, no lo reemplaza (igual que en ChatPanel).
   const dictationBaseRef = useRef("");
+  /** true = tirar la próxima transcripción que llegue (ver `endDictation`). */
+  const dictationDropRef = useRef(false);
 
   // Una sesión por visita a la página (igual que un tab nuevo del chat
   // principal). `resume` guarda la sesión del SDK una vez que el primer
@@ -114,16 +176,57 @@ export default function Laboratorio() {
     resizeInput();
   }, []);
 
-  // Escribe/acumula en el mensaje de respuesta por id — igual patrón que
-  // `writeReply` en ChatPanel, pero sobre el array plano de esta página.
-  const writeReply = (replyId: number, fn: (prev: string) => string) => {
+  /** Reescribe los bloques del mensaje de respuesta `replyId`. */
+  const writeBlocks = (replyId: number, fn: (prev: LabBlock[]) => LabBlock[]) => {
     setMessages((prev) =>
-      prev.map((m) => (m.id === replyId ? { ...m, content: fn(m.content) } : m)),
+      prev.map((m) => (m.id === replyId ? { ...m, blocks: fn(m.blocks ?? []) } : m)),
     );
   };
-  const writeSteps = (replyId: number, fn: (prev: ChatToolStep[]) => ChatToolStep[]) => {
+
+  /**
+   * Texto que llega por el stream. Se pega al último bloque SI ese bloque ya
+   * es de texto; si el último fue de pasos, abre uno nuevo — que es justo lo
+   * que colapsa las acciones anteriores (dejan de ser el bloque vivo).
+   */
+  const appendText = (replyId: number, text: string) => {
+    if (!text) return;
+    writeBlocks(replyId, (prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.kind === "text") {
+        return [...prev.slice(0, -1), { kind: "text", text: last.text + text }];
+      }
+      return [...prev, { kind: "text", text }];
+    });
+  };
+
+  /** Un tool_use nuevo: se suma al bloque de pasos vivo, o abre uno debajo
+   *  del último texto. */
+  const appendStep = (replyId: number, step: ChatToolStep) => {
+    writeBlocks(replyId, (prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.kind === "steps") {
+        return [...prev.slice(0, -1), { kind: "steps", steps: [...last.steps, step] }];
+      }
+      return [...prev, { kind: "steps", steps: [step] }];
+    });
+  };
+
+  /** Aviso al final de la respuesta (error, desconexión): siempre como texto. */
+  const appendNotice = (replyId: number, detail: string) => {
     setMessages((prev) =>
-      prev.map((m) => (m.id === replyId ? { ...m, steps: fn(m.steps ?? []) } : m)),
+      prev.map((m) => {
+        if (m.id !== replyId) return m;
+        const blocks = m.blocks ?? [];
+        const sep = blocksText(blocks).trim() ? "\n\n" : "";
+        const last = blocks[blocks.length - 1];
+        if (last?.kind === "text") {
+          return {
+            ...m,
+            blocks: [...blocks.slice(0, -1), { kind: "text", text: last.text + sep + detail }],
+          };
+        }
+        return { ...m, blocks: [...blocks, { kind: "text", text: detail }] };
+      }),
     );
   };
 
@@ -134,26 +237,56 @@ export default function Laboratorio() {
     unfollowRef.current?.();
     const close = attachTurn(turnId, from, {
       onState: (st) => {
-        if (st.text) writeReply(replyId, () => st.text);
-        // El snapshot trae la lista COMPLETA de pasos hasta ahora (verdad del
-        // servidor, no un delta): se reemplaza entero, igual que el texto.
-        if (st.steps.length > 0) writeSteps(replyId, () => st.steps);
+        // OJO con el snapshot: trae `text` y `steps` como DOS listas planas,
+        // sin el orden en que se intercalaron. Reconstruir los bloques desde
+        // aquí perdería la cronología (volveríamos a "todas las acciones
+        // arriba, todo el texto abajo"), y encima duplicaría contenido: tras
+        // el snapshot el servidor RE-EMITE los eventos pendientes desde el
+        // cursor, y esos ya reconstruyen la respuesta en orden.
+        //
+        // Por eso aquí solo se toma lo que no viaja como evento (estado,
+        // modelo, sesión). El único caso en que el snapshot manda es
+        // `truncated`: el buffer botó eventos, no hay orden que recuperar, y
+        // más vale una respuesta completa mal ordenada que una con huecos.
+        if (st.truncated) {
+          const rebuilt: LabBlock[] = [
+            ...(st.steps.length > 0 ? [{ kind: "steps" as const, steps: st.steps }] : []),
+            ...(st.text ? [{ kind: "text" as const, text: st.text }] : []),
+          ];
+          writeBlocks(replyId, () => rebuilt);
+          // El cursor de bloques se rehace igual: si quedara desfasado, el
+          // ancla apuntaría a un `data-anchor` que ya no existe y el colchón
+          // dejaría de medir (anchorOffset → null).
+          blockCursorRef.current = {
+            replyId,
+            count: rebuilt.length,
+            lastKind: rebuilt[rebuilt.length - 1]?.kind ?? null,
+          };
+        }
         setBusy(st.status === "running");
         // El snapshot ya trae el modelo elegido: al reengancharse a un turno
         // en curso el pie no queda en "—" esperando el próximo evento.
         if (st.model) setModel(st.model);
         if (st.sdkSessionId) sdkSessionIdRef.current ??= st.sdkSessionId;
-        scrollToBottom();
+        // OJO: aquí NO se scrollea. La respuesta crece bajo el mensaje
+        // anclado; solo se recorta el colchón sobrante (ver shrinkSpacer).
+        shrinkSpacer();
       },
       onDelta: (text) => {
-        writeReply(replyId, (prev) => prev + text);
-        scrollToBottom();
+        appendText(replyId, text);
+        // Un bloque de texto NUEVO (el primero, o el que sigue a unas
+        // acciones) sube al borde superior; los deltas siguientes solo
+        // recortan el colchón, así se lee sin que la vista persiga al texto.
+        if (text) noteBlock(replyId, "text");
+        shrinkSpacer();
       },
       onTool: (step) => {
         // Los pasos (tool_use reales) llegan ANTES del primer texto: son lo
-        // que reemplaza al "pensando" mudo mientras el agente trabaja.
-        writeSteps(replyId, (prev) => [...prev, step]);
-        scrollToBottom();
+        // que reemplaza al "pensando" mudo mientras el agente trabaja. Y si
+        // llegan DESPUÉS de un texto, abren un bloque nuevo debajo de él.
+        appendStep(replyId, step);
+        noteBlock(replyId, "steps");
+        shrinkSpacer();
       },
       onSession: (sid) => {
         sdkSessionIdRef.current ??= sid;
@@ -163,30 +296,176 @@ export default function Laboratorio() {
       onModel: (m) => setModel(m),
       onEnd: (status) => {
         unfollowRef.current = null;
+        turnIdRef.current = null;
+        setStopping(false);
         setBusy(false);
+        // Terminó un turno = se gastó consumo: el pie se entera ya, no en el
+        // próximo tick del minuto.
+        bumpUsage();
         if (status === "error") {
           void fetchTurn(turnId).then((st) => {
-            const detail = st?.error ? `⚠ ${st.error}` : "⚠ el turno falló";
-            writeReply(replyId, (prev) => (prev.trim() ? `${prev}\n\n${detail}` : detail));
+            appendNotice(replyId, st?.error ? `⚠ ${st.error}` : "⚠ el turno falló");
           });
         }
-        scrollToBottom();
+        shrinkSpacer();
       },
       onDisconnected: () => {
         // Se agotaron los reintentos del navegador; el turno puede seguir
         // vivo en el servidor. De momento se avisa y ya — reengancharse
         // solo al volver es uno de los "ajustes posteriores" pendientes.
+        turnIdRef.current = null;
+        setStopping(false);
         setBusy(false);
-        writeReply(replyId, (prev) =>
-          prev.trim() ? prev : "⚠ se perdió la conexión con Hermes.",
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === replyId && !blocksText(m.blocks).trim()
+              ? { ...m, blocks: [{ kind: "text", text: "⚠ se perdió la conexión con Hermes." }] }
+              : m,
+          ),
         );
       },
     });
     unfollowRef.current = close;
   };
 
-  const scrollToBottom = () => {
-    requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ block: "end" }));
+  // ── Anclaje del mensaje enviado arriba ───────────────────────────────
+  //
+  // Antes esto seguía la respuesta hasta el fondo (`scrollToBottom` en cada
+  // delta): con respuestas largas la vista corría sola y no se podía leer
+  // desde el principio. Ahora, al enviar, el mensaje del usuario sube al
+  // borde superior y la vista SE QUEDA QUIETA mientras Hermes escribe — la
+  // respuesta crece hacia abajo y Samu lee/scrollea a su ritmo. Es el
+  // comportamiento de ChatGPT, y solo se re-ancla al enviar otro mensaje.
+  //
+  // Para poder subir el último mensaje hasta arriba tiene que haber altura
+  // scrolleable por debajo de él: al principio hay muy poca (la respuesta
+  // está vacía). Por eso existe el colchón (`spacerRef`), un div al final que
+  // aporta justo los píxeles que faltan y se va ENCOGIENDO a medida que la
+  // respuesta los ocupa. Su altura se escribe directo en el DOM (no en
+  // estado) para no re-renderizar la lista en cada token del stream.
+
+  /** Hueco que queda sobre el mensaje anclado cuando está pegado arriba. */
+  const TOP_GAP = 12;
+
+  /** El nodo anclado ahora mismo (mensaje del usuario o bloque de la IA). */
+  const anchorEl = () => {
+    const list = listRef.current;
+    const key = anchorKeyRef.current;
+    if (!list || !key) return null;
+    return list.querySelector<HTMLElement>(`[data-anchor="${key}"]`);
+  };
+
+  /** Distancia del ancla al inicio del contenido scrolleable, en px. */
+  const anchorOffset = () => {
+    const list = listRef.current;
+    const anchor = anchorEl();
+    if (!list || !anchor) return null;
+    return anchor.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+  };
+
+  /**
+   * Recalcula el colchón: exactamente lo necesario para que el ancla pueda
+   * quedar a TOP_GAP del borde superior, ni un píxel más (así no aparece un
+   * vacío enorme bajo respuestas cortas).
+   *
+   * `shrinkOnly` durante el stream: dejarlo crecer ahí provocaría tirones si
+   * una medición intermedia sale corta (imagen que aún no cargó, bloque de
+   * código que se re-mide). Solo el envío de un mensaje nuevo lo re-infla.
+   */
+  const syncSpacer = (opts?: { shrinkOnly?: boolean }) => {
+    const list = listRef.current;
+    const sp = spacerRef.current;
+    const top = anchorOffset();
+    if (!list || !sp || top === null) return;
+    // Alto del contenido REAL (sin contar el colchón actual).
+    const content = list.scrollHeight - sp.offsetHeight;
+    const need = Math.max(0, list.clientHeight - TOP_GAP - (content - top));
+    if (opts?.shrinkOnly && need > sp.offsetHeight) return;
+    sp.style.height = `${need}px`;
+  };
+
+  /** Sube el último mensaje del usuario al borde superior de la lista. */
+  const scrollAnchorToTop = () => {
+    const list = listRef.current;
+    const top = anchorOffset();
+    if (!list || top === null) return;
+    list.scrollTo({ top: Math.max(0, top - TOP_GAP), behavior: "smooth" });
+  };
+
+  /**
+   * Ancla `key` arriba. Dos rAF antes de medir: el primero espera al commit de
+   * React (el nodo nuevo todavía no está en el DOM cuando vuelve
+   * `setMessages`), el segundo al layout ya con el colchón puesto.
+   *
+   * Si Samu está leyendo más arriba se actualiza la clave pero NO se scrollea:
+   * así, cuando vuelva al fondo, el colchón ya mide contra la pieza correcta.
+   */
+  const anchorTo = (key: string) => {
+    anchorKeyRef.current = key;
+    if (userPinnedRef.current) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        syncSpacer();
+        scrollAnchorToTop();
+      });
+    });
+  };
+
+  /**
+   * Cursor de bloques del turno en curso, en paralelo a los `blocks` del
+   * estado. Sirve para saber si el próximo evento del stream ABRE un bloque
+   * nuevo (→ hay que anclarlo) o sigue engordando el actual (→ la vista no se
+   * mueve, si no, cada token daría un tirón). Se lleva en un ref y no en el
+   * estado porque `appendText/appendStep` deciden esto ANTES de que React
+   * haya commiteado el render anterior.
+   */
+  const blockCursorRef = useRef<{
+    replyId: number | null;
+    count: number;
+    lastKind: "text" | "steps" | null;
+  }>({ replyId: null, count: 0, lastKind: null });
+
+  /** Registra el bloque que acaba de recibir contenido y ancla si es nuevo. */
+  const noteBlock = (replyId: number, kind: "text" | "steps") => {
+    const cur = blockCursorRef.current;
+    if (cur.replyId !== replyId) {
+      blockCursorRef.current = { replyId, count: 0, lastKind: null };
+    }
+    const c = blockCursorRef.current;
+    if (c.lastKind === kind) return; // mismo bloque: sigue creciendo, no se toca
+    c.lastKind = kind;
+    c.count += 1;
+    anchorTo(`${replyId}:${c.count - 1}`);
+  };
+
+  /**
+   * Reengancha el auto-anclaje según dónde quedó la vista. Se dispara con
+   * `wheel`/`touchmove` —intención directa de Samu— y no con `scroll`, que
+   * también lo emiten nuestros propios `scrollTo` (eso se auto-silenciaría).
+   * El rAF es porque en `wheel` el `scrollTop` todavía es el de antes.
+   */
+  const onUserScroll = () => {
+    requestAnimationFrame(() => {
+      const list = listRef.current;
+      if (!list) return;
+      const gap = list.scrollHeight - list.scrollTop - list.clientHeight;
+      userPinnedRef.current = gap > 120;
+    });
+  };
+
+  /**
+   * Durante el stream: el contenido crece, así que el colchón sobra de a
+   * poco. Encogerlo mantiene el scroll máximo justo en el punto donde el
+   * ancla está arriba, así que la vista NO se mueve. Throttled a un frame
+   * porque esto se llama en cada delta de texto.
+   */
+  const shrinkSpacer = () => {
+    if (shrinkPendingRef.current) return;
+    shrinkPendingRef.current = true;
+    requestAnimationFrame(() => {
+      shrinkPendingRef.current = false;
+      syncSpacer({ shrinkOnly: true });
+    });
   };
 
   // ── Imágenes pegadas ─────────────────────────────────────────────────
@@ -249,7 +528,15 @@ export default function Laboratorio() {
     // Con imagen y sin texto se envía igual: pegar un pantallazo y darle enviar
     // es una pregunta completa (el servidor pone "¿Qué ves en esta imagen?").
     if (!canSend) return;
-    if (listening) micStop();
+    // Corta el dictado Y DESCARTA lo que venga de él.
+    //
+    // Este era el bug del "input que no queda limpio": `micStop()` no termina
+    // el dictado, lo MANDA A TRANSCRIBIR. Un segundo después el servidor
+    // devolvía el texto puntuado, el callback hacía `setDraft(base + texto)`
+    // y el mensaje recién enviado reaparecía escrito en el composer. Vaciar
+    // el draft acá no servía de nada: la respuesta tardía volvía a llenarlo.
+    // Ver `dictationDropRef` en el hook de transcripción de abajo.
+    endDictation();
 
     const sent = attachments.filter((a) => a.id);
     const userMsg: LabMessage = {
@@ -258,7 +545,11 @@ export default function Laboratorio() {
       content: text,
       ...(sent.length ? { images: sent.map((a) => ({ url: a.url, name: a.name })) } : {}),
     };
-    const replyMsg: LabMessage = { id: Date.now() + 1, role: "assistant", content: "" };
+    const replyMsg: LabMessage = { id: Date.now() + 1, role: "assistant", content: "", blocks: [] };
+    // Enviar SIEMPRE re-engancha el auto-anclaje: aunque Samu estuviera
+    // leyendo arriba, mandar un mensaje es pedir explícitamente ver lo nuevo.
+    userPinnedRef.current = false;
+    blockCursorRef.current = { replyId: replyMsg.id, count: 0, lastKind: null };
     setMessages((prev) => [...prev, userMsg, replyMsg]);
     setDraft("");
     // Se vacía el composer SIN revocar los object URLs: los hereda la burbuja,
@@ -269,7 +560,10 @@ export default function Laboratorio() {
     // onChange); lo hacemos a mano en el próximo frame, cuando el DOM ya
     // tiene el value nuevo.
     requestAnimationFrame(() => resizeInput());
-    scrollToBottom();
+    anchorTo(`u${userMsg.id}`);
+    // Mandar es la interacción más informativa para el pie: el consumo que se
+    // muestra mientras Hermes piensa ya es el de esta ventana, recién pedido.
+    bumpUsage();
 
     try {
       const turnId = await startTurn({
@@ -279,11 +573,38 @@ export default function Laboratorio() {
         resume: sdkSessionIdRef.current,
         attachments: sent.map((a) => a.id!),
       });
+      turnIdRef.current = turnId;
       follow(turnId, 0, replyMsg.id);
     } catch (err) {
+      turnIdRef.current = null;
       setBusy(false);
       const detail = err instanceof Error ? err.message : "no se pudo enviar el mensaje";
-      writeReply(replyMsg.id, () => `⚠ ${detail}`);
+      appendNotice(replyMsg.id, `⚠ ${detail}`);
+    }
+  };
+
+  /**
+   * ⏹ Detener la generación en curso.
+   *
+   * Se le pide al SERVIDOR que corte el turno (`/chat/turns/:id/stop`), no
+   * solo al navegador que deje de escuchar: el turno vive del otro lado y
+   * cerrar el stream lo dejaría gastando tokens en una respuesta que ya nadie
+   * quiere. El `busy` no se baja aquí a mano — llega el evento `stopped` y con
+   * él `onEnd`, que ya limpia todo (así el botón no miente si el stop falla).
+   */
+  const handleStop = async () => {
+    const turnId = turnIdRef.current;
+    if (!turnId || stopping) return;
+    setStopping(true);
+    const ok = await stopTurn(turnId);
+    // Si el servidor ni siquiera aceptó el stop (turno ya muerto, agente
+    // caído), se suelta la UI igual: dejar el botón bloqueado sería peor.
+    if (!ok) {
+      setStopping(false);
+      setBusy(false);
+      turnIdRef.current = null;
+      unfollowRef.current?.();
+      unfollowRef.current = null;
     }
   };
 
@@ -337,6 +658,10 @@ export default function Laboratorio() {
     stop: micStop,
   } = useVoiceDictation({
     onTranscript: (text) => {
+      // El dictado ya se envió: este texto es el eco tardío del clip que se
+      // acaba de mandar. Escribirlo en el draft resucitaría el mensaje en el
+      // composer (ver `endDictation`).
+      if (dictationDropRef.current) return;
       const base = dictationBaseRef.current;
       const sep = base && !base.endsWith(" ") ? " " : "";
       setDraft(base + sep + text);
@@ -347,11 +672,29 @@ export default function Laboratorio() {
     },
   });
 
+  /**
+   * Cierra el dictado en curso y BLOQUEA su resultado.
+   *
+   * La transcripción del servidor es asíncrona: `micStop()` solo dispara la
+   * subida del clip, y el texto llega después por `onTranscript`. Al enviar,
+   * ese texto ya no tiene dónde ir —el mensaje partió— así que se levanta la
+   * bandera y el callback lo tira. La bandera se baja al arrancar el próximo
+   * dictado, no antes: en medio puede llegar el eco del anterior.
+   */
+  const endDictation = () => {
+    dictationDropRef.current = true;
+    dictationBaseRef.current = "";
+    if (listening) micStop();
+  };
+
   const toggleMic = () => {
     if (listening) {
       micStop();
       return;
     }
+    // Dictado nuevo: vuelve a aceptar transcripciones y ancla la base al texto
+    // que ya hubiera escrito a mano.
+    dictationDropRef.current = false;
     dictationBaseRef.current = draft.trimEnd();
     void micStart();
     inputRef.current?.focus();
@@ -440,11 +783,18 @@ export default function Laboratorio() {
         </svg>
       </Link>
 
-      <div className="lab-messages">
+      <div className="lab-messages" ref={listRef} onWheel={onUserScroll} onTouchMove={onUserScroll}>
         {messages.map((m, idx) => {
           if (m.role === "user") {
             return (
-              <div key={m.id} className="lab-bubble">
+              <div
+                key={m.id}
+                className="lab-bubble"
+                // `data-anchor`: candidato a quedar pegado arriba. Lo llevan
+                // todos los mensajes y bloques; el que manda en cada momento
+                // es el que apunta anchorKeyRef (ver anchorTo).
+                data-anchor={`u${m.id}`}
+              >
                 {m.images && m.images.length > 0 && (
                   <div className="lab-bubble-images">
                     {m.images.map((img, i) => (
@@ -460,25 +810,32 @@ export default function Laboratorio() {
               </div>
             );
           }
-          const steps = m.steps ?? [];
+          const blocks = m.blocks ?? [];
           // Solo el ÚLTIMO mensaje puede estar en curso: es donde escribe el
           // turno activo (busy es global porque solo corre un turno a la vez).
           const streaming = busy && idx === messages.length - 1;
           return (
             <div key={m.id} className="lab-answer">
-              {/* Pasos ANTES del texto (patrón Replit): el trabajo se ve
-                  mientras ocurre, la respuesta aterriza debajo. El wrapper
-                  .lab-steps repinta los acentos violeta/ámbar del HUD oscuro
-                  a la paleta clara de Notion — ver globals.css. */}
-              {steps.length > 0 && (
-                <div className="lab-steps">
-                  <AgentSteps steps={steps} busy={streaming} />
+              {/* La respuesta se pinta EN ORDEN DE LLEGADA: cada bloque de
+                  acciones donde de verdad ocurrió, no todos amontonados
+                  arriba. Solo el ÚLTIMO bloque de un turno vivo está `live`
+                  (una línea, el paso en curso); en cuanto llega texto debajo,
+                  ese bloque se pliega solo a "N pasos". */}
+              {blocks.map((b, bi) => (
+                // El wrapper existe solo por el `data-anchor`: cada bloque que
+                // se inserta puede ser el que sube al borde superior, y ni
+                // LabSteps ni Markdown reciben ref. Sin padding ni borde, así
+                // los márgenes de los hijos siguen colapsando igual que antes.
+                <div key={bi} data-anchor={`${m.id}:${bi}`}>
+                  {b.kind === "steps" ? (
+                    <LabSteps steps={b.steps} live={streaming && bi === blocks.length - 1} />
+                  ) : (
+                    <Markdown source={b.text} project={selectedProject ?? undefined} />
+                  )}
                 </div>
-              )}
-              {m.content ? (
-                <Markdown source={m.content} project={selectedProject ?? undefined} />
-              ) : streaming && steps.length === 0 ? (
-                // "Pensando" solo hasta el primer paso: a partir de ahí los
+              ))}
+              {streaming && blocks.length === 0 ? (
+                // "Pensando" solo hasta el primer bloque: a partir de ahí los
                 // pasos ya cuentan qué está haciendo (igual que ChatPanel).
                 <span className="lab-thinking" role="status" aria-label="Hermes está pensando">
                   <span />
@@ -489,7 +846,10 @@ export default function Laboratorio() {
             </div>
           );
         })}
-        <div ref={messagesEndRef} />
+        {/* Colchón elástico: altura manejada a mano (ver syncSpacer). Es lo
+            que permite subir el último mensaje al borde superior cuando la
+            respuesta aún no ocupa la pantalla, y se encoge según ella crece. */}
+        <div ref={spacerRef} className="lab-spacer" aria-hidden="true" />
       </div>
 
       <div className="lab-inputbar">
@@ -606,26 +966,47 @@ export default function Laboratorio() {
               aria-label="Entrada de texto"
               className="lab-textarea"
             />
-            <button
-              type="submit"
-              className="lab-send"
-              disabled={!canSend}
-              aria-label="Enviar"
-              title="Enviar"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                aria-hidden="true"
+            {/* Un solo botón con dos vidas: flecha para enviar, cuadrado para
+                detener mientras se genera. Es el mismo gesto en el mismo sitio
+                —el pulgar no tiene que buscar nada— y evita el estado muerto de
+                antes, donde el botón se quedaba gris e inútil todo el turno. */}
+            {busy ? (
+              <button
+                type="button"
+                className="lab-send lab-send--stop"
+                onClick={handleStop}
+                disabled={stopping || !turnIdRef.current}
+                aria-label="Detener generación"
+                title="Detener"
               >
-                <path d="M12 19V5" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+                {/* Cuadrado de "stop" de toda la vida: relleno, esquinas
+                    apenas redondeadas, del mismo tamaño óptico que la flecha. */}
+                <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                className="lab-send"
+                disabled={!canSend}
+                aria-label="Enviar"
+                title="Enviar"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden="true"
+                >
+                  <path d="M12 19V5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
           </div>
         </form>
         {/* Fallo del dictado (permiso denegado, sin transcriptor…). Antes se
@@ -638,7 +1019,7 @@ export default function Laboratorio() {
         {/* Pie: consumo · modelo en curso · reloj de reinicio. Vive DENTRO de
             la barra (no del form) para que comparta su ancho máximo y se
             mueva con ella cuando el teclado la empuja. */}
-        <LabStatusBar model={model} />
+        <LabStatusBar model={model} refreshKey={usageKey} />
       </div>
     </main>
   );
