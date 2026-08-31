@@ -1647,6 +1647,17 @@ html.lab-route.lab-kb .lab-inputbar {
   .chat-textarea {
     font-size: 16px;
   }
+  /* Subir la fuente a 16px sin tocar el line-height rompe la cuenta de arriba:
+     16 × 1.4 = 22.4px de línea dentro de una caja de contenido de 21px (los
+     28px de `height` menos los 7 de padding). La línea no cabe por 1.4px, el
+     textarea nace scrollable —scrollHeight 29 contra height 28— y resizeInput
+     lo corrige a 29px sólo DESPUÉS de hidratar: la barra da un salto de 1px
+     que en el primer pintado se lee como aire de más alrededor del
+     placeholder. 16 × 1.3125 = 21px exactos: la línea vuelve a caber, el alto
+     total sigue siendo 28px (el mismo que los círculos de mic/enviar) y SSR e
+     hidratación coinciden. Medido en repro aislado: desborde 0.00px,
+     desalineación texto↔círculo 0.00px. */
+  .lab-textarea { line-height: 1.3125; }
 }
 /* El textarea del chat principal desbordaba con palabras/URLs largas sin
    espacios (el break-words de Tailwind ya corta eso), pero en iOS el
