@@ -25,13 +25,30 @@ import type { ChatToolStep } from "@hermes/shared";
 import { glyphOf, shortTarget, verbOf } from "@/lib/tool-labels";
 import { OrbeIA } from "@/components/orbe/OrbeIA";
 
-function StepRow({ step, live }: { step: ChatToolStep; live: boolean }) {
+function StepRow({
+  step,
+  live,
+  orbe,
+}: {
+  step: ChatToolStep;
+  live: boolean;
+  /** Sustituye el glifo de herramienta por el orbe en miniatura: solo la
+   *  línea viva del encabezado lo usa (ver más abajo), nunca la lista
+   *  desplegada ni el resumen plegado. */
+  orbe?: boolean;
+}) {
   const target = shortTarget(step.target ?? "");
   return (
     <>
-      <span className="lab-step-glyph" aria-hidden>
-        {glyphOf(step.name)}
-      </span>
+      {orbe ? (
+        <span className="lab-step-glyph lab-step-glyph--orbe" aria-hidden>
+          <OrbeIA tam="14px" ojos ariaLabel="" />
+        </span>
+      ) : (
+        <span className="lab-step-glyph" aria-hidden>
+          {glyphOf(step.name)}
+        </span>
+      )}
       <span className="lab-step-verb">{verbOf(step.name, live)}</span>
       {target && <span className="lab-step-target">{target}</span>}
     </>
@@ -72,29 +89,22 @@ export function LabSteps({ steps, live }: { steps: ChatToolStep[]; live: boolean
           // La `key` es el contador de pasos: al llegar uno nuevo React
           // desmonta la línea anterior y monta esta, que es lo que dispara la
           // animación de entrada. Sin key el texto cambiaría de golpe y
-          // parecería un glitch en vez de un relevo.
+          // parecería un glitch en vez de un relevo. Mientras el paso está EN
+          // EJECUCIÓN el glifo de herramienta se reemplaza por el orbe en
+          // miniatura (con ojos, aunque sea chiquito) — es la única señal de
+          // "esto lo está haciendo Hermes ahora mismo". En cuanto se pliega
+          // (deja de estar live) vuelve el glifo normal: ver la rama de abajo.
           <span key={steps.length} className="lab-step lab-step--current">
-            <StepRow step={current} live />
+            <StepRow step={current} live orbe />
           </span>
         ) : (
           // Plegado/resumen: en vez del caret gris va el glifo de la última
           // acción del bloque — el mismo vocabulario visual de las filas, así
-          // el ojo ya sabe de qué trata el bloque sin abrirlo. Excepción: si
-          // el bloque es UN solo paso, el glifo de herramienta se reemplaza
-          // por el orbe (mini, del tamaño de un emoji — nada que ver con los
-          // 56px de "pensando") para que se lea como "esto lo hizo Hermes",
-          // no como metadato de la tool. Con varios pasos el glifo se queda:
-          // ahí sí importa distinguir cuál fue la última acción.
+          // el ojo ya sabe de qué trata el bloque sin abrirlo.
           <span className="lab-step lab-steps-summary">
-            {steps.length === 1 ? (
-              <span className="lab-step-glyph lab-step-glyph--orbe" aria-hidden>
-                <OrbeIA tam="14px" ojos={false} ariaLabel="" />
-              </span>
-            ) : (
-              <span className="lab-step-glyph" aria-hidden>
-                {glyphOf(current.name)}
-              </span>
-            )}
+            <span className="lab-step-glyph" aria-hidden>
+              {glyphOf(current.name)}
+            </span>
             <span className="lab-steps-count">{label}</span>
           </span>
         )}
