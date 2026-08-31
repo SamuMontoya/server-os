@@ -1139,6 +1139,174 @@ html.lab-route body::after {
   background: #f1f1ef;
 }
 
+/* ── Pantalla de chats (LabChatsScreen) ──────────────────────────────────
+   Se monta ENCIMA del papel (el mismo blanco, mismo z-index-space que
+   .lab-topbar) cuando se abre el menú hamburguesa. Fixed+inset:0 igual que
+   .lab-paper para cubrir el viewport visible completo desde el primer
+   frame, sin depender de que .lab-paper mida algo todavía. */
+.lab-chats-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  padding: max(16px, calc(env(safe-area-inset-top) + 10px)) 20px
+    max(16px, env(safe-area-inset-bottom)) 20px;
+  overflow-y: auto;
+}
+.lab-chats-head {
+  display: flex;
+  justify-content: flex-end;
+}
+.lab-chats-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: #787774;
+  cursor: pointer;
+}
+.lab-chats-close:hover {
+  color: #37352f;
+  background: #f1f1ef;
+}
+.lab-chats-orbe {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 12px;
+}
+.lab-chats-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 18px;
+  border-radius: 8px;
+  border: 1px solid #e7e6e2;
+  background: #fff;
+  color: #37352f;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.lab-chats-new:hover {
+  background: #f7f6f3;
+  border-color: #d3d1cb;
+}
+.lab-chats-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+.lab-chats-empty {
+  color: #9b9a97;
+  font-size: 13px;
+  padding: 8px 2px;
+}
+
+/* Cada card es un asa arrastrable (SwipeableCard) sobre dos fondos de acción
+   que SIEMPRE están en el DOM (izquierda = eliminar, derecha = archivar) —
+   el arrastre solo cambia su opacidad, nunca los monta/desmonta, así no hay
+   parpadeo ni salto de layout durante el gesto. */
+.lab-chatcard-wrap {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.lab-chatcard-bg {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  padding: 0 16px;
+  pointer-events: none;
+}
+.lab-chatcard-bg--delete {
+  background: #e35b4a;
+  justify-content: flex-end;
+}
+.lab-chatcard-bg--archive {
+  background: #9b9a97;
+  justify-content: flex-start;
+}
+.lab-chatcard {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #efeeea;
+  background: #fff;
+  cursor: pointer;
+  user-select: none;
+  touch-action: pan-y;
+  /* Solo transición cuando NO se está arrastrando (el drag mueve `transform`
+     a mano en cada frame; transicionarlo de más lo dejaría a destiempo del
+     dedo). El "snap back" al soltar sí queda suave porque React vuelve a
+     renderizar con dragX:0 UN frame después de terminar el gesto. */
+  transition: transform 0.18s ease-out;
+}
+.lab-chatcard--active {
+  border-color: #37352f;
+  background: #faf9f7;
+}
+.lab-chatcard-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.lab-chatcard-title {
+  font-size: 14px;
+  color: #37352f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lab-chatcard-when {
+  font-size: 11.5px;
+  color: #9b9a97;
+}
+.lab-chatcard-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2f9e6e;
+}
+.lab-chats-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 2px;
+  border: none;
+  background: none;
+  color: #9b9a97;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+.lab-chats-archived-toggle svg {
+  transition: transform 0.15s;
+}
+
 /* Barra de input al pie del Laboratorio. Ya NO es `fixed` con un `bottom`
    calculado a mano: es el último hijo del papel con `margin-top: auto`, así
    que se pega al borde inferior de lo que el papel mida en cada momento.
