@@ -10,7 +10,9 @@ options:
   bundleIdPrefix: com.samumontoya
   deploymentTarget:
     iOS: "16.0"
-    watchOS: "9.0"
+    # 10.0 y no 9.0: `onChange(of:initial:_:)` y las APIs de estado que usa
+    # ContentView llegaron en watchOS 10.
+    watchOS: "10.0"
   createIntermediateGroups: true
 
 settings:
