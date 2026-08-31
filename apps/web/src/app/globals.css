@@ -1579,7 +1579,10 @@ html.lab-route.lab-kb .lab-inputbar {
   /* El rojo del código inline de Notion (.md-code, arriba): la acción es de
      la misma familia visual que un fragmento de código, no un link. */
   color: #eb5757;
-  font-size: 11px;
+  /* Un poco más grande que el texto de la fila (12.5px) para que el glifo
+     no se pierda, pero sin acercarse al tamaño del texto del chat (15px):
+     sigue siendo metadato de la acción, no protagonismo. */
+  font-size: 13.5px;
 }
 .lab-step-verb {
   flex-shrink: 0;

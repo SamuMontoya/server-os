@@ -343,8 +343,19 @@ export default function Laboratorio() {
   // respuesta los ocupa. Su altura se escribe directo en el DOM (no en
   // estado) para no re-renderizar la lista en cada token del stream.
 
-  /** Hueco que queda sobre el mensaje anclado cuando está pegado arriba. */
-  const TOP_GAP = 12;
+  /**
+   * Hueco que queda sobre el mensaje anclado. Antes era un TOP_GAP fijo (12px,
+   * pegado al borde) — dejaba la mitad de abajo de la pantalla en blanco
+   * cuando la respuesta era corta, y a Samu le resultaba "pantalla muerta".
+   * Ahora el ancla se posa a la MITAD del alto visible, no arriba del todo:
+   * mismo espíritu (la vista no persigue el stream), pero con contenido
+   * arriba Y abajo del punto de lectura.
+   */
+  const anchorGap = () => {
+    const list = listRef.current;
+    if (!list) return 12;
+    return Math.round(list.clientHeight / 2);
+  };
 
   /** El nodo anclado ahora mismo (mensaje del usuario o bloque de la IA). */
   const anchorEl = () => {
@@ -378,17 +389,17 @@ export default function Laboratorio() {
     if (!list || !sp || top === null) return;
     // Alto del contenido REAL (sin contar el colchón actual).
     const content = list.scrollHeight - sp.offsetHeight;
-    const need = Math.max(0, list.clientHeight - TOP_GAP - (content - top));
+    const need = Math.max(0, list.clientHeight - anchorGap() - (content - top));
     if (opts?.shrinkOnly && need > sp.offsetHeight) return;
     sp.style.height = `${need}px`;
   };
 
-  /** Sube el último mensaje del usuario al borde superior de la lista. */
+  /** Sube el último mensaje del usuario (o bloque de la IA) a la mitad de la lista. */
   const scrollAnchorToTop = () => {
     const list = listRef.current;
     const top = anchorOffset();
     if (!list || top === null) return;
-    list.scrollTo({ top: Math.max(0, top - TOP_GAP), behavior: "smooth" });
+    list.scrollTo({ top: Math.max(0, top - anchorGap()), behavior: "smooth" });
   };
 
   /**
