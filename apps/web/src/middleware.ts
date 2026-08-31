@@ -112,7 +112,14 @@ export const config = {
     /**
      * Todo menos estáticos e imágenes. Las rutas de `/api` SÍ entran: son las
      * que leen los límites del plan y hablan con el agente.
+     *
+     * `assets/` va aparte, y no por extensión: ahí vive el material del orbe,
+     * que son DOS archivos que se acompañan —el atlas (.webp, ya excluido) y
+     * movimiento.json—. Sin esto el .json caía en la puerta de auth y volvía
+     * como un 307 al login, así que el orbe cargaba la textura pero nunca el
+     * movimiento y se quedaba clavado sin animar. Son datos de una animación:
+     * no hay nada que proteger en ellos.
      */
-    "/((?!_next/static|_next/image|favicon.ico|mediapipe|.*\\.(?:svg|png|jpg|jpeg|gif|webp|woff2?)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|mediapipe|assets/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|woff2?)$).*)",
   ],
 };
