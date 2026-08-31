@@ -129,8 +129,19 @@ if [[ "$PULL" == "1" ]]; then
     say "  o para saltarte el pull:  ./scripts/deploy-linux.sh --no-pull"
     die "deploy abortado antes de tocar nada"
   fi
-  say "git pull…"
-  git -C "$ROOT" pull --ff-only
+  # `git pull` a secas exige upstream, y el servidor puede estar en una rama de
+  # trabajo que no lo tiene: el error de git ahí no dice nada útil. Se resuelve
+  # el remoto explícitamente y, si la rama es local-only, se avisa y se sigue
+  # SIN pull en vez de abortar el deploy (el build sigue siendo válido).
+  BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)"
+  if UPSTREAM="$(git -C "$ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+    say "git pull ($UPSTREAM → $BRANCH)…"
+    git -C "$ROOT" pull --ff-only
+  else
+    err "la rama '$BRANCH' no sigue a ninguna remota: no hay de dónde traer"
+    say "  para traer main sin dejar esta rama:  git merge origin/main"
+    say "  se compila lo que hay en el disco"
+  fi
 fi
 say "instalando dependencias…"
 (cd "$ROOT" && "$PNPM_BIN" install --frozen-lockfile)
