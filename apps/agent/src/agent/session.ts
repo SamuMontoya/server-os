@@ -21,10 +21,12 @@ import {
   nextTier,
   routeTurn,
   routerEnabled,
+  IMAGE_FLOOR_TIER,
   type Tier,
 } from "./router.js";
 import { currentProfile } from "./budget.js";
 import { subagentsEnabled } from "./models.js";
+import { attachmentPreamble } from "../chat-attachments.js";
 
 /**
  * MCP oficial de Linear (remoto, hosteado por ellos). Auth headless: la misma
@@ -84,6 +86,13 @@ function chromeMcpServer(bin: string) {
  */
 export interface RunTurnOptions {
   prompt: string;
+  /**
+   * Rutas ABSOLUTAS de imágenes adjuntas al mensaje (ya validadas y existentes
+   * en disco: las resuelve chat-attachments.ts). No viajan en base64 — al
+   * modelo se le nombra la ruta y las abre con `Read`, que devuelve la imagen
+   * como contenido visual. Ver el comentario largo en chat-attachments.ts.
+   */
+  attachments?: string[];
   resumeSessionId?: string;
   /** Interno: marca el reintento del escalado para no reintentar en bucle. */
   _escalated?: boolean;
@@ -155,8 +164,18 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // Enrutamiento del turno. La clasificación es local (cero tokens) y el nivel
   // queda FIJO por sesión: el caché de prompt es por modelo, así que cambiarlo
   // a mitad de un hilo tiraría el prefijo cacheado.
+  //
+  // Con imágenes adjuntas se le pone un PISO al nivel (ver IMAGE_FLOOR_TIER):
+  // la señal no está en el texto, así que classify() no la puede ver — "mira
+  // esto" clasifica como charla y caería en haiku, que en detalle visual fino
+  // no da. El techo del perfil se sigue aplicando después.
+  const attachments = opts.attachments ?? [];
   const route = routerEnabled()
-    ? routeTurn(opts.prompt, opts.resumeSessionId)
+    ? routeTurn(
+        opts.prompt,
+        opts.resumeSessionId,
+        attachments.length > 0 ? IMAGE_FLOOR_TIER : undefined,
+      )
     : { tier: "deep" as Tier, reason: "router desactivado", pinned: false };
 
   // Modo de consumo: al pasar el umbral de la ventana de 5 h (o de noche) el
@@ -188,9 +207,17 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
 
   setPresence("working", opts.prompt.slice(0, 120));
 
+  // El preámbulo de adjuntos va SOLO al SDK. El `opts.prompt` pelado es el que
+  // alimenta buildSystemPrompt (retrieval) y el que se persiste en el
+  // historial: las rutas del .data no son contexto útil para la búsqueda
+  // semántica ni para releer la conversación dentro de un mes.
+  const sdkPrompt = attachments.length
+    ? `${attachmentPreamble(attachments)}\n\n${opts.prompt}`
+    : opts.prompt;
+
   try {
     const q = query({
-      prompt: opts.prompt,
+      prompt: sdkPrompt,
       options: {
         cwd: opts.cwd || env.VAULT_PATH || process.cwd(),
         systemPrompt,

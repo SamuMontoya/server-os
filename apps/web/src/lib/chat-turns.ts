@@ -50,6 +50,13 @@ export async function startTurn(input: {
   /** El foco de proyecto llega como `string | null` desde el workspace. */
   project?: string | null;
   resume?: string | null;
+  /**
+   * Ids de imágenes ya subidas con `uploadChatImage`. Van como ids y no como
+   * base64 a propósito: el turno se manda igual de rápido con 4 capturas que
+   * sin ninguna, y el servidor le pasa al modelo la RUTA en disco (que abre
+   * con Read) en vez de inflar el JSON del turno. Ver lib/chat-attachments.ts.
+   */
+  attachments?: string[];
 }): Promise<string> {
   const res = await hermesFetch("/chat/turns", {
     method: "POST",
@@ -59,6 +66,7 @@ export async function startTurn(input: {
       session_key: input.sessionKey,
       project: input.project ?? undefined,
       resume: input.resume ?? undefined,
+      attachments: input.attachments?.length ? input.attachments : undefined,
     }),
   });
   if (!res.ok) {

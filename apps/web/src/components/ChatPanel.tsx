@@ -17,7 +17,7 @@ import {
   type ChatTab,
   type TabsState,
 } from "@/lib/chat-persist";
-import { useSpeechDictation } from "@/hooks/useSpeechDictation";
+import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { beginSpeechTurn, feedSpeech } from "@/hooks/useSpeech";
 import { SpeechHighlight } from "./SpeechHighlight";
 import { useVoiceConnect } from "@/hooks/useVoiceConnect";
@@ -285,14 +285,25 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.draft]);
 
-  const { supported: micSupported, listening, error: micError, start: micStart, stop: micStop } =
-    useSpeechDictation({
-      onTranscript: (text) => {
-        const base = dictationBaseRef.current;
-        const sep = base && !base.endsWith(" ") ? " " : "";
-        updateTab(dictationTabRef.current, (t) => ({ ...t, draft: base + sep + text }));
-      },
-    });
+  // Dictado en dos capas (ver useVoiceDictation): vista previa del navegador
+  // mientras hablas, y al soltar el botón la reemplaza el texto re-transcrito
+  // en el servidor, ya con puntuación. Se escribe siempre sobre el MISMO tab
+  // en el que se arrancó el micrófono (`dictationTabRef`), aunque el usuario
+  // cambie de tab a mitad del dictado.
+  const {
+    supported: micSupported,
+    listening,
+    transcribing,
+    error: micError,
+    start: micStart,
+    stop: micStop,
+  } = useVoiceDictation({
+    onTranscript: (text) => {
+      const base = dictationBaseRef.current;
+      const sep = base && !base.endsWith(" ") ? " " : "";
+      updateTab(dictationTabRef.current, (t) => ({ ...t, draft: base + sep + text }));
+    },
+  });
 
   const toggleMic = () => {
     if (listening) {
@@ -301,7 +312,7 @@ export function ChatPanel({
     }
     dictationBaseRef.current = active.draft.trimEnd();
     dictationTabRef.current = active.key;
-    micStart();
+    void micStart();
     inputRef.current?.focus();
   };
 
@@ -997,16 +1008,31 @@ export function ChatPanel({
             title={
               micError
                 ? `Dictado: ${micError}`
+                : transcribing
+                  ? "Puntuando el dictado…"
+                  : listening
+                    ? "Detener dictado"
+                    : "Dictar por voz"
+            }
+            aria-label={
+              transcribing
+                ? "Transcribiendo dictado"
                 : listening
                   ? "Detener dictado"
                   : "Dictar por voz"
             }
-            aria-label={listening ? "Detener dictado" : "Dictar por voz"}
             aria-pressed={listening}
+            aria-busy={transcribing}
             onClick={toggleMic}
-            disabled={active.busy}
+            // Bloqueado mientras el servidor puntúa: rearrancar aquí haría que
+            // el texto en camino pisara el dictado nuevo.
+            disabled={active.busy || transcribing}
             className={`relative grid h-6 w-6 shrink-0 place-items-center rounded-full transition-colors disabled:opacity-40 ${
-              listening ? "bg-red/10 text-red" : "bg-transparent text-text-dim"
+              listening
+                ? "bg-red/10 text-red"
+                : transcribing
+                  ? "animate-pulse bg-transparent text-text-dim"
+                  : "bg-transparent text-text-dim"
             }`}
           >
             {listening && (

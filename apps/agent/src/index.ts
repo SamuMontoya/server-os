@@ -55,6 +55,12 @@ import {
 import { listChatSessions, readChatSession, resolveChatCwd } from "./agent/chat-history.js";
 import { chatTurns, type TurnEvent } from "./agent/chat-turns.js";
 import {
+  chatAttachmentPath,
+  resolveChatAttachments,
+  saveChatAttachment,
+  MAX_ATTACHMENT_BYTES,
+} from "./chat-attachments.js";
+import {
   listMeetings,
   getMeeting,
   searchMeetings,
@@ -67,6 +73,8 @@ import {
   listFailedTranscripts,
   retryFailedTranscript,
 } from "./meetings/ingest.js";
+// El dictado del composer reusa el mismo STT que las juntas (Scribe → Whisper).
+import { transcribe } from "./meetings/stt.js";
 import {
   startLiveMeeting,
   stopLiveMeeting,
@@ -475,18 +483,75 @@ async function pipeTurn(
 // dispositivo, la pantalla desbloqueada— pide el snapshot o se re-engancha al
 // stream desde su cursor. Nada de esto depende de que la pestaña siga viva.
 
+/**
+ * Sube UNA imagen y devuelve su id. Se sube antes de enviar el mensaje (al
+ * pegar en el input), no junto con él: así el chip aparece al instante en el
+ * composer y el envío del turno sigue siendo un JSON pequeño con ids.
+ */
+app.post(
+  "/chat/attachments",
+  bodyLimit({ maxSize: MAX_ATTACHMENT_BYTES + 1024 * 1024 }),
+  async (c) => {
+    const body = await c.req.parseBody().catch(() => null);
+    const file = body?.["image"];
+    if (!(file instanceof File)) return c.json({ error: "campo 'image' requerido" }, 400);
+    const { attachment, error } = await saveChatAttachment({
+      bytes: new Uint8Array(await file.arrayBuffer()),
+      mime: file.type,
+      name: file.name,
+    });
+    if (error || !attachment) return c.json({ error: error ?? "no se pudo guardar" }, 400);
+    // La ruta en disco NO sale al cliente: el navegador no la necesita (pide el
+    // binario por id) y publicarla es regalar el layout del servidor.
+    const { path: _path, ...safe } = attachment;
+    return c.json(safe);
+  },
+);
+
+/**
+ * Devuelve el binario para la miniatura del chat. Mismo patrón que el media de
+ * Estudio: stream desde disco, Bearer por el middleware global. El id se
+ * valida como UUID dentro de chatAttachmentPath — de ahí que no haya que
+ * sanear nada aquí.
+ */
+app.get("/chat/attachments/:id", async (c) => {
+  const found = chatAttachmentPath(c.req.param("id"));
+  if (!found) return c.json({ error: "adjunto no encontrado" }, 404);
+  const { size } = await stat(found.path);
+  return new Response(Readable.toWeb(createReadStream(found.path)) as ReadableStream, {
+    headers: {
+      "Content-Type": found.mime,
+      "Content-Length": String(size),
+      // Inmutable de verdad: el id es un uuid y el archivo nunca se reescribe.
+      "Cache-Control": "private, max-age=86400, immutable",
+    },
+  });
+});
+
 app.post("/chat/turns", async (c) => {
   const b = await c.req
-    .json<{ message?: string; session_key?: string; project?: string; resume?: string }>()
-    .catch(() => ({}) as Record<string, string>);
+    .json<{
+      message?: string;
+      session_key?: string;
+      project?: string;
+      resume?: string;
+      attachments?: string[];
+    }>()
+    .catch(() => ({}) as Record<string, never>);
   const message = b.message?.trim();
-  if (!message) return c.json({ error: "message requerido" }, 400);
+  // Ids → rutas absolutas, descartando lo que ya no exista en disco.
+  const attachments = resolveChatAttachments(b.attachments);
+  // Con imagen y sin texto el turno es válido: pegar un pantallazo y darle
+  // enviar es una pregunta completa ("¿qué ves acá?"). El preámbulo de
+  // chat-attachments ya le dice al modelo qué hacer con ella.
+  if (!message && attachments.length === 0) return c.json({ error: "message requerido" }, 400);
   const sessionKey = b.session_key || c.req.header("X-Hermes-Session-Id") || "default";
   const project = b.project || c.req.header("X-Hermes-Project") || undefined;
   const resume =
     b.resume && UUID_RE.test(b.resume) ? b.resume : await getSdkSession(sessionKey);
   const turn = chatTurns.start({
-    prompt: message,
+    prompt: message || "¿Qué ves en esta imagen?",
+    attachments,
     sessionKey,
     project,
     cwd: await resolveChatCwd(project),
@@ -616,6 +681,42 @@ app.get("/tasks/:id", (c) => {
   if (!task) return c.json({ error: "task no encontrada" }, 404);
   return c.json(task);
 });
+
+// ── Dictado del composer (voz → texto con puntuación) ──────────────────
+// El micrófono de los inputs (Laboratorio, consola) usa la Web Speech API del
+// navegador para el texto EN VIVO, pero ese motor casi no puntúa en español.
+// Al soltar el botón, el clip grabado se manda aquí y se re-transcribe con el
+// mismo Scribe/Whisper que las juntas, que SÍ devuelve comas y puntos.
+//
+// Es un clip corto (una frase o un párrafo dictado), no una junta: no hay job
+// async ni persistencia — se transcribe y se devuelve el texto en la misma
+// respuesta, porque el composer lo necesita para pintarlo en el input.
+app.post(
+  "/dictado/transcribir",
+  bodyLimit({ maxSize: 25 * 1024 * 1024 }), // 25 MB ≈ 30 min en opus; también es el techo de Whisper
+  async (c) => {
+    const body = await c.req.parseBody();
+    const audio = body.audio;
+    if (!audio || typeof audio === "string") return c.json({ error: "falta `audio`" }, 400);
+    // Un clip de menos de ~1 KB es silencio o un toque accidental del botón:
+    // no vale gastar una llamada de STT en él.
+    if (audio.size < 1024) return c.json({ text: "", provider: null, empty: true });
+    try {
+      const result = await transcribe(audio);
+      return c.json({
+        text: result.text.trim(),
+        provider: result.provider,
+        language: result.language ?? null,
+      });
+    } catch (err) {
+      // El consumidor se queda con el texto de la Web Speech API como
+      // respaldo, así que esto degrada la puntuación pero nunca pierde el
+      // dictado. Por eso es 502 con detalle y no un error opaco.
+      console.error("[dictado] transcripción falló:", err);
+      return c.json({ error: String(err).slice(0, 300) }, 502);
+    }
+  },
+);
 
 // ── Reuniones/Juntas por proyecto ──────────────────────────────────────
 // Subir audio (o pegar transcripción) → transcribir → resumen + 2 accionables.

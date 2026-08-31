@@ -417,6 +417,32 @@ function blobExt(blob: Blob): string {
   return "webm";
 }
 
+// ── Dictado del composer: clip grabado → texto CON puntuación ──────────
+
+/**
+ * Re-transcribe en el servidor el clip que se grabó mientras el usuario
+ * dictaba. La Web Speech API del navegador da el texto en vivo pero apenas
+ * puntúa en español; Scribe/Whisper sí, y no tienen el corte por tiempo de
+ * Chrome. Devuelve `null` cuando el clip venía vacío (toque accidental del
+ * botón), para que el consumidor sepa que no debe borrar lo que ya tenía.
+ */
+export async function transcribeDictation(
+  blob: Blob,
+): Promise<{ text: string; provider: string | null } | null> {
+  const form = new FormData();
+  form.append("audio", blob, `dictado.${blobExt(blob)}`);
+  const res = await hermesFetch("/dictado/transcribir", { method: "POST", body: form });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(
+      (detail as { error?: string } | null)?.error ?? `dictado → ${res.status}`,
+    );
+  }
+  const data = (await res.json()) as { text?: string; provider?: string | null; empty?: boolean };
+  if (data.empty || !data.text?.trim()) return null;
+  return { text: data.text.trim(), provider: data.provider ?? null };
+}
+
 // ── Estudio: voz en off y archivos de la carpeta de la pieza ───────────
 
 /**

@@ -85,17 +85,38 @@ const pinned = new Map<string, Tier>();
 // Cota simple: un dashboard abierto meses acumularía sesiones muertas.
 const MAX_PINNED = 500;
 
-export function routeTurn(prompt: string, sessionId?: string): RouteDecision & { pinned: boolean } {
-  if (sessionId) {
-    const prev = pinned.get(sessionId);
-    if (prev) return { tier: prev, reason: "nivel fijado al abrir la sesión", pinned: true };
+/**
+ * `floor` sube el nivel de ESTE turno si la clasificación (o el pin de la
+ * sesión) se queda por debajo. Existe para las señales que no están en el
+ * texto: hoy, imágenes adjuntas.
+ *
+ * Por qué el piso gana también al pin: el pin protege el caché de prompt, pero
+ * un turno con imagen ya no puede reusar el prefijo cacheado del turno anterior
+ * de todas formas (el contenido cambió), así que no hay caché que proteger. Y
+ * el pin se ACTUALIZA al nivel nuevo en vez de quedarse abajo: si el hilo pasó
+ * a ir sobre una captura, el resto del hilo sigue siendo sobre eso.
+ */
+export function routeTurn(
+  prompt: string,
+  sessionId?: string,
+  floor?: Tier,
+): RouteDecision & { pinned: boolean } {
+  const prev = sessionId ? pinned.get(sessionId) : undefined;
+  if (prev) {
+    const raised = raiseTier(prev, floor);
+    if (raised !== prev && sessionId) pinned.set(sessionId, raised);
+    return raised === prev
+      ? { tier: prev, reason: "nivel fijado al abrir la sesión", pinned: true }
+      : { tier: raised, reason: "imágenes adjuntas: se sube el nivel del hilo", pinned: false };
   }
   const decision = classify(prompt);
+  const tier = raiseTier(decision.tier, floor);
+  const reason = tier === decision.tier ? decision.reason : "imágenes adjuntas";
   if (sessionId) {
     if (pinned.size >= MAX_PINNED) pinned.delete(pinned.keys().next().value as string);
-    pinned.set(sessionId, decision.tier);
+    pinned.set(sessionId, tier);
   }
-  return { ...decision, pinned: false };
+  return { tier, reason, pinned: false };
 }
 
 /**
@@ -128,6 +149,34 @@ const ORDER: Tier[] = ["light", "standard", "deep"];
 export function capTier(tier: Tier, max: Tier): Tier {
   return ORDER.indexOf(tier) > ORDER.indexOf(max) ? max : tier;
 }
+
+/**
+ * Sube el nivel al piso dado. Es el espejo de `capTier`: nunca BAJA.
+ *
+ * Ojo al orden en el que se aplican los dos en session.ts: primero el piso
+ * (dentro de routeTurn), después el techo del perfil (capTier). El techo gana
+ * a propósito — en modo bajo consumo una imagen se analiza con haiku, que
+ * también ve imágenes, antes que romper el límite de la ventana de 5 h.
+ */
+export function raiseTier(tier: Tier, floor?: Tier): Tier {
+  if (!floor) return tier;
+  return ORDER.indexOf(tier) < ORDER.indexOf(floor) ? floor : tier;
+}
+
+/**
+ * Nivel mínimo para un turno con imágenes: `standard` → sonnet.
+ *
+ * Por qué no `light` (haiku, que es el más barato de los tres y también ve
+ * imágenes): el caso de uso real es "mira este bug visual" — márgenes de
+ * pocos píxeles, alineaciones, contraste. Ahí haiku-4.5 falla en el detalle
+ * fino y responde de forma genérica, y un análisis visual equivocado sale más
+ * caro que el turno que se ahorró (hay que repetirlo, y encima con la imagen
+ * otra vez). Sonnet es el punto donde la lectura de UI ya es fiable.
+ *
+ * Y no `deep` (opus): si el mensaje ADEMÁS pide trabajo técnico, classify()
+ * ya lo manda a deep por su cuenta. Este piso solo evita el suelo.
+ */
+export const IMAGE_FLOOR_TIER: Tier = "standard";
 
 const EFFORT_ORDER: Effort[] = ["low", "medium", "high", "xhigh", "max"];
 

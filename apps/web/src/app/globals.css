@@ -1162,7 +1162,7 @@ html.lab-route body::after {
   --lab-status-block: 21px;
   padding: var(--lab-bar-top, 14px) var(--lab-bar-x, 20px)
     max(
-      0px,
+      8px,
       calc(
         var(--lab-bar-bottom, 10px) + var(--lab-bar-safe, env(safe-area-inset-bottom)) -
           var(--lab-status-block)
@@ -1195,10 +1195,14 @@ html.lab-route.lab-kb .lab-inputbar {
 /* Composer: misma estructura que el input del chat principal (caja +
    caret + textarea auto-crecible), retonado al blanco/tinta del Laboratorio
    en vez del hud oscuro. */
+/* El composer es una COLUMNA: la fila de miniaturas de las imágenes pegadas
+   va encima de la fila de controles (mic · textarea · enviar). Cuando no hay
+   imágenes solo existe la fila de controles y el `gap` no pinta nada, así que
+   el composer se ve exactamente igual que antes de que esto existiera. */
 .lab-composer {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   width: 100%;
   max-width: 720px;
   padding: 12px 14px;
@@ -1207,6 +1211,90 @@ html.lab-route.lab-kb .lab-inputbar {
   background: #fff;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
+/* La fila de controles: es la que tenía las propiedades flex del composer.
+   `align-items: flex-end` es lo que alinea el textarea con los círculos de
+   28px cuando crece a varias líneas. */
+.lab-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  width: 100%;
+}
+/* Se marca al arrastrar un archivo encima: mismo lenguaje visual que el
+   focus-within, para que se lea como "aquí lo puedes soltar". */
+.lab-composer--drop {
+  border-color: #37352f;
+  box-shadow: 0 0 0 3px rgba(55, 53, 47, 0.08);
+}
+
+/* ── Miniaturas de las imágenes pegadas ──────────────────────────────── */
+.lab-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lab-chip {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  border: 1px solid #e9e9e7;
+  border-radius: 6px;
+  background: #f7f7f5;
+  overflow: hidden;
+}
+.lab-chip img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* `cover` y no `contain`: en una caja de 46px lo que importa es reconocer
+     la captura de un vistazo, no ver su encuadre exacto. */
+  object-fit: cover;
+}
+/* Mientras sube, la miniatura se atenúa y el spinner va encima: el chip ya
+   está ahí (feedback inmediato) pero se lee que todavía no está listo. */
+.lab-chip--uploading img { opacity: 0.4; }
+.lab-chip--error {
+  border-color: #e03e3e;
+  box-shadow: inset 0 0 0 1px #e03e3e;
+}
+.lab-chip--error img { opacity: 0.35; }
+.lab-chip-spin {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(55, 53, 47, 0.2);
+  border-top-color: #37352f;
+  border-radius: 50%;
+  animation: lab-chip-spin 0.7s linear infinite;
+}
+@keyframes lab-chip-spin {
+  to { transform: rotate(360deg); }
+}
+/* La × vive en la esquina, sobre la imagen. Fondo oscuro sólido porque debajo
+   puede haber un pantallazo de cualquier color: sin él no se vería. */
+.lab-chip-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(24, 23, 21, 0.82);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.lab-chip-x:hover { background: #181715; }
 .lab-composer:focus-within {
   border-color: #d3d1cb;
   box-shadow: 0 0 0 3px rgba(55, 53, 47, 0.06);
@@ -1324,6 +1412,31 @@ html.lab-route.lab-kb .lab-inputbar {
   line-height: 1.4;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+/* Imágenes DENTRO de la burbuja del usuario: quedan con el mensaje, arriba del
+   texto, como el adjunto que fueron. Tope de 200px para que un pantallazo de
+   pantalla completa no empuje la conversación entera hacia abajo. */
+.lab-bubble-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  /* Solo separa del texto si hay texto: con la imagen sola no deja hueco
+     muerto abajo (`:not(:only-child)`). */
+  margin-bottom: 0;
+}
+/* 4px pedidos por Samu (2026-08-31). Antes decía 16px pero NUNCA se aplicaba:
+   el texto se renderizaba como nodo de texto suelto y `:only-child` solo mira
+   elementos, así que las imágenes SÍ eran only-child → 0px. Ver lab-bubble-text. */
+.lab-bubble-images:not(:only-child) { margin-bottom: 4px; }
+.lab-bubble-images img {
+  display: block;
+  max-width: 200px;
+  max-height: 200px;
+  width: auto;
+  height: auto;
+  border-radius: 6px;
+  /* La burbuja es gris; un PNG con transparencia se vería sucio sin esto. */
+  background: #fff;
 }
 /* La colita: un triángulo recortado con clip-path, del mismo gris que la
    burbuja. `right: -1px` la solapa un pelo con el borde de la burbuja (en vez
@@ -1477,6 +1590,30 @@ html.lab-route.lab-kb .lab-inputbar {
 }
 @media (prefers-reduced-motion: reduce) {
   .lab-mic-bars span { animation: none; height: 8px; }
+}
+
+/* Clip subido, esperando el texto puntuado del servidor: el botón late para
+   que el segundo de espera no se lea como "se colgó". */
+.lab-mic--transcribing {
+  background: #000;
+  cursor: default;
+  animation: lab-mic-pulse 1.1s ease-in-out infinite;
+}
+@keyframes lab-mic-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lab-mic--transcribing { animation: none; opacity: 0.7; }
+}
+
+/* Aviso de fallo del dictado, bajo el composer. Discreto: es informativo, no
+   un error que bloquee escribir a mano. */
+.lab-mic-error {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #b3261e;
 }
 
 /* Botón enviar: círculo oscuro a la derecha del composer, mismo patrón del

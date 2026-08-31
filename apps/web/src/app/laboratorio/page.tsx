@@ -10,13 +10,14 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { ChatToolStep } from "@hermes/shared";
-import { useSpeechDictation } from "@/hooks/useSpeechDictation";
+import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { useWorkspace } from "@/state/WorkspaceContext";
 import { startTurn, attachTurn, fetchTurn } from "@/lib/chat-turns";
 import { Markdown } from "@/components/Markdown";
 import { AgentSteps } from "@/components/AgentSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
 import { uuid } from "@/lib/uuid";
+import { isSupportedImage, uploadChatImage } from "@/lib/chat-attachments";
 
 type LabMessage = {
   id: number;
@@ -26,6 +27,27 @@ type LabMessage = {
    *  los tool_use REALES que el SDK reportó mientras generaba esta
    *  respuesta — leer archivos, correr comandos, buscar en la memoria, etc. */
   steps?: ChatToolStep[];
+  /** Imágenes que iban con el mensaje (solo en mensajes del usuario): quedan
+   *  visibles en la burbuja, como el adjunto que fueron. */
+  images?: { url: string; name: string }[];
+};
+
+/**
+ * Imagen pegada en el composer, mientras vive ahí.
+ *
+ * `url` es un object URL LOCAL del archivo que soltó el navegador: la
+ * miniatura aparece en el mismo frame del pegado, sin esperar al servidor.
+ * `id` llega después, cuando termina la subida — hasta entonces el chip se
+ * pinta atenuado con spinner y el botón de enviar está bloqueado (mandar el
+ * turno sin el id equivaldría a mandar el mensaje sin la imagen).
+ */
+type LabAttachment = {
+  /** Key local estable para React: el id del servidor todavía no existe. */
+  key: string;
+  id?: string;
+  name: string;
+  url: string;
+  error?: string;
 };
 
 export default function Laboratorio() {
@@ -38,8 +60,18 @@ export default function Laboratorio() {
   // terminar: entre mensajes sigue mostrando con qué se respondió el último,
   // que es más informativo que volver a un guion.
   const [model, setModel] = useState<string | null>(null);
+  // Imágenes pegadas que todavía no se han enviado.
+  const [attachments, setAttachments] = useState<LabAttachment[]>([]);
+  const [dropping, setDropping] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  /**
+   * TODOS los object URLs creados en esta visita. Un object URL mantiene el
+   * blob vivo hasta que se revoca explícitamente, y las imágenes ya enviadas
+   * siguen pintándose en su burbuja — así que no se pueden revocar al enviar.
+   * Se sueltan todas juntas al desmontar la página.
+   */
+  const objectUrlsRef = useRef<string[]>([]);
   // Texto que ya había en el input al arrancar el mic: el dictado se pega
   // detrás, no lo reemplaza (igual que en ChatPanel).
   const dictationBaseRef = useRef("");
@@ -151,15 +183,81 @@ export default function Laboratorio() {
     requestAnimationFrame(() => messagesEndRef.current?.scrollIntoView({ block: "end" }));
   };
 
+  // ── Imágenes pegadas ─────────────────────────────────────────────────
+
+  /**
+   * Mete los archivos en el composer y los sube en paralelo. El chip se pinta
+   * ANTES de que arranque la subida (con el object URL local) porque pegar una
+   * captura tiene que sentirse instantáneo; el id se rellena cuando llega.
+   */
+  const addImages = (files: File[]) => {
+    const images = files.filter((f) => isSupportedImage(f.type));
+    if (images.length === 0) return;
+    // Tope alineado con MAX_ATTACHMENTS_PER_TURN del servidor: recortar aquí
+    // evita subir archivos que el turno iba a descartar de todas formas.
+    const room = Math.max(0, 4 - attachments.length);
+    for (const file of images.slice(0, room)) {
+      const key = uuid();
+      const url = URL.createObjectURL(file);
+      objectUrlsRef.current.push(url);
+      setAttachments((prev) => [...prev, { key, name: file.name || "captura", url }]);
+      void uploadChatImage(file)
+        .then((meta) =>
+          setAttachments((prev) =>
+            prev.map((a) => (a.key === key ? { ...a, id: meta.id, name: meta.name } : a)),
+          ),
+        )
+        .catch((err: unknown) =>
+          setAttachments((prev) =>
+            prev.map((a) =>
+              a.key === key
+                ? { ...a, error: err instanceof Error ? err.message : "no se pudo subir" }
+                : a,
+            ),
+          ),
+        );
+    }
+  };
+
+  const removeAttachment = (key: string) => {
+    setAttachments((prev) => {
+      const gone = prev.find((a) => a.key === key);
+      if (gone) {
+        // Esta sí se revoca ya: se descartó sin llegar a ningún mensaje, así
+        // que nadie más va a pintar ese blob.
+        URL.revokeObjectURL(gone.url);
+        objectUrlsRef.current = objectUrlsRef.current.filter((u) => u !== gone.url);
+      }
+      return prev.filter((a) => a.key !== key);
+    });
+  };
+
+  /** Alguna imagen todavía subiendo: el envío espera (ver `canSend`). */
+  const uploading = attachments.some((a) => !a.id && !a.error);
+  /** Solo las que el servidor ya aceptó pueden viajar en el turno. */
+  const readyIds = attachments.filter((a) => a.id).map((a) => a.id!);
+  const canSend = (draft.trim().length > 0 || readyIds.length > 0) && !busy && !uploading;
+
   const handleSend = async () => {
     const text = draft.trim();
-    if (!text || busy) return;
+    // Con imagen y sin texto se envía igual: pegar un pantallazo y darle enviar
+    // es una pregunta completa (el servidor pone "¿Qué ves en esta imagen?").
+    if (!canSend) return;
     if (listening) micStop();
 
-    const userMsg: LabMessage = { id: Date.now(), role: "user", content: text };
+    const sent = attachments.filter((a) => a.id);
+    const userMsg: LabMessage = {
+      id: Date.now(),
+      role: "user",
+      content: text,
+      ...(sent.length ? { images: sent.map((a) => ({ url: a.url, name: a.name })) } : {}),
+    };
     const replyMsg: LabMessage = { id: Date.now() + 1, role: "assistant", content: "" };
     setMessages((prev) => [...prev, userMsg, replyMsg]);
     setDraft("");
+    // Se vacía el composer SIN revocar los object URLs: los hereda la burbuja,
+    // que los sigue pintando. Se sueltan todos al desmontar la página.
+    setAttachments([]);
     setBusy(true);
     // El textarea no se re-mide solo al vaciar el value por JS (no dispara
     // onChange); lo hacemos a mano en el próximo frame, cuando el DOM ya
@@ -173,6 +271,7 @@ export default function Laboratorio() {
         sessionKey: sessionKeyRef.current!,
         project: selectedProject,
         resume: sdkSessionIdRef.current,
+        attachments: sent.map((a) => a.id!),
       });
       follow(turnId, 0, replyMsg.id);
     } catch (err) {
@@ -186,18 +285,61 @@ export default function Laboratorio() {
   // al desmontar, para no seguir escribiendo en un componente que ya no está.
   useEffect(() => () => unfollowRef.current?.(), []);
 
-  // Dictado por voz → texto, mismo hook que el composer del chat principal.
-  // El transcript se vuelca automáticamente al draft (por eso no hace falta
-  // botón de "aceptar": hablar YA escribe en el input).
-  const { supported: micSupported, listening, start: micStart, stop: micStop } =
-    useSpeechDictation({
-      onTranscript: (text) => {
-        const base = dictationBaseRef.current;
-        const sep = base && !base.endsWith(" ") ? " " : "";
-        setDraft(base + sep + text);
-        resizeInput();
-      },
-    });
+  // Suelta TODOS los object URLs (composer + burbujas ya enviadas) al salir
+  // de la página. Es el único momento seguro: mientras la página vive, una
+  // burbuja vieja puede seguir en pantalla usando su URL.
+  useEffect(() => {
+    return () => {
+      for (const url of objectUrlsRef.current) URL.revokeObjectURL(url);
+    };
+  }, []);
+
+  // Pegar una imagen del portapapeles en cualquier punto del textarea. El
+  // portapapeles puede traer texto Y una imagen a la vez (captura + "mira
+  // esto"): no se hace preventDefault salvo que haya imagen, para no comerse
+  // el pegado de texto normal.
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData?.items ?? [])
+      .filter((it) => it.kind === "file")
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (files.length === 0) return;
+    e.preventDefault();
+    addImages(files);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setDropping(false);
+    addImages(Array.from(e.dataTransfer?.files ?? []));
+  };
+
+  // Dictado por voz → texto. El transcript se vuelca automáticamente al draft
+  // (por eso no hace falta botón de "aceptar": hablar YA escribe en el input).
+  //
+  // Dos capas (ver useVoiceDictation): mientras hablas se pinta la vista
+  // previa del navegador, y al soltar el botón la reemplaza el texto
+  // re-transcrito en el servidor, ya CON puntuación. Como ambas llegan por el
+  // mismo callback y siempre parten de `dictationBaseRef`, el reemplazo es
+  // simplemente el último `setDraft` que gana.
+  const {
+    supported: micSupported,
+    listening,
+    transcribing,
+    error: micError,
+    start: micStart,
+    stop: micStop,
+  } = useVoiceDictation({
+    onTranscript: (text) => {
+      const base = dictationBaseRef.current;
+      const sep = base && !base.endsWith(" ") ? " " : "";
+      setDraft(base + sep + text);
+      // En el frame siguiente, NO ahora: `setDraft` aún no ha llegado al DOM,
+      // así que medir aquí daba el alto del texto anterior (el textarea iba
+      // siempre una línea por detrás al dictar).
+      requestAnimationFrame(resizeInput);
+    },
+  });
 
   const toggleMic = () => {
     if (listening) {
@@ -205,7 +347,7 @@ export default function Laboratorio() {
       return;
     }
     dictationBaseRef.current = draft.trimEnd();
-    micStart();
+    void micStart();
     inputRef.current?.focus();
   };
 
@@ -297,7 +439,18 @@ export default function Laboratorio() {
           if (m.role === "user") {
             return (
               <div key={m.id} className="lab-bubble">
-                {m.content}
+                {m.images && m.images.length > 0 && (
+                  <div className="lab-bubble-images">
+                    {m.images.map((img, i) => (
+                      // eslint-disable-next-line @next/next/no-img-element -- object URL local, no un asset de Next.
+                      <img key={i} src={img.url} alt={img.name} />
+                    ))}
+                  </div>
+                )}
+                {/* El texto va en un <span> (no como nodo de texto suelto) para que
+                    `.lab-bubble-images:not(:only-child)` en globals.css detecte que
+                    hay hermano: `:only-child` solo cuenta ELEMENTOS, no text nodes. */}
+                {m.content ? <span className="lab-bubble-text">{m.content}</span> : null}
               </div>
             );
           }
@@ -335,86 +488,147 @@ export default function Laboratorio() {
 
       <div className="lab-inputbar">
         <form
-          className="lab-composer"
+          className={`lab-composer ${dropping ? "lab-composer--drop" : ""}`}
           onSubmit={(e) => {
             e.preventDefault();
             handleSend();
           }}
+          // Soltar un archivo desde el Finder/Explorador encima del composer,
+          // no solo pegar del portapapeles — mismo destino (`addImages`).
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDropping(true);
+          }}
+          onDragLeave={() => setDropping(false)}
+          onDrop={handleDrop}
         >
-          {micSupported && (
-            <button
-              type="button"
-              className={`lab-mic ${listening ? "lab-mic--listening" : ""}`}
-              onClick={toggleMic}
-              aria-label={listening ? "Detener dictado" : "Dictar por voz"}
-              aria-pressed={listening}
-              title={listening ? "Detener dictado" : "Dictar por voz"}
-            >
-              {listening ? (
-                <span className="lab-mic-bars" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M12 15a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5.5A3.5 3.5 0 0 0 12 15Z"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M6 11a6 6 0 0 0 12 0M12 19v2"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
-            </button>
+          {attachments.length > 0 && (
+            <div className="lab-attachments">
+              {attachments.map((a) => (
+                <div
+                  key={a.key}
+                  className={`lab-chip ${!a.id && !a.error ? "lab-chip--uploading" : ""} ${a.error ? "lab-chip--error" : ""}`}
+                  title={a.error ?? a.name}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- object URL local, no un asset de Next. */}
+                  <img src={a.url} alt={a.name} />
+                  {!a.id && !a.error && <span className="lab-chip-spin" aria-hidden="true" />}
+                  <button
+                    type="button"
+                    className="lab-chip-x"
+                    onClick={() => removeAttachment(a.key)}
+                    aria-label={`Quitar ${a.name}`}
+                    title="Quitar"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
-          <textarea
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              resizeInput();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Escribe algo…"
-            aria-label="Entrada de texto"
-            className="lab-textarea"
-          />
-          <button
-            type="submit"
-            className="lab-send"
-            disabled={!draft.trim() || busy}
-            aria-label="Enviar"
-            title="Enviar"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              aria-hidden="true"
+          <div className="lab-composer-row">
+            {micSupported && (
+              <button
+                type="button"
+                className={`lab-mic ${listening ? "lab-mic--listening" : ""} ${
+                  transcribing ? "lab-mic--transcribing" : ""
+                }`}
+                onClick={toggleMic}
+                // Mientras el servidor puntúa el clip el botón se bloquea: si
+                // se pudiera rearrancar aquí, el texto que está por llegar
+                // pisaría el dictado nuevo.
+                disabled={transcribing}
+                aria-busy={transcribing}
+                aria-label={
+                  transcribing
+                    ? "Transcribiendo dictado"
+                    : listening
+                      ? "Detener dictado"
+                      : "Dictar por voz"
+                }
+                aria-pressed={listening}
+                title={
+                  transcribing
+                    ? "Puntuando el dictado…"
+                    : listening
+                      ? "Detener dictado"
+                      : "Dictar por voz"
+                }
+              >
+                {listening ? (
+                  <span className="lab-mic-bars" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M12 15a3.5 3.5 0 0 0 3.5-3.5V6a3.5 3.5 0 0 0-7 0v5.5A3.5 3.5 0 0 0 12 15Z"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M6 11a6 6 0 0 0 12 0M12 19v2"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </button>
+            )}
+            <textarea
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                resizeInput();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              onPaste={handlePaste}
+              placeholder="Escribe algo…"
+              aria-label="Entrada de texto"
+              className="lab-textarea"
+            />
+            <button
+              type="submit"
+              className="lab-send"
+              disabled={!canSend}
+              aria-label="Enviar"
+              title="Enviar"
             >
-              <path d="M12 19V5" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden="true"
+              >
+                <path d="M12 19V5" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M5 12l7-7 7 7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
         </form>
+        {/* Fallo del dictado (permiso denegado, sin transcriptor…). Antes se
+            perdía en silencio: el micrófono simplemente no hacía nada. */}
+        {micError && (
+          <p className="lab-mic-error" role="status">
+            {micError}
+          </p>
+        )}
         {/* Pie: consumo · modelo en curso · reloj de reinicio. Vive DENTRO de
             la barra (no del form) para que comparta su ancho máximo y se
             mueva con ella cuando el teclado la empuja. */}

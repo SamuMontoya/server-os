@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import type { ChatToolStep } from "@hermes/shared";
 import { runAgentTurn, saveSdkSession } from "./session.js";
 import { appendTurn } from "../conversations.js";
+import { attachmentNote } from "../chat-attachments.js";
 
 // ── Eventos ────────────────────────────────────────────────────────────
 export type TurnEventKind =
@@ -56,6 +57,13 @@ export interface ChatTurn {
   sessionKey: string;
   project: string;
   prompt: string;
+  /**
+   * Rutas absolutas de las imágenes adjuntas. Viven en el turno (no solo en el
+   * input) porque el motor reintenta hasta 3 veces: cada intento tiene que
+   * volver a mandar los mismos adjuntos, o el reintento perdería la imagen y
+   * respondería a ciegas sobre el texto pelado.
+   */
+  attachments?: string[];
   status: TurnStatus;
   /** Texto acumulado ÍNTEGRO — no se recorta nunca; es lo que ve quien vuelve. */
   text: string;
@@ -134,6 +142,8 @@ export function shouldPersist(turn: ChatTurn): boolean {
 // ── Dependencias inyectables ───────────────────────────────────────────
 export interface TurnRunnerArgs {
   prompt: string;
+  /** Rutas absolutas de imágenes adjuntas (ver ChatTurn.attachments). */
+  attachments?: string[];
   project?: string;
   cwd?: string;
   resumeSessionId?: string;
@@ -160,6 +170,8 @@ export interface TurnEngineDeps {
 
 export interface StartTurnInput {
   prompt: string;
+  /** Rutas absolutas de imágenes adjuntas (ver ChatTurn.attachments). */
+  attachments?: string[];
   sessionKey: string;
   project?: string;
   cwd?: string;
@@ -236,6 +248,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       sessionKey: input.sessionKey,
       project: input.project || "general",
       prompt: input.prompt,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       status: "running",
       text: "",
       steps: [],
@@ -266,6 +279,9 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       try {
         const result = await deps.run({
           prompt: input.prompt,
+          // Del turno, no del input: es la misma lista, pero leerla de `turn`
+          // deja claro que cada reintento manda los adjuntos otra vez.
+          attachments: turn.attachments,
           project: input.project,
           cwd: input.cwd,
           resumeSessionId: resume,
@@ -408,6 +424,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
   run: async (args) => {
     const r = await runAgentTurn({
       prompt: args.prompt,
+      attachments: args.attachments,
       project: args.project,
       cwd: args.cwd,
       resumeSessionId: args.resumeSessionId,
@@ -422,7 +439,12 @@ export const chatTurns: TurnEngine = createTurnEngine({
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => Date.now(),
   persist: (turn) => {
-    void appendTurn(turn.project, turn.prompt, turn.text, turn.sessionKey);
+    // Al historial va el mensaje del usuario TAL CUAL escribió, más una nota de
+    // cuántas imágenes traía. Las rutas del .data no van: son efímeras (se
+    // barren a los 30 días) y ensuciarían la búsqueda semántica con ruido que
+    // no significa nada para el Samu que relea esto en dos meses.
+    const stored = turn.prompt + attachmentNote(turn.attachments?.length ?? 0);
+    void appendTurn(turn.project, stored, turn.text, turn.sessionKey);
     if (turn.sdkSessionId) void saveSdkSession(turn.sessionKey, turn.sdkSessionId, "text");
   },
 });
