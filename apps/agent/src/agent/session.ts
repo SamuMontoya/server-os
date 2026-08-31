@@ -154,6 +154,15 @@ export interface RunTurnResult {
   finalText: string;
   toolCalls: number;
   isError: boolean;
+  /**
+   * Subtipo del `result` del SDK cuando `isError` es true (p. ej.
+   * "error_max_turns", "error_during_execution", "api_error"). Antes se
+   * perdía —todo colapsaba a un booleano— y quien llamaba no podía distinguir
+   * "se acabó el presupuesto de turnos con el trabajo a medias" de "reventó
+   * de verdad": las dos terminaban igual, con un ⚠ y Samu teniendo que
+   * escribir "continúa" a mano. Ver el consumidor en chat-turns.ts (drive()).
+   */
+  errorSubtype?: string;
 }
 
 export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
@@ -203,6 +212,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   let finalText = "";
   let toolCalls = 0;
   let isError = false;
+  let errorSubtype: string | undefined;
   let deltasSeen = false;
 
   setPresence("working", opts.prompt.slice(0, 120));
@@ -359,9 +369,27 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
 
       if (m.type === "result") {
         if (m.subtype === "success" && typeof m.result === "string") {
-          finalText = m.result || finalText;
+          // `is_error` con subtype "success" es el caso raro pero real de un
+          // 429/529 que el SDK entrega COMO SI fuera texto de respuesta: sin
+          // esto se pintaba el error de la API como si el agente lo hubiera
+          // dicho, y encima contaba como turno "done".
+          if (m.is_error) {
+            isError = true;
+            errorSubtype = "api_error";
+            finalText = m.result || finalText;
+          } else {
+            finalText = m.result || finalText;
+          }
         } else if (m.subtype && m.subtype !== "success") {
+          // p. ej. "error_max_turns", "error_during_execution": se guarda el
+          // subtipo TAL CUAL — es lo que permite a chat-turns.ts distinguir
+          // "se acabó el presupuesto de turnos, hay que continuar solo" de un
+          // fallo real. `finalText` NO se toca aquí: ya trae el último texto
+          // parcial del asistente (bloque "assistant" de arriba), y usarlo
+          // como "mensaje de error" era justo lo que hacía que el ⚠ pareciera
+          // la propia respuesta del agente repetida.
           isError = true;
+          errorSubtype = m.subtype as string;
         }
       }
     }
@@ -374,6 +402,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
       return runAgentTurn({ ...opts, resumeSessionId: undefined });
     }
     isError = true;
+    errorSubtype = errorSubtype ?? "exception";
     finalText = finalText || `Error ejecutando al agente: ${String(err).slice(0, 500)}`;
     emit({ kind: "error", taskId: opts.taskId, detail: String(err).slice(0, 300) });
   } finally {
@@ -383,8 +412,16 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // Escalado. El router es heurístico y a veces se queda corto; en vez de
   // devolver un turno fallido, se reintenta UNA vez en el nivel de arriba.
   // Solo ante fallo real: reintentar por gusto duplica el costo del turno.
+  //
+  // `error_max_turns` queda FUERA a propósito: no es que el modelo se haya
+  // quedado corto de capacidad, es que se acabó el presupuesto de turnos con
+  // el trabajo a medias. Escalar aquí volvería a correr TODO el turno desde
+  // cero en un tier más caro —duplicando el texto ya emitido, porque
+  // `runAgentTurn` no sabe que ya se streameó algo— cuando lo correcto es
+  // simplemente CONTINUAR en la misma sesión; eso lo hace chat-turns.ts con
+  // `errorSubtype` (ver MAX_CONTINUATIONS ahí).
   const up = nextTier(tier);
-  if (isError && up && routerEnabled() && !opts._escalated) {
+  if (isError && errorSubtype !== "error_max_turns" && up && routerEnabled() && !opts._escalated) {
     escalateSession(opts.resumeSessionId ?? sdkSessionId, up);
     emit({
       kind: "error",
@@ -394,7 +431,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     return runAgentTurn({ ...opts, resumeSessionId: sdkSessionId ?? opts.resumeSessionId, _escalated: true });
   }
 
-  return { sdkSessionId, finalText, toolCalls, isError };
+  return { sdkSessionId, finalText, toolCalls, isError, errorSubtype };
 }
 
 // ── Mapeo sesión-cliente (X-Hermes-Session-Id) → sesión SDK ────────────

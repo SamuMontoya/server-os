@@ -109,6 +109,17 @@ export const MAX_ATTEMPTS = 3;
 const BACKOFF_MS = [1000, 3000];
 
 /**
+ * Auto-continuación cuando el SDK cierra un turno por `error_max_turns`: el
+ * trabajo quedó A MEDIAS, no falló — la sesión sigue viva y solo hace falta
+ * pedirle que siga. Antes esto se reportaba como `error` y Samu tenía que
+ * escribir "continúa" a mano para que retomara. Con tope: un turno que de
+ * verdad no converge (bucle) no debe reintentar para siempre.
+ */
+export const MAX_CONTINUATIONS = 3;
+const CONTINUE_PROMPT =
+  "Se acabó el presupuesto de turnos antes de que terminaras. Continúa EXACTAMENTE donde te quedaste: no repitas lo ya hecho, no vuelvas a saludar ni a resumir la tarea, sigue la ejecución y ciérrala.";
+
+/**
  * Un error del agente es reintentable si huele a transitorio: red, límite de
  * tasa, sobrecarga o un proceso que murió. Un error de contenido ("no encontré
  * el archivo") NO se reintenta: reintentarlo da el mismo resultado tres veces
@@ -158,6 +169,8 @@ export interface TurnRunnerResult {
   sdkSessionId?: string;
   finalText: string;
   isError: boolean;
+  /** Ver RunTurnResult.errorSubtype en session.ts. */
+  errorSubtype?: string;
 }
 
 export interface TurnEngineDeps {
@@ -269,74 +282,105 @@ export function createTurnEngine(deps: TurnEngineDeps) {
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       turn.attempts = attempt;
-      const abort = new AbortController();
-      aborts.set(turn.id, abort);
-      // Texto de ESTE intento: el reintento arranca de cero y no se pega al
-      // parcial del intento anterior (eso duplicaba frases a medias).
-      let attemptText = "";
-      let failure: string | null = null;
+      // Prompt de ESTE intento: normalmente el original, pero la rama de
+      // auto-continuación de abajo lo reemplaza por CONTINUE_PROMPT sin gastar
+      // un `attempt` del presupuesto de reintentos por fallo transitorio —
+      // seguir un trabajo a medias no es lo mismo que reintentar uno roto.
+      let promptForRun = input.prompt;
+      let continuations = 0;
 
-      try {
-        const result = await deps.run({
-          prompt: input.prompt,
-          // Del turno, no del input: es la misma lista, pero leerla de `turn`
-          // deja claro que cada reintento manda los adjuntos otra vez.
-          attachments: turn.attachments,
-          project: input.project,
-          cwd: input.cwd,
-          resumeSessionId: resume,
-          abortController: abort,
-          onSession: (sessionId) => {
-            if (turn.sdkSessionId === sessionId) return;
-            turn.sdkSessionId = sessionId;
-            resume = sessionId;
-            emitEvent(turn.id, { kind: "session", sessionId });
-          },
-          onDelta: (text) => {
-            if (!text) return;
-            attemptText += text;
-            turn.text += text;
-            emitEvent(turn.id, { kind: "delta", text });
-          },
-          onTool: (tool) => {
-            turn.steps.push(tool);
-            emitEvent(turn.id, { kind: "tool", tool });
-          },
-          onModel: (model, effort) => {
-            // Sin cambio no se emite: el escalado repite la llamada y no vale
-            // gastar un seq (ni repintar) para decir lo mismo otra vez.
-            if (turn.model === model && turn.effort === effort) return;
-            turn.model = model;
-            turn.effort = effort;
-            emitEvent(turn.id, { kind: "model", model, effort });
-          },
-        });
-        if (!result.isError) {
-          // El SDK puede cerrar con el texto final sin haber mandado deltas.
-          if (!attemptText && result.finalText) {
-            turn.text += result.finalText;
-            emitEvent(turn.id, { kind: "delta", text: result.finalText });
+      // eslint-disable-next-line no-constant-condition
+      for (;;) {
+        const abort = new AbortController();
+        aborts.set(turn.id, abort);
+        // Texto de ESTE intento: el reintento arranca de cero y no se pega al
+        // parcial del intento anterior (eso duplicaba frases a medias). Una
+        // continuación SÍ debe arrancar en cero por el mismo motivo: lo que
+        // ya escribió antes de quedarse sin turnos vive en `turn.text`.
+        let attemptText = "";
+        let failure: string | null = null;
+        let errorSubtype: string | undefined;
+
+        try {
+          const result = await deps.run({
+            prompt: promptForRun,
+            // Del turno, no del input: es la misma lista, pero leerla de `turn`
+            // deja claro que cada reintento/continuación manda los adjuntos
+            // otra vez.
+            attachments: turn.attachments,
+            project: input.project,
+            cwd: input.cwd,
+            resumeSessionId: resume,
+            abortController: abort,
+            onSession: (sessionId) => {
+              if (turn.sdkSessionId === sessionId) return;
+              turn.sdkSessionId = sessionId;
+              resume = sessionId;
+              emitEvent(turn.id, { kind: "session", sessionId });
+            },
+            onDelta: (text) => {
+              if (!text) return;
+              attemptText += text;
+              turn.text += text;
+              emitEvent(turn.id, { kind: "delta", text });
+            },
+            onTool: (tool) => {
+              turn.steps.push(tool);
+              emitEvent(turn.id, { kind: "tool", tool });
+            },
+            onModel: (model, effort) => {
+              // Sin cambio no se emite: el escalado repite la llamada y no vale
+              // gastar un seq (ni repintar) para decir lo mismo otra vez.
+              if (turn.model === model && turn.effort === effort) return;
+              turn.model = model;
+              turn.effort = effort;
+              emitEvent(turn.id, { kind: "model", model, effort });
+            },
+          });
+          if (!result.isError) {
+            // El SDK puede cerrar con el texto final sin haber mandado deltas.
+            if (!attemptText && result.finalText) {
+              turn.text += result.finalText;
+              emitEvent(turn.id, { kind: "delta", text: result.finalText });
+            }
+            if (result.sdkSessionId) turn.sdkSessionId = result.sdkSessionId;
+            return close(turn, "done");
           }
-          if (result.sdkSessionId) turn.sdkSessionId = result.sdkSessionId;
-          return close(turn, "done");
+          failure = result.finalText || "el agente terminó con error";
+          errorSubtype = result.errorSubtype;
+        } catch (err) {
+          failure = err instanceof Error ? err.message : String(err);
         }
-        failure = result.finalText || "el agente terminó con error";
-      } catch (err) {
-        failure = err instanceof Error ? err.message : String(err);
-      }
 
-      // Cancelación explícita: no es un fallo y no se reintenta.
-      if (abort.signal.aborted) return close(turn, "stopped", failure ?? undefined);
+        // Cancelación explícita: no es un fallo y no se reintenta.
+        if (abort.signal.aborted) return close(turn, "stopped", failure ?? undefined);
 
-      const last = attempt === MAX_ATTEMPTS;
-      // Con texto ya entregado no se reintenta: el cliente lo está leyendo y
-      // un segundo intento le repetiría media respuesta encima.
-      const partial = attemptText.length > 0;
-      if (last || partial || !isRetryable(failure ?? "")) {
-        return close(turn, "error", failure ?? "error desconocido");
+        // Se acabó `maxTurns` con el trabajo a medias: NO es un error de
+        // verdad. La sesión del SDK sigue viva (`resume` ya se actualizó por
+        // `onSession`), así que se le pide que siga sola — es justo lo que
+        // antes obligaba a Samu a escribir "continúa" a mano.
+        if (errorSubtype === "error_max_turns" && resume && continuations < MAX_CONTINUATIONS) {
+          continuations += 1;
+          emitEvent(turn.id, {
+            kind: "retry",
+            attempt: continuations,
+            text: "se acabó el presupuesto de turnos — continuando solo…",
+          });
+          promptForRun = CONTINUE_PROMPT;
+          continue;
+        }
+
+        const last = attempt === MAX_ATTEMPTS;
+        // Con texto ya entregado no se reintenta: el cliente lo está leyendo y
+        // un segundo intento le repetiría media respuesta encima.
+        const partial = attemptText.length > 0;
+        if (last || partial || !isRetryable(failure ?? "")) {
+          return close(turn, "error", failure ?? "error desconocido");
+        }
+        emitEvent(turn.id, { kind: "retry", attempt: attempt + 1, text: failure ?? "" });
+        await deps.sleep(BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1]);
+        break;
       }
-      emitEvent(turn.id, { kind: "retry", attempt: attempt + 1, text: failure ?? "" });
-      await deps.sleep(BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1]);
     }
   }
 
@@ -434,7 +478,12 @@ export const chatTurns: TurnEngine = createTurnEngine({
       onTool: args.onTool,
       onModel: args.onModel,
     });
-    return { sdkSessionId: r.sdkSessionId, finalText: r.finalText, isError: r.isError };
+    return {
+      sdkSessionId: r.sdkSessionId,
+      finalText: r.finalText,
+      isError: r.isError,
+      errorSubtype: r.errorSubtype,
+    };
   },
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => Date.now(),

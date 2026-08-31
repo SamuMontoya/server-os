@@ -24,8 +24,13 @@ import { transcribeDictation } from "@/lib/hermes";
  * Si el servidor falla o no hay credenciales de STT, se conserva la vista
  * previa: se pierde la puntuación, nunca el dictado.
  *
- * Ventaja extra: el `MediaStream` se mantiene vivo entre dictados, así que el
- * navegador no vuelve a pedir permiso de micrófono en cada pulsación.
+ * El `MediaStream` se PARA al soltar el botón (ver `stop()`). Antes se
+ * mantenía vivo entre dictados para no volver a pedir permiso — pero el
+ * permiso, una vez concedido, no se vuelve a preguntar (Chrome/Safari lo
+ * recuerdan por origen); lo único que lograba dejarlo abierto era que el
+ * indicador de grabación del navegador quedara encendido para siempre,
+ * porque este componente vive dentro de `ChatPanel`/`Laboratorio`, que el
+ * `AppShell` nunca desmonta mientras se navega por el workspace.
  */
 
 /** Tope de un dictado. Sin esto un micrófono olvidado abierto genera un blob
@@ -90,15 +95,11 @@ export function useVoiceDictation({
     },
   });
 
-  /** Reutiliza el micrófono ya concedido; solo pide permiso la primera vez. */
+  /** Pide el micrófono para ESTE dictado. El permiso del navegador ya está
+   *  concedido de una vez anterior (si la hubo), así que esto no vuelve a
+   *  mostrar el diálogo — solo abre el stream, que `stop()` cierra al soltar
+   *  el botón. */
   const ensureStream = useCallback(async (): Promise<MediaStream> => {
-    const existing = streamRef.current;
-    // Un stream cuyas pistas murieron (el navegador lo suelta al cambiar de
-    // dispositivo o al volver de suspensión) no sirve: se pide otro.
-    if (existing && existing.getAudioTracks().some((t) => t.readyState === "live")) {
-      return existing;
-    }
-    existing?.getTracks().forEach((t) => t.stop());
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -203,6 +204,16 @@ export function useVoiceDictation({
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
     rec.onstop = () => {
+      // Soltar el stream AQUÍ, no en `stop()`: por spec, `ondataavailable`
+      // con el último chunk ya se disparó antes de `onstop`, así que el clip
+      // completo está en `chunksRef` y parar las pistas ahora no pierde nada.
+      // Es el fix del "micrófono queda activo todo el tiempo": antes el
+      // stream sobrevivía a propósito entre dictados, y como este componente
+      // nunca se desmonta (vive dentro de ChatPanel/Laboratorio, que el
+      // AppShell mantiene montados todo el tiempo) el indicador de grabación
+      // del navegador se quedaba encendido para siempre tras el primer uso.
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
       void finish(rec.mimeType || mime || "audio/webm");
     };
     recorderRef.current = rec;

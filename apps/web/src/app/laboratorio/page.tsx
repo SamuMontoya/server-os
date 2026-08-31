@@ -7,7 +7,6 @@
 // empezar a vivir acá — el resto (persistencia entre recargas, reenganche
 // tras bloquear pantalla, multi-tab) llega en ajustes posteriores.
 
-import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
@@ -769,20 +768,6 @@ export default function Laboratorio() {
 
   return (
     <main className="lab-paper">
-      <Link href="/" className="lab-back" title="Volver" aria-label="Volver">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          aria-hidden="true"
-        >
-          <path d="M15 5 8 12l7 7" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </Link>
-
       <div className="lab-messages" ref={listRef} onWheel={onUserScroll} onTouchMove={onUserScroll}>
         {messages.map((m, idx) => {
           if (m.role === "user") {

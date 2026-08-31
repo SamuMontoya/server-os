@@ -701,6 +701,16 @@ app.post(
     // Un clip de menos de ~1 KB es silencio o un toque accidental del botón:
     // no vale gastar una llamada de STT en él.
     if (audio.size < 1024) return c.json({ text: "", provider: null, empty: true });
+    // Sin ELEVENLABS_API_KEY ni OPENAI_API_KEY, `transcribe()` iba a fallar
+    // GARANTIZADO en cada dictado — y el error mencionaba "ElevenLabs", que es
+    // justo el ruido que aparecía en el chat mientras Samu hablaba. El cliente
+    // ya cae solo al texto de la Web Speech API cuando esto responde `empty`
+    // (ver `finish()` en useVoiceDictation.ts), así que no repuntuar aquí no
+    // pierde el dictado: solo evita gastar una llamada condenada a fallar y
+    // el `console.error` que la acompañaba.
+    if (!env.ELEVENLABS_API_KEY && !env.OPENAI_API_KEY) {
+      return c.json({ text: "", provider: null, empty: true });
+    }
     try {
       const result = await transcribe(audio);
       return c.json({

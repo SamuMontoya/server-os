@@ -45,8 +45,22 @@ export function useVoiceConnect() {
         setError("Hay una junta en vivo — termínala antes de llamar a Hermes.");
         return;
       }
+      // Sin agente de ElevenLabs configurado NO se intenta nada: antes se
+      // pedía el micrófono y se llamaba igual a /api/elevenlabs/token, que
+      // respondía 503 — de ahí errores de ElevenLabs que salían solos, y peor:
+      // el micrófono quedaba abierto para nada (ver el `probe` de abajo).
+      if (!configured) {
+        setError("Voz no configurada");
+        return;
+      }
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Sonda de permiso: se pide el micrófono solo para saber si el usuario
+        // lo concede, y se SUELTA en el acto. El SDK de ElevenLabs abre su
+        // propio stream al conectar; este no lo usaba nadie y, al no pararse
+        // nunca, dejaba el indicador de grabación del navegador encendido para
+        // siempre (aunque la conexión fallara un instante después).
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+        probe.getTracks().forEach((t) => t.stop());
         const res = await fetch(
           targetMode === "tutor" ? "/api/elevenlabs/token?agent=tutor" : "/api/elevenlabs/token",
         );

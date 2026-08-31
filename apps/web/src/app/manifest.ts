@@ -17,7 +17,10 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "HERMES OS",
     short_name: "Hermes",
     description: "AI Operating System personal de RuloCode",
-    start_url: "/",
+    // Abre en el Laboratorio, igual que "/" (que redirige ahí). Se pone
+    // explícito para que el icono de la pantalla de inicio del iPhone no
+    // gaste un redirect en cada apertura.
+    start_url: "/laboratorio",
     display: "standalone",
     orientation: "portrait",
     background_color: "#05060f",

@@ -214,7 +214,12 @@ let lastGood: { at: number; data: ClaudeLimits } | null = null;
 const TTL_OK = 60_000;
 const TTL_FAIL = 60_000;
 const TTL_RATE_LIMITED = 300_000;
-const STALE_MAX = 15 * 60_000;
+// Ventana en la que un dato viejo sigue siendo mejor que ningún dato. Es
+// generosa (1 h) a propósito: lo que se muestra es la ventana de 5 h del plan,
+// que se mueve despacio, y el fallo típico (token rotando, 429 del endpoint)
+// dura minutos. Con los 15 min de antes, al agotarse, el pie del Laboratorio
+// se quedaba en "—" — el síntoma de "el consumo no se está mostrando".
+const STALE_MAX = 60 * 60_000;
 
 export async function getClaudeLimits(): Promise<ClaudeLimits> {
   const now = Date.now();

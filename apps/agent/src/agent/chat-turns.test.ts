@@ -10,6 +10,7 @@ import {
   createTurnEngine,
   isRetryable,
   MAX_ATTEMPTS,
+  MAX_CONTINUATIONS,
   type TurnEvent,
   type TurnRunnerArgs,
   type TurnRunnerResult,
@@ -209,6 +210,81 @@ test("el reintento CONTINÚA la sesión del SDK, no abre una nueva", async () =>
   await settle();
   await settle();
   assert.deepEqual(resumes, [undefined, "sdk-nacida"]);
+});
+
+test("error_max_turns se auto-continúa: no obliga a escribir 'continúa'", async () => {
+  // Este es EL caso que sacaba el ⚠ y dejaba el trabajo a medias. El SDK cierra
+  // con subtype error_max_turns (se acabó maxTurns), pero la sesión sigue viva:
+  // el motor debe pedirle que siga solo, en la MISMA sesión, y pegar el texto
+  // nuevo debajo del que ya había — sin repetirlo.
+  const prompts: string[] = [];
+  const resumes: (string | undefined)[] = [];
+  const h = engineWith(async (args, attempt) => {
+    prompts.push(args.prompt);
+    resumes.push(args.resumeSessionId);
+    if (attempt === 1) {
+      args.onSession("sdk-viva");
+      args.onDelta("voy a medias…");
+      return { finalText: "voy a medias…", isError: true, errorSubtype: "error_max_turns" };
+    }
+    args.onDelta(" y ya terminé");
+    return { finalText: "", isError: false };
+  });
+  const turn = h.engine.start({ prompt: "haz algo largo", sessionKey: "tab-1" });
+  await settle();
+  await settle();
+
+  const snap = h.engine.snapshot(turn.id)!;
+  assert.equal(snap.status, "done", "continuar solo debe terminar en done, no en error");
+  assert.equal(snap.text, "voy a medias… y ya terminé", "el texto se acumula, no se repite");
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[0], "haz algo largo");
+  assert.match(prompts[1], /Continúa EXACTAMENTE donde te quedaste/);
+  assert.deepEqual(resumes, [undefined, "sdk-viva"], "continúa la misma sesión del SDK");
+  // El cliente se entera de que está continuando (evento retry), en vez de
+  // ver un turno mudo.
+  const kinds = snap.events.map((e) => e.kind);
+  assert.ok(kinds.includes("retry"), "se avisa que está continuando");
+});
+
+test("una continuación que no converge acaba cerrando en error, no en bucle", async () => {
+  // Tope de seguridad: si el agente se queda sin turnos una y otra vez, esto
+  // no puede reintentar para siempre (sería gasto infinito).
+  const h = engineWith(async (args) => {
+    args.onSession("sdk-viva");
+    return { finalText: "sigo sin acabar", isError: true, errorSubtype: "error_max_turns" };
+  });
+  const turn = h.engine.start({ prompt: "bucle", sessionKey: "tab-1" });
+  await settle();
+  await settle();
+  const snap = h.engine.snapshot(turn.id)!;
+  assert.equal(snap.status, "error");
+  // 1 intento original + MAX_CONTINUATIONS continuaciones.
+  assert.equal(h.attempts(), 1 + MAX_CONTINUATIONS);
+});
+
+test("un 429 servido como 'success' con is_error se trata como error real", async () => {
+  // El SDK a veces entrega el error de la API COMO SI fuera la respuesta
+  // (subtype success + is_error). session.ts lo marca como api_error; aquí se
+  // comprueba que el motor lo reintenta como el transitorio que es.
+  const h = engineWith(async (args, attempt) => {
+    if (attempt === 1) {
+      return {
+        finalText: "API Error: 529 overloaded_error",
+        isError: true,
+        errorSubtype: "api_error",
+      };
+    }
+    args.onDelta("ahora sí");
+    return { finalText: "", isError: false };
+  });
+  const turn = h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  await settle();
+  const snap = h.engine.snapshot(turn.id)!;
+  assert.equal(snap.status, "done");
+  assert.equal(snap.text, "ahora sí");
+  assert.equal(h.attempts(), 2);
 });
 
 test("⏹ Detener es cancelación explícita, no un error", async () => {

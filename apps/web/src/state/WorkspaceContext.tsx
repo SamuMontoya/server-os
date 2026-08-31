@@ -121,10 +121,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const selectedProjectData = projects.find((p) => p.slug === selectedProject);
   const selectedProjectName = selectedProjectData?.name;
 
-  // La voz y los comandos pueden pedir un panel desde /vida: volvemos a "/"
-  // (nada se desmonta: el AppShell solo alterna vistas con CSS).
+  // La voz y los comandos pueden pedir un panel desde /vida: volvemos al
+  // dashboard, que desde 2026-08-31 vive en "/os" y no en "/" (la raíz abre el
+  // Laboratorio). Nada se desmonta: el AppShell solo alterna vistas con CSS.
   const goHome = () => {
-    if (pathname !== "/") router.push("/");
+    if (pathname !== "/os") router.push("/os");
   };
 
   const showPanel = (t: CenterTab) => {

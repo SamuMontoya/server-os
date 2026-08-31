@@ -29,7 +29,8 @@ const I = (d: string, extra?: React.ReactNode) => (
 const DESTS: Dest[] = [
   {
     kind: "route",
-    href: "/",
+    // El dashboard se mudó a /os (la raíz abre el Laboratorio, ver app/page.tsx).
+    href: "/os",
     label: "Orquestador",
     icon: (
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -117,7 +118,7 @@ const DESTS: Dest[] = [
 export function SideRail() {
   const pathname = usePathname();
   const ws = useWorkspace();
-  const inHome = pathname === "/";
+  const inHome = pathname === "/os" || pathname === "/";
 
   return (
     <nav

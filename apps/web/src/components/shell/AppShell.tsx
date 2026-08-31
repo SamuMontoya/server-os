@@ -75,7 +75,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Fuera del workspace (galería /dev/ui, futuras rutas sueltas): sin shell.
   // /vida vive como redirect a /finanzas (app/vida/page.tsx).
+  // "/os" es el dashboard desde 2026-08-31 (la raíz redirige al Laboratorio,
+  // ver app/page.tsx). "/" se deja mapeado por si alguna navegación vieja o un
+  // enlace guardado llega ahí antes del redirect: no cuesta nada y evita que
+  // esa ruta se renderice sin shell.
   const WORKSPACE_VIEWS: Record<string, string> = {
+    "/os": "orquestador",
     "/": "orquestador",
     "/finanzas": "finanzas",
     "/habitos": "habitos",
