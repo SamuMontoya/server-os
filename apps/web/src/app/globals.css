@@ -1585,6 +1585,15 @@ html.lab-route.lab-kb .lab-inputbar {
      sigue siendo metadato de la acción, no protagonismo. */
   font-size: 13.5px;
 }
+/* Resumen de UN solo paso: el glifo de herramienta se cambia por el orbe en
+   miniatura (ver LabSteps.tsx). Sin el tamaño fijo el <div> de OrbeIA se
+   estira al alto de línea del texto; con line-height:0 queda del tamaño
+   exacto del emoji que reemplaza. */
+.lab-step-glyph--orbe {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+}
 .lab-step-verb {
   flex-shrink: 0;
   color: #6b6a67;

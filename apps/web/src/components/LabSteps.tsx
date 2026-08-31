@@ -23,6 +23,7 @@
 import { useState } from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { glyphOf, shortTarget, verbOf } from "@/lib/tool-labels";
+import { OrbeIA } from "@/components/orbe/OrbeIA";
 
 function StepRow({ step, live }: { step: ChatToolStep; live: boolean }) {
   const target = shortTarget(step.target ?? "");
@@ -78,11 +79,22 @@ export function LabSteps({ steps, live }: { steps: ChatToolStep[]; live: boolean
         ) : (
           // Plegado/resumen: en vez del caret gris va el glifo de la última
           // acción del bloque — el mismo vocabulario visual de las filas, así
-          // el ojo ya sabe de qué trata el bloque sin abrirlo.
+          // el ojo ya sabe de qué trata el bloque sin abrirlo. Excepción: si
+          // el bloque es UN solo paso, el glifo de herramienta se reemplaza
+          // por el orbe (mini, del tamaño de un emoji — nada que ver con los
+          // 56px de "pensando") para que se lea como "esto lo hizo Hermes",
+          // no como metadato de la tool. Con varios pasos el glifo se queda:
+          // ahí sí importa distinguir cuál fue la última acción.
           <span className="lab-step lab-steps-summary">
-            <span className="lab-step-glyph" aria-hidden>
-              {glyphOf(current.name)}
-            </span>
+            {steps.length === 1 ? (
+              <span className="lab-step-glyph lab-step-glyph--orbe" aria-hidden>
+                <OrbeIA tam="14px" ojos={false} ariaLabel="" />
+              </span>
+            ) : (
+              <span className="lab-step-glyph" aria-hidden>
+                {glyphOf(current.name)}
+              </span>
+            )}
             <span className="lab-steps-count">{label}</span>
           </span>
         )}
