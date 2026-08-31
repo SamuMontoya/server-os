@@ -93,6 +93,41 @@ export async function stopTurn(turnId: string): Promise<boolean> {
   }
 }
 
+/**
+ * Como `fetchTurn`, pero no se rinde ante un tropiezo transitorio: un 401
+ * porque el JWT de Supabase estaba a punto de refrescarse (típico al volver
+ * de segundo plano largo, donde el timer de auto-refresh estuvo congelado),
+ * un 5xx del agente reiniciándose, o un blip de red — nada de eso significa
+ * que el turno "se perdió". Solo un 404 real (el turno ya no existe en el
+ * servidor) es una pérdida genuina.
+ *
+ * Sin esto, `resumePending`/`resumePendingTurns` declaraban perdido un turno
+ * que seguía vivísimo del otro lado por culpa de un solo fetch fallido, y
+ * Samu tenía que repetir la pregunta con el agente todavía trabajando.
+ *
+ * Devuelve `"not-found"` (pérdida real, confirmada) o el estado; `null` solo
+ * cuando se agotan los reintentos SIN poder confirmar nada — el llamador debe
+ * tratarlo como "todavía no se sabe", no como "perdido".
+ */
+export async function fetchTurnResilient(
+  turnId: string,
+  from = 0,
+  tries = 4,
+): Promise<TurnState | "not-found" | null> {
+  const delays = [400, 1200, 2500, 5000];
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await hermesFetch(`/chat/turns/${turnId}?from=${from}`);
+      if (res.status === 404) return "not-found";
+      if (res.ok) return (await res.json()) as TurnState;
+    } catch {
+      /* red caída a mitad de la reconexión: se reintenta */
+    }
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, delays[i]));
+  }
+  return null;
+}
+
 /** Reintentos de conexión antes de rendirse (el turno sigue vivo del otro lado). */
 const MAX_RECONNECTS = 5;
 const RECONNECT_MS = [500, 1500, 3000, 6000, 10_000];

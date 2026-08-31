@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { useWorkspace } from "@/state/WorkspaceContext";
-import { startTurn, attachTurn, fetchTurn, stopTurn } from "@/lib/chat-turns";
+import { startTurn, attachTurn, fetchTurn, fetchTurnResilient, stopTurn } from "@/lib/chat-turns";
 import { Markdown } from "@/components/Markdown";
 import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
@@ -231,6 +231,10 @@ export default function Laboratorio() {
    * archivo — se asigna la función real más abajo, en cada render.
    */
   const resumePendingRef = useRef<() => void>(() => {});
+  /** true = ya hay un reintento acotado de `resumePending` agendado (ver
+   *  fetchTurnResilient devolviendo null): evita apilar varios si visible +
+   *  online se disparan casi juntos al volver de segundo plano. */
+  const resumeRetryPendingRef = useRef(false);
 
   // Textarea auto-crecible (hasta ~5 líneas), igual que en ChatPanel.
   //
@@ -777,8 +781,14 @@ export default function Laboratorio() {
     }
     turnIdRef.current = pending.id;
     setBusy(true);
-    void fetchTurn(pending.id, pending.seq).then((st) => {
-      if (!st) {
+    // `fetchTurnResilient` ya reintenta contra blips transitorios (token de
+    // Supabase a punto de refrescar, 5xx del agente, red caída un instante).
+    // Solo un "not-found" confirmado es pérdida real; `null` significa "no se
+    // pudo confirmar nada todavía" y NO debe leerse como "se perdió" — eso es
+    // justo lo que obligaba a repetir la pregunta con el turno vivísimo del
+    // otro lado.
+    void fetchTurnResilient(pending.id, pending.seq).then((st) => {
+      if (st === "not-found") {
         // El agente se reinició y el turno ya no existe. Lo honesto es
         // decirlo, no dejar el composer bloqueado para siempre.
         turnIdRef.current = null;
@@ -786,6 +796,21 @@ export default function Laboratorio() {
         setBusy(false);
         appendNotice(replyId, "⚠ el turno se perdió al reiniciarse el agente. Vuelve a preguntar.");
         schedulePersist();
+        return;
+      }
+      if (st === null) {
+        // Inconclusive tras los reintentos: no se sabe si sigue vivo o no.
+        // Se deja todo como estaba (busy, pendingTurn) — más vale reintentar
+        // solo cuando vuelva la visibilidad/red que declarar perdido algo que
+        // probablemente sigue corriendo. Un reintento acotado por si la
+        // pantalla se quedó abierta y visible pero la red seguía inestable.
+        if (!resumeRetryPendingRef.current) {
+          resumeRetryPendingRef.current = true;
+          window.setTimeout(() => {
+            resumeRetryPendingRef.current = false;
+            resumePendingRef.current();
+          }, 8000);
+        }
         return;
       }
       // Corriendo o ya cerrado, `follow` resuelve los dos casos: replayea
