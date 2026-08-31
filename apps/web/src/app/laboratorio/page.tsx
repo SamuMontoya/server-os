@@ -153,6 +153,9 @@ export default function Laboratorio() {
    * cada bloque nuevo tironeaba la vista.
    */
   const userPinnedRef = useRef(false);
+  /** true = hay suficiente texto por encima del fondo como para mostrar el
+   *  botón circular de "ir al final" sobre el composer. */
+  const [showJumpDown, setShowJumpDown] = useState(false);
   /**
    * TODOS los object URLs creados en esta visita. Un object URL mantiene el
    * blob vivo hasta que se revoca explícitamente, y las imágenes ya enviadas
@@ -560,6 +563,29 @@ export default function Laboratorio() {
   };
 
   /**
+   * Visibilidad del botón circular de "ir al final" (sobre el composer).
+   * A diferencia de `onUserScroll` (que solo debe reaccionar a gestos
+   * directos, ver arriba), este SÍ puede dispararse con `scroll` nativo —
+   * incluye nuestros propios `scrollTo`— porque no hace más que reflejar
+   * dónde quedó la vista, no decidir si el auto-anclaje sigue activo.
+   */
+  const onListScrollForJump = () => {
+    const list = listRef.current;
+    if (!list) return;
+    const gap = list.scrollHeight - list.scrollTop - list.clientHeight;
+    setShowJumpDown(gap > 200);
+  };
+
+  /** Clic en el botón de "ir al final": salta al fondo real y suelta el
+   *  anclaje manual, para que el próximo mensaje vuelva a seguirse solo. */
+  const jumpToBottom = () => {
+    const list = listRef.current;
+    if (!list) return;
+    userPinnedRef.current = false;
+    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+  };
+
+  /**
    * Durante el stream: el contenido crece, así que el colchón sobra de a
    * poco. Encogerlo mantiene el scroll máximo justo en el punto donde el
    * ancla está arriba, así que la vista NO se mueve. Throttled a un frame
@@ -571,6 +597,9 @@ export default function Laboratorio() {
     requestAnimationFrame(() => {
       shrinkPendingRef.current = false;
       syncSpacer({ shrinkOnly: true });
+      // El contenido creció por debajo: si Samu está leyendo arriba, el hueco
+      // hasta el fondo real también creció, aunque no haya habido scroll.
+      onListScrollForJump();
     });
   };
 
@@ -1001,7 +1030,13 @@ export default function Laboratorio() {
 
   return (
     <main className="lab-paper">
-      <div className="lab-messages" ref={listRef} onWheel={onUserScroll} onTouchMove={onUserScroll}>
+      <div
+        className="lab-messages"
+        ref={listRef}
+        onWheel={onUserScroll}
+        onTouchMove={onUserScroll}
+        onScroll={onListScrollForJump}
+      >
         {messages.map((m, idx) => {
           if (m.role === "user") {
             return (
@@ -1074,6 +1109,28 @@ export default function Laboratorio() {
       </div>
 
       <div className="lab-inputbar">
+        {showJumpDown && (
+          <button
+            type="button"
+            className="lab-jumpdown"
+            onClick={jumpToBottom}
+            aria-label="Ir al final de la conversación"
+            title="Ir al final"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              <path d="M12 5v14" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M5 12l7 7 7-7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         <form
           className={`lab-composer ${dropping ? "lab-composer--drop" : ""}`}
           onSubmit={(e) => {

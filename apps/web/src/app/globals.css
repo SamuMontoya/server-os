@@ -1137,6 +1137,7 @@ html.lab-route body::after {
    desfase entre ambos era justo el hueco que aparecía al abrir el teclado.
    El padding-bottom con safe-area evita que la barra de gestos la tape. */
 .lab-inputbar {
+  position: relative;
   margin-top: auto;
   display: flex;
   /* Columna: composer arriba, pie de estado debajo. El eje principal pasa a
@@ -1737,6 +1738,32 @@ html.lab-route.lab-kb .lab-inputbar {
    la única salida para cortar una respuesta larga). */
 .lab-send--stop { background: #37352f; }
 .lab-send--stop:disabled { background: #d3d1cb; }
+
+/* Botón circular de "ir al final": mismo estilo que .lab-send (círculo negro,
+   flecha blanca) pero flotando SOBRE el borde superior del composer, centrado,
+   para saltar al fondo cuando hay tanto texto arriba que ya no se ve el final.
+   Aparece/desaparece con la posición del scroll (ver showJumpDown). */
+.lab-jumpdown {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: #37352f;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  transition: background 0.15s, transform 0.15s;
+}
+.lab-jumpdown:hover { background: #000; }
+.lab-jumpdown:active { transform: translate(-50%, -50%) scale(0.92); }
 /* iOS Safari hace auto-zoom al enfocar un input/textarea con font-size
    menor a 16px. Forzamos 16px solo en viewports táctiles/estrechos para
    no cambiar el tamaño visual en desktop. Mismo problema en el composer
