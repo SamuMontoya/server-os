@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start -p ${NEXT_PUBLIC_WEB_PORT:-31415}",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/lib/*.test.ts",
     "usage:token": "node scripts/hermes-usage-token.mjs"
   },
   "dependencies": {
@@ -29,6 +30,7 @@
     "@types/react-dom": "^19.2.5",
     "@types/three": "^0.185.4",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.3"
   }
 }

@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatSessionSummary, ChatToolStep } from "@hermes/shared";
 import {
-  streamChat,
   listChatSessions,
   getChatSession,
   claudeOpenTerminal,
@@ -11,6 +10,13 @@ import {
   type ChatMessage,
   type ClaudeExecConfig,
 } from "@/lib/hermes";
+import { startTurn, attachTurn, stopTurn, fetchTurn } from "@/lib/chat-turns";
+import {
+  loadChat,
+  saveChat,
+  type ChatTab,
+  type TabsState,
+} from "@/lib/chat-persist";
 import { useSpeechDictation } from "@/hooks/useSpeechDictation";
 import { beginSpeechTurn, feedSpeech } from "@/hooks/useSpeech";
 import { SpeechHighlight } from "./SpeechHighlight";
@@ -27,30 +33,12 @@ import { uuid } from "@/lib/uuid";
  * Consola con TABS: cada tab es una conversación (una sesión del Agent SDK).
  * El historial se lee DIRECTO de ~/.claude/projects — la misma fuente que ve
  * `claude` abierto en Cursor dentro del repo del proyecto en foco.
+ *
+ * Los turnos NO viven en este componente: los corre el motor del agente
+ * (agent/chat-turns.ts) y aquí solo se siguen. Es lo que permite bloquear la
+ * pantalla del teléfono a mitad de una respuesta y encontrarla completa al
+ * volver. El modelo del tab y su persistencia viven en lib/chat-persist.ts.
  */
-
-// ── Modelo de tab ───────────────────────────────────────────────────────
-interface ChatTab {
-  /** id del tab; también viaja como X-Hermes-Session-Id (clave por tab). */
-  key: string;
-  /** sesión SDK que este tab resume (uuid del jsonl); null = aún sin crear. */
-  sdkSessionId: string | null;
-  title: string;
-  messages: ChatMessage[];
-  /**
-   * Pasos agénticos por índice de mensaje del asistente. Van APARTE de
-   * `messages` a propósito: el historial que se manda al agente es solo
-   * role/content — los pasos son presentación del turno en vivo.
-   */
-  steps: Record<number, ChatToolStep[]>;
-  draft: string;
-  busy: boolean;
-}
-
-interface TabsState {
-  tabs: ChatTab[];
-  active: string;
-}
 
 const newTab = (): ChatTab => ({
   key: uuid(),
@@ -123,7 +111,18 @@ export function ChatPanel({
   /** El hero del home ya da la bienvenida: no la repitas dentro. */
   hideEmptyHint?: boolean;
 }) {
-  const [state, setState] = useState<TabsState>(freshState);
+  const projKey = selectedProject || "general";
+
+  // Hidratación: UNA lectura del navegador en el primer render. Sin esto, cada
+  // remontaje —y iOS remonta cada vez que recupera la pestaña que mató en
+  // segundo plano— arrancaba un chat nuevo y vacío sobre una conversación que
+  // seguía existiendo en el servidor.
+  const hydrated = useRef<Record<string, TabsState> | null | undefined>(undefined);
+  if (hydrated.current === undefined) hydrated.current = loadChat();
+
+  const [state, setState] = useState<TabsState>(
+    () => hydrated.current?.[projKey] ?? freshState(),
+  );
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -132,10 +131,15 @@ export function ChatPanel({
   const voice = useVoiceConnect();
   const ws = useWorkspace();
 
-  // Tabs por proyecto: al cambiar el foco se guardan y restauran (en memoria).
-  const byProject = useRef(new Map<string, TabsState>());
-  const projKey = selectedProject || "general";
+  // Tabs por proyecto: al cambiar el foco se guardan y restauran.
+  const byProject = useRef(
+    new Map<string, TabsState>(
+      Object.entries(hydrated.current ?? {}).filter(([k]) => k !== projKey),
+    ),
+  );
   const prevProj = useRef(projKey);
+  /** Desengancha los streams vivos, por tab. Nunca cancela el turno. */
+  const followers = useRef(new Map<string, () => void>());
 
   const [histOpen, setHistOpen] = useState(false);
   const [hist, setHist] = useState<ChatSessionSummary[] | null>(null);
@@ -198,6 +202,46 @@ export function ChatPanel({
       }
     }
   };
+
+  // ── Persistencia del hilo ─────────────────────────────────────────────
+  // Todo lo visible se guarda en el navegador. `byProject` se muta por ref
+  // (los streams escriben en tabs de proyectos que ya no están en foco), así
+  // que se persiste con el estado actual encima.
+  const persistNow = () => {
+    const all = Object.fromEntries(byProject.current);
+    all[projKey] = stateRef.current;
+    saveChat(all);
+  };
+  const persistRef = useRef(persistNow);
+  persistRef.current = persistNow;
+
+  /**
+   * Guardar tras un `updateTab`. Va en un timeout a propósito: `setState` es
+   * asíncrono, así que llamar a persistNow() en la línea siguiente guardaría
+   * el estado ANTERIOR — justo sin el dato que se quería salvar.
+   */
+  const schedulePersist = () => {
+    setTimeout(() => persistRef.current(), 0);
+  };
+
+  useEffect(() => {
+    // Escribir en cada delta sería absurdo (varias veces por segundo): se
+    // agrupa. Lo importante es que el turno cerrado se guarde, y de eso se
+    // encarga el `persistRef.current()` explícito al terminar.
+    const t = setTimeout(() => persistRef.current(), 400);
+    return () => clearTimeout(t);
+  }, [state, projKey]);
+
+  // Al irse (cerrar, cambiar de app en iOS) se guarda ya, sin esperar el
+  // debounce: "pagehide" es el único evento fiable en Safari móvil.
+  useEffect(() => {
+    const flush = () => persistRef.current();
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flush();
+    });
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
 
   const scrollDown = (force = false) => {
     if (!force && !nearBottom.current) return;
@@ -323,6 +367,190 @@ export function ChatPanel({
     setHistOpen(false);
   };
 
+  // ── Seguir un turno del servidor ──────────────────────────────────────
+  /**
+   * Engancha el stream del turno y vuelca sus eventos en el tab. Se usa en dos
+   * momentos: al enviar, y al volver a la app para reengancharse a un turno que
+   * siguió corriendo mientras la pantalla estaba bloqueada.
+   *
+   * `replyIdx` es el índice del mensaje del asistente que este turno escribe.
+   */
+  const follow = (tabKey: string, turnId: string, from: number, replyIdx: number) => {
+    followers.current.get(tabKey)?.();
+    let spoken = "";
+
+    const writeReply = (fn: (prev: string) => string) =>
+      updateTab(tabKey, (t) => {
+        const msgs = [...t.messages];
+        const at = msgs[replyIdx]?.role === "assistant" ? replyIdx : msgs.length - 1;
+        if (at < 0 || msgs[at]?.role !== "assistant") return t;
+        msgs[at] = { role: "assistant", content: fn(msgs[at].content) };
+        return { ...t, messages: msgs };
+      });
+
+    const close = attachTurn(turnId, from, {
+      // Snapshot al conectar y en cada reconexión: el texto del SERVIDOR es la
+      // verdad. Repintar con él es lo que cierra el hueco de lo que pasó
+      // mientras el teléfono estaba dormido.
+      onState: (st) => {
+        if (st.text) {
+          writeReply(() => st.text);
+          spoken = st.text;
+        }
+        if (st.steps.length > 0) {
+          updateTab(tabKey, (t) => ({ ...t, steps: { ...t.steps, [replyIdx]: st.steps } }));
+        }
+        updateTab(tabKey, (t) => ({
+          ...t,
+          stalled: false,
+          busy: st.status === "running",
+          sdkSessionId: t.sdkSessionId ?? st.sdkSessionId ?? null,
+          pendingTurn: st.status === "running" ? { id: turnId, seq: st.seq } : undefined,
+        }));
+        scrollDown();
+      },
+      onDelta: (text, seq) => {
+        spoken += text;
+        // Habla mientras renderiza: encola las frases ya completas y deja
+        // fuera la última, que puede estar a medias.
+        feedSpeech(spoken);
+        writeReply((prev) => prev + text);
+        // Si venía de un reintento, el primer delta prueba que ya salió bien:
+        // dejar el aviso puesto haría pensar que sigue atascado.
+        updateTab(tabKey, (t) => ({
+          ...t,
+          retryAttempt: undefined,
+          pendingTurn: { id: turnId, seq },
+        }));
+        scrollDown();
+      },
+      onTool: (step) => {
+        updateTab(tabKey, (t) => ({
+          ...t,
+          steps: { ...t.steps, [replyIdx]: [...(t.steps[replyIdx] ?? []), step] },
+        }));
+        scrollDown();
+      },
+      onSession: (sid) =>
+        updateTab(tabKey, (t) => ({ ...t, sdkSessionId: t.sdkSessionId ?? sid })),
+      // El servidor reintenta solo: decirlo es mejor que un "pensando" mudo.
+      onRetry: (attempt) => updateTab(tabKey, (t) => ({ ...t, retryAttempt: attempt })),
+      onEnd: (status) => {
+        followers.current.delete(tabKey);
+        if (status === "error") {
+          // Sin nada escrito, el error ES la respuesta; con texto parcial se
+          // respeta lo que el usuario ya leyó y se avisa al final.
+          void fetchTurn(turnId).then((st) => {
+            const detail = st?.error ? `⚠ ${st.error}` : "⚠ el turno falló";
+            writeReply((prev) => (prev.trim() ? `${prev}\n\n${detail}` : detail));
+            schedulePersist();
+          });
+        }
+        updateTab(tabKey, (t) => ({
+          ...t,
+          busy: false,
+          stalled: false,
+          retryAttempt: undefined,
+          pendingTurn: undefined,
+        }));
+        feedSpeech(spoken, { final: true });
+        scrollDown();
+        // El hilo queda completo justo aquí: es el guardado que importa.
+        schedulePersist();
+      },
+      // Se acabaron las reconexiones. El turno sigue vivo en el servidor: se
+      // conserva `pendingTurn` para reengancharse al volver.
+      onDisconnected: (lastSeq) => {
+        followers.current.delete(tabKey);
+        updateTab(tabKey, (t) => ({
+          ...t,
+          stalled: true,
+          pendingTurn: { id: turnId, seq: lastSeq },
+        }));
+        schedulePersist();
+      },
+    });
+    followers.current.set(tabKey, close);
+  };
+
+  /**
+   * Reengancha los turnos que quedaron a medias. Se llama al montar y al
+   * volver del segundo plano: si el turno terminó mientras no estábamos, se
+   * pinta su respuesta completa; si sigue, se sigue en vivo.
+   */
+  const resumePendingTurns = () => {
+    const all = [
+      ...stateRef.current.tabs,
+      ...[...byProject.current.values()].flatMap((st) => st.tabs),
+    ];
+    for (const tab of all) {
+      const pending = tab.pendingTurn;
+      if (!pending) continue;
+      if (followers.current.has(tab.key)) continue; // ya enganchado
+      // El turno escribe en el ÚLTIMO mensaje del asistente. Si por lo que sea
+      // no hay uno (se guardó entre el envío y el placeholder), se crea: sin
+      // hueco donde escribir, la respuesta recuperada no se vería.
+      let replyIdx = tab.messages.length - 1;
+      if (tab.messages[replyIdx]?.role !== "assistant") {
+        replyIdx = tab.messages.length;
+        updateTab(tab.key, (t) => ({
+          ...t,
+          messages: [...t.messages, { role: "assistant", content: "" }],
+        }));
+      }
+      void fetchTurn(pending.id, pending.seq).then((st) => {
+        if (!st) {
+          // El agente se reinició y el turno ya no existe. Lo honesto es
+          // decirlo, no dejar el tab ocupado para siempre.
+          updateTab(tab.key, (t) => {
+            const msgs = [...t.messages];
+            const at = msgs.length - 1;
+            if (msgs[at]?.role === "assistant" && !msgs[at].content.trim()) {
+              msgs[at] = {
+                role: "assistant",
+                content: "⚠ el turno se perdió al reiniciarse el agente. Vuelve a preguntar.",
+              };
+            }
+            return { ...t, messages: msgs, busy: false, stalled: false, pendingTurn: undefined };
+          });
+          schedulePersist();
+          return;
+        }
+        // Corriendo o cerrado, `follow` resuelve los dos casos: su primer
+        // `state` trae el texto íntegro y, si ya cerró, cierra de una.
+        follow(tab.key, pending.id, pending.seq, replyIdx);
+      });
+    }
+  };
+
+  // Al montar: recuperar lo que quedó corriendo. Este es el efecto que hace
+  // que volver al dashboard desde el teléfono muestre la respuesta en vez de
+  // un hilo cortado.
+  useEffect(() => {
+    resumePendingTurns();
+    return () => {
+      // Desmontar suelta los streams, nunca los turnos.
+      for (const close of followers.current.values()) close();
+      followers.current.clear();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Al volver del segundo plano: iOS cierra las conexiones de una pestaña
+  // congelada sin avisar, así que al recuperar visibilidad se re-engancha.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resumePendingTurns();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Enviar (por tab, con resume de SU sesión SDK) ─────────────────────
   const send = async (tabKey: string) => {
     const all = [
@@ -351,43 +579,21 @@ export function ChatPanel({
     // Si estaba leyendo la respuesta anterior, se calla: el turno nuevo manda.
     beginSpeechTurn();
 
-    // Se acumula aparte para poder leerla al cerrar el turno sin volver a
-    // buscarla en el estado (que para entonces ya puede haber cambiado de tab).
-    let reply = "";
-
+    // El turno se ENCARGA al servidor. Lo único que se guarda aquí es su id:
+    // con eso, cualquier cliente (esta pestaña tras un remontaje, el teléfono
+    // al desbloquearse) puede volver a engancharse.
     try {
-      await streamChat(
-        history,
-        (delta) => {
-          reply += delta;
-          // Habla mientras renderiza: encola las frases ya completas y deja
-          // fuera la última, que puede estar a medias.
-          feedSpeech(reply);
-          updateTab(tabKey, (t) => {
-            const msgs = [...t.messages];
-            const last = msgs[msgs.length - 1];
-            msgs[msgs.length - 1] = { ...last, content: last.content + delta };
-            return { ...t, messages: msgs };
-          });
-          scrollDown();
-        },
-        {
-          project: selectedProject,
-          sessionKey: tabKey,
-          resume: tab.sdkSessionId,
-          // El tab adopta la sesión SDK apenas nace → los próximos turnos
-          // resumen ese MISMO jsonl (visible también desde Cursor).
-          onSession: (sid) =>
-            updateTab(tabKey, (t) => ({ ...t, sdkSessionId: t.sdkSessionId ?? sid })),
-          onTool: (step) => {
-            updateTab(tabKey, (t) => ({
-              ...t,
-              steps: { ...t.steps, [replyIdx]: [...(t.steps[replyIdx] ?? []), step] },
-            }));
-            scrollDown();
-          },
-        },
-      );
+      const turnId = await startTurn({
+        message: content,
+        sessionKey: tabKey,
+        project: selectedProject,
+        resume: tab.sdkSessionId,
+      });
+      updateTab(tabKey, (t) => ({ ...t, pendingTurn: { id: turnId, seq: 0 } }));
+      // El id se guarda de inmediato: es lo único que hace falta para
+      // recuperar el turno si esta pestaña muere en el segundo siguiente.
+      schedulePersist();
+      follow(tabKey, turnId, 0, replyIdx);
     } catch (err) {
       updateTab(tabKey, (t) => {
         const msgs = [...t.messages];
@@ -395,15 +601,20 @@ export function ChatPanel({
           role: "assistant",
           content: `⚠ ${err instanceof Error ? err.message : String(err)}`,
         };
-        return { ...t, messages: msgs };
+        return { ...t, messages: msgs, busy: false, pendingTurn: undefined };
       });
-    } finally {
-      updateTab(tabKey, (t) => ({ ...t, busy: false }));
       scrollDown();
-      // Cierra la cola con la última frase. Se autocensura si el toggle
-      // está apagado.
-      feedSpeech(reply, { final: true });
     }
+  };
+
+  /** ⏹ Detener: cancelación EXPLÍCITA del turno del tab activo. */
+  const stopActive = async () => {
+    const pending = active.pendingTurn;
+    if (!pending) return;
+    await stopTurn(pending.id);
+    // El evento `stopped` del stream cierra el resto; esto es solo para que el
+    // botón responda ya aunque el stream venga con retraso.
+    updateTab(active.key, (t) => ({ ...t, busy: false, pendingTurn: undefined }));
   };
 
   // Enviar el prompt al CLI real de Claude Code (Terminal.app o panel embebido).
@@ -628,6 +839,18 @@ export function ChatPanel({
                   <Pensando />
                 ) : null}
               </div>
+              {/* El turno vive en el servidor: cuando reintenta o cuando se
+                  pierde la conexión hay que DECIRLO, porque el silencio se
+                  lee como "se colgó". */}
+              {streaming && active.retryAttempt ? (
+                <span className="text-2xs tracking-[0.15em] text-amber uppercase">
+                  reintentando ({active.retryAttempt}/3)…
+                </span>
+              ) : streaming && active.stalled ? (
+                <span className="text-2xs tracking-[0.15em] text-text-faint uppercase">
+                  sin conexión — el turno sigue en el servidor
+                </span>
+              ) : null}
               {/* Acciones SOLO al terminar (patrón Claude · ChatGPT · Bard):
                   durante el stream la respuesta aún no es copiable ni final. */}
               {!streaming && m.content && (
@@ -808,23 +1031,41 @@ export function ChatPanel({
           </button>
         )}
 
-        <button
-          type="submit"
-          title="Enviar (Enter)"
-          aria-label="Enviar"
-          disabled={active.busy || !active.draft.trim()}
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-sm border border-violet bg-violet/5 text-violet transition-opacity disabled:opacity-30"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M4 12h14M13 6l6 6-6 6"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+        {/* Con un turno en vuelo el botón DETIENE (patrón ChatGPT/Claude).
+            Ya no basta con recargar: los turnos viven en el servidor y
+            sobreviven a la pestaña, así que sin ⏹ el tab quedaría ocupado
+            esperando a un turno que nadie puede cortar. */}
+        {active.busy ? (
+          <button
+            type="button"
+            onClick={stopActive}
+            title="Detener"
+            aria-label="Detener"
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-sm border border-line bg-bg-soft text-text-dim transition-colors hover:border-violet hover:text-violet"
+          >
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="5" y="5" width="14" height="14" rx="2" />
+            </svg>
+          </button>
+        ) : (
+          <button
+            type="submit"
+            title="Enviar (Enter)"
+            aria-label="Enviar"
+            disabled={!active.draft.trim()}
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-sm border border-violet bg-violet/5 text-violet transition-opacity disabled:opacity-30"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M4 12h14M13 6l6 6-6 6"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
       </form>
     </div>
   );

@@ -9,6 +9,9 @@ node_modules/
 
 # next
 apps/web/.next/
+# build atómico del servidor (scripts/deploy-linux.sh)
+apps/web/.next-build/
+apps/web/.next-prev/
 apps/web/out/
 apps/web/next-env.d.ts
 

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Chakra_Petch, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -21,6 +21,24 @@ const mono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "HERMES OS",
   description: "AI Operating System personal de RuloCode",
+  // Instalado en la pantalla de inicio del iPhone, el dashboard se abre en
+  // modo app (sin barra de Safari). `appleWebApp` es lo que iOS mira: sin él
+  // queda como un marcador y se comporta como una pestaña más.
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Hermes" },
+  icons: {
+    icon: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+};
+
+/** El notch/isla y la barra de estado pintadas con el fondo de la app. */
+export const viewport: Viewport = {
+  themeColor: "#05060f",
+  // El dashboard maneja su propio scroll; el zoom por pinza en móvil rompe el
+  // layout de la consola y no aporta nada aquí.
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

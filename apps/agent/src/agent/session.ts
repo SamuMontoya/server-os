@@ -101,6 +101,12 @@ export interface RunTurnOptions {
   onSession?: (sdkSessionId: string) => void;
   /** Avisa cada tool_use del turno (la consola los pinta como pasos). */
   onTool?: (step: ChatToolStep) => void;
+  /**
+   * Cancelación EXPLÍCITA del turno (⏹ Detener). Ojo: no atar esto al signal
+   * de un request — que el cliente se vaya (pantalla bloqueada, cambio de app)
+   * no es una orden de cancelar. Ver agent/chat-turns.ts.
+   */
+  abortController?: AbortController;
 }
 
 /**
@@ -184,6 +190,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         includePartialMessages: true,
         settingSources: [],
         resume: opts.resumeSessionId,
+        ...(opts.abortController ? { abortController: opts.abortController } : {}),
         mcpServers: {
           hermes: hermesMcpServer,
           ...(linearEnabled() ? { linear: linearMcpServer() } : {}),

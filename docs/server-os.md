@@ -175,6 +175,13 @@ journalctl --user -u hermes-agent -f
 curl -s localhost:8650/health
 ```
 
+Si un servicio quedó en `failed`, systemd **ignora los `start` siguientes**
+(`Start request repeated too quickly`) hasta que se limpie el contador:
+
+```bash
+systemctl --user reset-failed hermes-web
+```
+
 El arranque imprime el estado completo — si algo responde raro, empieza ahí:
 
 ```
@@ -187,10 +194,28 @@ consumo: normal (sesión 16%)
 ### Actualizar
 
 ```bash
-git pull && pnpm install --frozen-lockfile && \
-  NODE_OPTIONS="--max-old-space-size=1536" pnpm build && \
-  systemctl --user restart hermes-agent hermes-web
+./scripts/deploy-linux.sh --detach     # y seguirlo: journalctl --user -u server-os-deploy -f
+./scripts/deploy-linux.sh              # en primer plano (dentro de tmux)
+./scripts/deploy-linux.sh --rollback   # volver al build anterior en segundos
 ```
+
+No es azúcar sobre el `git pull && pnpm build && restart` de siempre: ese
+one-liner **se lleva el dashboard por delante cuando falla**. `next build`
+vacía su directorio de salida al arrancar, así que cualquier interrupción
+—OOM, un `Ctrl-C`, la sesión SSH que se corta a los tres minutos de build—
+deja `apps/web/.next` sin `BUILD_ID` y el dashboard no vuelve a arrancar. No
+hay build viejo al que caer: lo borró el intento nuevo.
+
+El script cierra las tres puertas:
+
+- **Compila a `.next-build`** (vía `HERMES_WEB_DIST_DIR`, que lee
+  `next.config.ts`) y solo lo intercambia con `.next` si el build terminó y
+  dejó `BUILD_ID`. Un build fallido ya no toca lo que está sirviendo. El
+  anterior queda en `.next-prev` para `--rollback`.
+- **`--detach`** lo corre como servicio transitorio de systemd, inmune a la
+  desconexión. Sin él, el propio script avisa si estás en SSH sin tmux.
+- **Limpia el `failed`** antes de arrancar y **verifica** los dos puertos al
+  terminar, con el comando de rollback en el mensaje de error.
 
 Sin cambios en `apps/web` basta reiniciar el agente.
 
@@ -219,4 +244,28 @@ ningún rango privado clásico. El allowlist de `index.ts` ya lo incluye; si
 agregas otra red, ahí es.
 
 **El build necesita swap.** Con 3.2 GB de RAM, `next build` no entra sin él.
-El instalador aborta antes de intentarlo en vez de morir a mitad.
+El instalador aborta antes de intentarlo en vez de morir a mitad. El swapfile
+se añadió a mano: si no quedó en `/etc/fstab` no sobrevive un reinicio, y el
+síntoma no es "falta swap" sino un build que muere solo. Compruébalo con
+`swapon --show`.
+
+**Un trabajo dentro de un request se muere con el request.** Es el patrón que
+más caro salió en este fork. El dashboard se abre desde el iPhone por
+Tailscale, y ahí bloquear la pantalla o cambiar de app es igual a cerrar la
+pestaña: iOS la congela y luego la mata. Cualquier turno que viviera dentro de
+su propio SSE se perdía a mitad —y peor, `content/chat.ts` ataba el
+`AbortController` del SDK al signal del request, así que la desconexión
+CANCELABA el trabajo con la pieza ya editada a medias. Regla nueva: el trabajo
+vive en el servidor con id propio y buffer (`agent/chat-turns.ts`,
+`agent/claude-cli.ts`), el cliente solo escucha y se re-adjunta por cursor, y
+cancelar es una llamada explícita (`/stop`). Que el cliente se vaya no es una
+orden de cancelar.
+
+**Un build a medias deja el dashboard muerto, no degradado.** `next build`
+vacía su directorio de salida ANTES de compilar, así que un OOM o un SSH que
+se corta borran el build que estaba sirviendo sin dejar reemplazo, y `next
+start` ya no arranca. Systemd lo empeora: agota `StartLimitBurst` y pasa a
+contestar `Start request repeated too quickly`, que no menciona el build por
+ningún lado y parece un problema del servicio. Por eso el deploy compila
+aparte e intercambia al final — nunca corras `pnpm build` a pelo en el
+servidor, usa `./scripts/deploy-linux.sh --detach`.

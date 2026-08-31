@@ -198,7 +198,8 @@ export function PieceChat({ piece }: { piece: ContentPiece }) {
         if (buffer.trim()) handle(buffer);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
-          // Stop: lo streameado vale; el server también abortó el turno.
+          // Stop: lo streameado vale. El turno del servidor lo corta el POST
+          // a /chat/stop, no este abort — que solo suelta la escucha.
           patchLive((p) => ({ ...p, content: p.content || "(detenido)" }));
         } else {
           patchLive((p) => ({
@@ -216,7 +217,18 @@ export function PieceChat({ piece }: { piece: ContentPiece }) {
     [busy, piece.id, mergePiece, patchLive],
   );
 
-  const stop = () => abortRef.current?.abort();
+  /**
+   * ⏹ Detener. Cortar el fetch NO basta: el turno vive en el agente y sigue
+   * editando la pieza aunque nadie escuche (a propósito — así bloquear la
+   * pantalla del teléfono ya no tira el trabajo a la basura). Así que primero
+   * se le pide al servidor que pare y luego se suelta el stream.
+   */
+  const stop = () => {
+    void hermesFetch(`/content/pieces/${piece.id}/chat/stop`, { method: "POST" }).catch(
+      () => {},
+    );
+    abortRef.current?.abort();
+  };
 
   const copyMsg = (content: string, i: number) => {
     void navigator.clipboard?.writeText(content);

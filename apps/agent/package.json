@@ -8,6 +8,7 @@
     "start": "tsx src/index.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts",
     "google:auth": "tsx scripts/google-oauth.ts",
     "live:sim": "tsx scripts/live-sim.ts",
     "seed:content": "tsx scripts/seed-content.ts",
