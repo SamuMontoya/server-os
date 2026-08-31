@@ -87,8 +87,25 @@ export interface PieceChatHandlers {
   onPiece?: (piece: ContentPiece, fields: string[]) => void;
   /** El agente arrancó una tool (la UI muestra "editando la pieza…"). */
   onTool?: (name: string) => void;
-  /** Abortar el turno (Stop del cliente / desconexión del SSE). */
-  signal?: AbortSignal;
+}
+
+/**
+ * Turnos vivos por pieza, para el ⏹ Detener.
+ *
+ * Antes el abort se ataba al signal del REQUEST, y eso mezclaba dos cosas muy
+ * distintas: "el usuario quiere parar" y "se cayó la conexión". Cerrar la
+ * pestaña —o bloquear la pantalla del teléfono, que en iOS es lo mismo—
+ * mataba un turno que el agente estaba a mitad de resolver, con la pieza ya
+ * modificada a medias. Ahora detener es una llamada explícita.
+ */
+const running = new Map<number, AbortController>();
+
+/** ⏹ del cliente. Devuelve false si esa pieza no tenía turno corriendo. */
+export function stopPieceChat(pieceId: number): boolean {
+  const abort = running.get(pieceId);
+  if (!abort) return false;
+  abort.abort();
+  return true;
 }
 
 export interface PieceChatResult {
@@ -245,13 +262,11 @@ export async function pieceChatTurn(
   // memoria del resume lo conserva y repetirlo en cada turno sería pagar
   // tokens por lo mismo.
   const creative = resume ? "" : await buildCreativeContext(piece);
-  // Stop real: el AbortController del SDK se ata al signal del request — si
-  // el cliente corta (botón Stop o cierre del tab), el turno muere de verdad.
+  // El controlador queda registrado por pieza: lo dispara `stopPieceChat`, no
+  // la desconexión del cliente. Un turno nuevo sustituye al anterior.
   const abort = new AbortController();
-  if (handlers.signal) {
-    if (handlers.signal.aborted) abort.abort();
-    else handlers.signal.addEventListener("abort", () => abort.abort(), { once: true });
-  }
+  running.get(pieceId)?.abort();
+  running.set(pieceId, abort);
   // El turno puede traer varios bloques de texto (narración → tool →
   // confirmación): el historial guarda TODO lo que se streameó, no solo el último.
   const parts: string[] = [];
@@ -320,6 +335,10 @@ export async function pieceChatTurn(
       console.error("[content] chat:", String(err).slice(0, 200));
     }
   }
+
+  // Solo se limpia si sigue siendo NUESTRO controlador: un turno posterior ya
+  // registró el suyo y borrarlo dejaría su ⏹ sin efecto.
+  if (running.get(pieceId) === abort) running.delete(pieceId);
 
   const reply = parts.join("\n\n");
   if (reply.trim()) void appendChatMessage(pieceId, "assistant", reply);

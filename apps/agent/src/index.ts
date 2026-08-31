@@ -34,14 +34,7 @@ import { getUpcomingCalendar, invalidateCalendarCache } from "./calendar.js";
 import * as gcal from "./google-calendar.js";
 import { registerJob, listJobs } from "./jobs.js";
 import { readCodeGraph3D, updateCodeGraph } from "./code-graph.js";
-import {
-  getSdkSession,
-  getTask,
-  listTasks,
-  runAgentTurn,
-  saveSdkSession,
-  startTask,
-} from "./agent/session.js";
+import { getSdkSession, getTask, listTasks, startTask } from "./agent/session.js";
 import {
   openClaudeTerminal,
   startClaudeRun,
@@ -53,7 +46,6 @@ import {
 } from "./agent/claude-cli.js";
 import { getDailyUsage } from "./usage.js";
 import {
-  appendTurn,
   getConversation,
   clearConversation,
   archiveConversation,
@@ -61,6 +53,7 @@ import {
   restoreChat,
 } from "./conversations.js";
 import { listChatSessions, readChatSession, resolveChatCwd } from "./agent/chat-history.js";
+import { chatTurns, type TurnEvent } from "./agent/chat-turns.js";
 import {
   listMeetings,
   getMeeting,
@@ -205,7 +198,7 @@ import {
   schedulePublications,
 } from "./content/publish.js";
 import { generatePartVariants } from "./content/variants.js";
-import { pieceChatTurn } from "./content/chat.js";
+import { pieceChatTurn, stopPieceChat } from "./content/chat.js";
 import { buildDailyBrief } from "./brief.js";
 import { openInCursor } from "./agent/editor.js";
 import {
@@ -392,6 +385,18 @@ app.post("/v1/chat/completions", async (c) => {
     ],
   });
 
+  // El turno corre en el MOTOR (agent/chat-turns.ts), no dentro de este
+  // request: si el cliente se cae a mitad —iOS congelando la pestaña— el
+  // trabajo sigue, se persiste y se puede recuperar por `/chat/turns/:id`.
+  // Este endpoint conserva el contrato OpenAI para la voz y el móvil.
+  const turn = chatTurns.start({
+    prompt: lastUser,
+    sessionKey: clientSession,
+    project: focusProject,
+    cwd,
+    resumeSessionId: resume,
+  });
+
   return streamSSE(c, async (stream) => {
     // Serializamos las escrituras para conservar el orden de los deltas.
     let queue: Promise<unknown> = Promise.resolve();
@@ -401,38 +406,151 @@ app.post("/v1/chat/completions", async (c) => {
       );
       return queue;
     };
+    // El id del turno viaja primero: con él, un cliente que se cayó puede
+    // recuperar la respuesta después en vez de perderla.
+    await send({ hermes: { turn_id: turn.id } });
 
-    let assistantText = "";
-    const result = await runAgentTurn({
-      prompt: lastUser,
-      resumeSessionId: resume,
-      project: focusProject,
-      cwd,
-      // Anuncia el session id del SDK apenas nace: el tab lo adopta y los
-      // próximos turnos resumen esa MISMA sesión (mismo jsonl en disco).
-      onSession: (sessionId) => void send({ hermes: { session_id: sessionId } }),
-      // Pasos agénticos del turno: la consola los pinta en el hilo en vez de
-      // un "pensando…" opaco. Van por el stream (no por el bus global) para
-      // que cada paso quede atado al tab que lo disparó.
-      onTool: (step) => void send({ hermes: { tool: step } }),
-      onDelta: (t) => {
-        assistantText += t;
-        void send(chunk(t));
+    await pipeTurn(turn.id, 0, {
+      onEvent: (e) => {
+        if (e.kind === "delta" && e.text) void send(chunk(e.text));
+        else if (e.kind === "session" && e.sessionId)
+          void send({ hermes: { session_id: e.sessionId } });
+        else if (e.kind === "tool" && e.tool) void send({ hermes: { tool: e.tool } });
+        else if (e.kind === "retry")
+          void send({ hermes: { retry: { attempt: e.attempt ?? 0, reason: e.text ?? "" } } });
       },
+      // Cerrar el socket NO cancela el turno: solo deja de escucharlo.
+      signal: c.req.raw.signal,
     });
 
-    if (result.sdkSessionId) {
-      await saveSdkSession(clientSession, result.sdkSessionId, "text");
-    }
-    // Persiste el turno en el historial del proyecto en foco (o "general").
-    void appendTurn(
-      focusProject || "general",
-      lastUser,
-      assistantText || result.finalText,
-      clientSession,
-    );
     await send(chunk(null, "stop"));
     await send("[DONE]");
+    await queue;
+  });
+});
+
+/**
+ * Puente motor → SSE, común a los dos endpoints de streaming.
+ *
+ * Se suscribe y toma el snapshot en el MISMO tick (sin await entre medias) para
+ * que ningún evento caiga entre el replay y la suscripción. Resuelve cuando el
+ * turno cierra o cuando el cliente se va; en el segundo caso el turno SIGUE.
+ */
+async function pipeTurn(
+  turnId: string,
+  from: number,
+  opts: {
+    onEvent: (e: TurnEvent) => void;
+    signal: AbortSignal;
+    onSnapshot?: (snap: NonNullable<ReturnType<typeof chatTurns.snapshot>>) => void;
+  },
+): Promise<void> {
+  const terminal = new Set(["done", "error", "stopped"]);
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    let unsub: (() => void) | null = null;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      unsub?.();
+      resolve();
+    };
+    const attached = chatTurns.attach(turnId, from, (e) => {
+      opts.onEvent(e);
+      if (terminal.has(e.kind)) settle();
+    });
+    if (!attached) return settle();
+    unsub = attached.unsubscribe;
+    opts.onSnapshot?.(attached.snapshot);
+    for (const e of attached.snapshot.events) opts.onEvent(e);
+    // Ya estaba cerrado antes de suscribirnos (el caso de quien vuelve tarde).
+    if (attached.snapshot.status !== "running") return settle();
+    if (attached.snapshot.events.some((e) => terminal.has(e.kind))) return settle();
+    opts.signal.addEventListener("abort", settle);
+  });
+}
+
+// ── Turnos del chat: arrancar, re-adjuntarse, detener ──────────────────
+// El cliente manda el turno y se lo puede olvidar. Al volver —otro día, otro
+// dispositivo, la pantalla desbloqueada— pide el snapshot o se re-engancha al
+// stream desde su cursor. Nada de esto depende de que la pestaña siga viva.
+
+app.post("/chat/turns", async (c) => {
+  const b = await c.req
+    .json<{ message?: string; session_key?: string; project?: string; resume?: string }>()
+    .catch(() => ({}) as Record<string, string>);
+  const message = b.message?.trim();
+  if (!message) return c.json({ error: "message requerido" }, 400);
+  const sessionKey = b.session_key || c.req.header("X-Hermes-Session-Id") || "default";
+  const project = b.project || c.req.header("X-Hermes-Project") || undefined;
+  const resume =
+    b.resume && UUID_RE.test(b.resume) ? b.resume : await getSdkSession(sessionKey);
+  const turn = chatTurns.start({
+    prompt: message,
+    sessionKey,
+    project,
+    cwd: await resolveChatCwd(project),
+    resumeSessionId: resume,
+  });
+  return c.json({ turn_id: turn.id, status: turn.status, seq: 0 });
+});
+
+/** Estado + lo que falte desde `from`. Es lo que pide quien vuelve. */
+app.get("/chat/turns/:id", (c) => {
+  const from = Number(c.req.query("from") ?? 0) || 0;
+  const snap = chatTurns.snapshot(c.req.param("id"), from);
+  if (!snap) return c.json({ error: "turno no encontrado" }, 404);
+  return c.json(snap);
+});
+
+/** Turnos recientes de un tab: permite re-engancharse sin recordar el id. */
+app.get("/chat/turns", (c) => {
+  const session = c.req.query("session");
+  if (!session) return c.json({ error: "session requerido" }, 400);
+  return c.json(chatTurns.listBySession(session, Number(c.req.query("limit") ?? 5) || 5));
+});
+
+app.post("/chat/turns/:id/stop", (c) => {
+  const stopped = chatTurns.stop(c.req.param("id"));
+  return c.json({ ok: stopped });
+});
+
+/**
+ * Stream del turno desde `from`. Cerrar esta conexión NO cancela el turno —
+ * para eso está `/stop`. Reconectar con el último `seq` recibido continúa
+ * exactamente donde se quedó.
+ */
+app.get("/chat/turns/:id/stream", (c) => {
+  const id = c.req.param("id");
+  const from = Number(c.req.query("from") ?? 0) || 0;
+  if (!chatTurns.get(id)) return c.json({ error: "turno no encontrado" }, 404);
+
+  return streamSSE(c, async (stream) => {
+    let queue: Promise<unknown> = Promise.resolve();
+    const send = (event: string, data: unknown) => {
+      queue = queue.then(() => stream.writeSSE({ event, data: JSON.stringify(data) }));
+      return queue;
+    };
+    await pipeTurn(id, from, {
+      // `state` primero: el cliente sabe de una si el turno ya terminó
+      // mientras no estaba, y con `text` puede repintar sin depender del
+      // buffer de eventos (que sí se recorta).
+      onSnapshot: (snap) =>
+        void send("state", {
+          status: snap.status,
+          text: snap.text,
+          steps: snap.steps,
+          seq: snap.seq,
+          truncated: snap.truncated,
+          attempts: snap.attempts,
+          sdkSessionId: snap.sdkSessionId,
+          error: snap.error,
+        }),
+      onEvent: (e) => void send("turn", e),
+      signal: c.req.raw.signal,
+    });
+    const final = chatTurns.snapshot(id);
+    await send("end", { status: final?.status ?? "done", seq: final?.seq ?? 0 });
     await queue;
   });
 });
@@ -1577,13 +1695,17 @@ app.post("/content/pieces/:id/chat", async (c) => {
       // `applied` = qué campos tocó la mutación → la UI lo pinta como tarjeta.
       onPiece: (piece, fields) => void send({ piece, applied: fields }),
       onTool: (name) => void send({ tool: name }),
-      // Stop del cliente (o cierre del tab) aborta el turno del SDK de verdad.
-      signal: c.req.raw.signal,
     });
     await send({ done: true, error: result.isError || undefined });
     await queue;
   });
 });
+
+// ⏹ del chat de la pieza. Detener es EXPLÍCITO: que el cliente se caiga no
+// puede abortar un turno que está a mitad de editar la pieza.
+app.post("/content/pieces/:id/chat/stop", (c) =>
+  c.json({ ok: stopPieceChat(Number(c.req.param("id"))) }),
+);
 
 // Crea (o devuelve) el issue de Linear de la pieza — proyecto RuloCode,
 // label "contenido"; el estado local se refleja en el issue al cambiar.

@@ -14,7 +14,17 @@ try {
   /* sin .env raíz o Node antiguo: se usan los defaults del código */
 }
 
+// Directorio de salida del build. Por defecto `.next`, pero el deploy del
+// servidor compila a OTRO directorio y solo lo intercambia si el build
+// terminó bien: `next build` VACÍA su distDir al arrancar, así que compilar
+// sobre el que está sirviendo destruye el dashboard en cuanto el build falla
+// —y en una máquina de 3.2 GB falla por OOM. Ver scripts/deploy-linux.sh.
+// Se pasa por el entorno del comando, NUNCA en el `.env`: `next start` tiene
+// que seguir leyendo `.next`.
+const distDir = process.env.HERMES_WEB_DIST_DIR || ".next";
+
 const nextConfig: NextConfig = {
+  distDir,
   // /orquestador se fusionó al dashboard (tab TAREAS); los links viejos siguen
   // vivos vía redirect permanente.
   redirects: async () => [{ source: "/orquestador", destination: "/", permanent: true }],

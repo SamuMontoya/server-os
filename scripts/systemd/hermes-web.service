@@ -17,9 +17,15 @@ Environment=HOME=__HOME__
 Environment=NODE_ENV=production
 Environment=PATH=__PATH__
 
-# `start` sirve el build ya compilado. Compilar aquí es otra historia: ver
-# scripts/install-linux.sh, que sube swap antes de `next build` porque con
-# 3.2 GB de RAM el build se queda sin memoria.
+# Sin build, `next start` tarda 9s en morir y no dice qué le falta: el journal
+# se llena de cinco arranques de Next y acaba en "Start request repeated too
+# quickly", que parece un problema del servicio y no lo es. Esto falla en el
+# acto y deja en el log la única frase que importa.
+ExecStartPre=/bin/sh -c '[ -f __ROOT__/apps/web/.next/BUILD_ID ] || { echo "FALTA el build de produccion en apps/web/.next — el dashboard no puede arrancar. Compila con: ./scripts/deploy-linux.sh --detach"; exit 1; }'
+
+# `start` solo sirve el build ya compilado. Compilar es otra historia: lo hace
+# scripts/deploy-linux.sh, a un directorio aparte que solo reemplaza a este
+# cuando el build terminó bien.
 ExecStart=__PNPM__ --filter @hermes/web start
 
 Restart=always

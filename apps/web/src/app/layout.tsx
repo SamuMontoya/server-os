@@ -38,6 +38,14 @@ const mono = localFont({
 export const metadata: Metadata = {
   title: "HERMES OS",
   description: "AI Operating System personal de RuloCode",
+  // Instalado en la pantalla de inicio del iPhone, el dashboard se abre en
+  // modo app (sin barra de Safari). `appleWebApp` es lo que iOS mira: sin él
+  // queda como un marcador y se comporta como una pestaña más.
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Hermes" },
+  icons: {
+    icon: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
 };
 
 // Sin esto, Next emite `width=device-width, initial-scale=1` a secas, y el
@@ -51,10 +59,14 @@ export const metadata: Metadata = {
 // el ajuste en automático en vez de depender del scroll del usuario.
 // Safari iOS aún lo ignora — para ese caso queda el fallback de
 // visualViewport en /laboratorio.
+// `themeColor` pinta la barra de estado con el fondo de la app y `viewportFit`
+// deja el contenido llegar bajo el notch cuando corre como app instalada.
 export const viewport: Viewport = {
+  themeColor: "#05060f",
   width: "device-width",
   initialScale: 1,
   interactiveWidget: "resizes-content",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

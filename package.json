@@ -9,6 +9,7 @@
     "dev:agent": "pnpm --filter @hermes/agent dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
     "migrate:clawd": "pnpm --filter @hermes/agent exec tsx scripts/migrate-clawd-memories.ts",
     "backfill:conversations": "pnpm --filter @hermes/agent exec tsx scripts/backfill-conversations.ts",
     "backfill:embeddings": "pnpm --filter @hermes/agent exec tsx scripts/backfill-embeddings.ts",
