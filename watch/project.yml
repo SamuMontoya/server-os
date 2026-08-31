@@ -1,0 +1,77 @@
+# Proyecto generado por XcodeGen — el .xcodeproj NO se versiona.
+# Se regenera con `xcodegen generate` desde esta carpeta.
+#
+# Por qué XcodeGen y no el .xcodeproj a mano: project.pbxproj es un formato
+# denso y con IDs generados, imposible de revisar en un diff y muy fácil de
+# romper editándolo. Este YAML es la fuente de verdad.
+
+name: Hermes
+options:
+  bundleIdPrefix: com.samumontoya
+  deploymentTarget:
+    iOS: "16.0"
+    watchOS: "9.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    # Se compila SIN firmar a propósito: quien firma es SideStore, ya en el
+    # iPhone y con tu Apple ID. Firmar aquí exigiría un equipo de desarrollo
+    # y no aportaría nada a este flujo.
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGN_IDENTITY: ""
+
+targets:
+  # ── Contenedor de iPhone ──────────────────────────────────────────────
+  # No es decorativo: una app de Apple Watch no se distribuye sola fuera de
+  # la App Store. Viaja dentro de este bundle, en Payload/Hermes.app/Watch/,
+  # y quien la pasa al reloj es la app Watch del iPhone.
+  Hermes:
+    type: application
+    platform: iOS
+    sources: [Container]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.samumontoya.hermes
+        PRODUCT_NAME: Hermes
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: "NO"
+    info:
+      path: Container/Info.plist
+      properties:
+        CFBundleDisplayName: Hermes
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    dependencies:
+      - target: HermesWatch
+        embed: true
+        copy:
+          destination: productsDirectory
+          subpath: "$(CONTENTS_FOLDER_PATH)/Watch"
+
+  # ── App del reloj ─────────────────────────────────────────────────────
+  # Target único (watchOS 9+): `WKApplication` en el Info.plist. El esquema
+  # viejo de app + extensión ya no hace falta.
+  HermesWatch:
+    type: application
+    platform: watchOS
+    sources: [WatchApp]
+    settings:
+      base:
+        # REGLA DURA de Apple: el id del reloj tiene que ser el del iPhone
+        # más un sufijo. Si no, el reloj no reconoce la pareja.
+        PRODUCT_BUNDLE_IDENTIFIER: com.samumontoya.hermes.watchkitapp
+        PRODUCT_NAME: HermesWatch
+        TARGETED_DEVICE_FAMILY: "4"
+        GENERATE_INFOPLIST_FILE: "NO"
+    info:
+      path: WatchApp/Info.plist
+      properties:
+        CFBundleDisplayName: Hermes
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: com.samumontoya.hermes

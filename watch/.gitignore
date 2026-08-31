@@ -1,0 +1,6 @@
+# Generados por xcodegen desde project.yml — la fuente de verdad es el YAML.
+Hermes.xcodeproj/
+Container/Info.plist
+WatchApp/Info.plist
+build/
+xcuserdata/
