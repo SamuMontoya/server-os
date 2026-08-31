@@ -182,6 +182,43 @@ Si un servicio quedó en `failed`, systemd **ignora los `start` siguientes**
 systemctl --user reset-failed hermes-web
 ```
 
+### Vigía
+
+```bash
+systemctl --user list-timers hermes-watchdog.timer
+journalctl --user -u hermes-watchdog -n 30
+```
+
+`Restart=always` **no cubre una parada explícita**. Si algo manda un `stop`
+—un deploy que muere entre el stop y el start, una sesión depurando, un
+`restart` que no llega a la segunda mitad— systemd marca la unidad como
+detenida a propósito y la deja abajo indefinidamente.
+
+> [!warning] El caso real (31-ago-2026)
+> Agente y dashboard llevaban horas `inactive (dead)` por SIGTERM, con
+> `NRestarts=0` y **nada** en estado `failed`: ningún mecanismo los iba a
+> levantar. El único síntoma fue un "Load failed" al mandar un mensaje desde
+> el móvil — que no apunta a la causa por ningún lado. Buscarlo por el lado
+> del dashboard o de CORS es perder la noche.
+
+`hermes-watchdog.timer` corre cada minuto y hace dos cosas:
+
+1. **Unidad no activa** → `reset-failed` + `start`. El `reset-failed` va
+   primero a propósito: sin él, una unidad que agotó su `StartLimitBurst`
+   rechaza el arranque y el vigía giraría en vacío.
+2. **Unidad activa pero sin responder** → `restart`, y sólo al **segundo**
+   fallo seguido. Son 2 núcleos a 1.6 GHz: un turno pesado puede dejar el
+   health sin contestar un momento, y reiniciar al primer timeout mataría
+   trabajo real a mitad.
+
+Mientras `server-os-deploy.service` está activo el vigía no toca nada — ahí
+los servicios están abajo a propósito, y arrancar el dashboard sin build
+terminado sólo gastaría `StartLimitBurst`.
+
+Los puertos los lee del `.env` (`HERMES_PORT`, `NEXT_PUBLIC_WEB_PORT`), no
+como constantes: si divergieran, "no responde" sería un falso positivo y el
+vigía reiniciaría en bucle un servicio sano.
+
 El arranque imprime el estado completo — si algo responde raro, empieza ahí:
 
 ```

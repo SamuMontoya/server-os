@@ -1,0 +1,15 @@
+[Unit]
+Description=server-os · vigía cada minuto
+
+[Timer]
+# 90s tras el arranque: le da margen a que agente y dashboard suban solos por
+# su propio `WantedBy=default.target` antes de que el vigía opine.
+OnBootSec=90
+OnUnitActiveSec=60
+# El vigía no necesita precisión de reloj, y con AccuracySec bajo systemd
+# despierta la máquina más de lo necesario.
+AccuracySec=10
+Unit=hermes-watchdog.service
+
+[Install]
+WantedBy=timers.target
