@@ -94,11 +94,17 @@ export default function Laboratorio() {
   // de rows=1. Por eso el placeholder quedaba con hueco debajo aunque ya
   // llamáramos esto al montar. Reseteando a "0px" el navegador SÍ reporta el
   // scrollHeight real del contenido (una línea), sin el piso de `rows`.
-  const resizeInput = () => {
+  //
+  // `toEnd`: una vez el textarea toca su techo (120px) el contenido desborda y
+  // el navegador SOLO auto-scrollea al caret cuando el usuario teclea. Al
+  // dictar no hay caret moviéndose, así que la última línea quedaba oculta y
+  // había que hacer scroll a mano. Con `toEnd` se pega el scroll al fondo.
+  const resizeInput = (opts?: { toEnd?: boolean }) => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = "0px";
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    if (opts?.toEnd) el.scrollTop = el.scrollHeight;
   };
 
   // Al montar, con el draft vacío, fija el alto real de una línea en vez de
@@ -262,7 +268,7 @@ export default function Laboratorio() {
     // El textarea no se re-mide solo al vaciar el value por JS (no dispara
     // onChange); lo hacemos a mano en el próximo frame, cuando el DOM ya
     // tiene el value nuevo.
-    requestAnimationFrame(resizeInput);
+    requestAnimationFrame(() => resizeInput());
     scrollToBottom();
 
     try {
@@ -337,7 +343,7 @@ export default function Laboratorio() {
       // En el frame siguiente, NO ahora: `setDraft` aún no ha llegado al DOM,
       // así que medir aquí daba el alto del texto anterior (el textarea iba
       // siempre una línea por detrás al dictar).
-      requestAnimationFrame(resizeInput);
+      requestAnimationFrame(() => resizeInput({ toEnd: true }));
     },
   });
 

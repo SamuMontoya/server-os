@@ -251,11 +251,17 @@ export function ChatPanel({
   };
 
   // Textarea auto-crecible (hasta ~5 líneas).
-  const resizeInput = () => {
+  //
+  // `toEnd`: al tocar el techo de 120px el contenido desborda, y el navegador
+  // solo persigue al caret cuando se teclea — no cuando el value cambia por JS
+  // (dictado). Sin esto la última línea dictada quedaba fuera de vista y había
+  // que hacer scroll a mano dentro del input.
+  const resizeInput = (opts?: { toEnd?: boolean }) => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    if (opts?.toEnd) el.scrollTop = el.scrollHeight;
   };
 
   // Cambio de proyecto en foco: guarda los tabs actuales y restaura los suyos.
@@ -280,8 +286,10 @@ export function ChatPanel({
   }, [state.active, projKey]);
 
   // El draft puede cambiar por fuera del onChange (enviar, dictado): re-mide.
+  // Si el cambio viene del dictado, además pega el scroll al fondo para que la
+  // última línea hablada siempre quede visible.
   useEffect(() => {
-    resizeInput();
+    resizeInput({ toEnd: listening });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.draft]);
 

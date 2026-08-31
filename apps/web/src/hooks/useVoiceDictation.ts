@@ -136,8 +136,9 @@ export function useVoiceDictation({
       // el usuario conserva su dictado (sin puntuación fina).
       console.error("[dictado] no se pudo re-transcribir:", err);
       if (previewRef.current) {
+        // Silencioso a propósito: el dictado ya quedó escrito y a Samu no le
+        // importa perder la puntuación fina; avisarlo solo era ruido.
         cbRef.current(previewRef.current, true);
-        setError("Se dictó sin puntuación automática (el transcriptor no respondió).");
       } else {
         setError(err instanceof Error ? err.message : "No se pudo transcribir el dictado.");
       }
