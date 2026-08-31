@@ -41,7 +41,15 @@ export const metadata: Metadata = {
   // Instalado en la pantalla de inicio del iPhone, el dashboard se abre en
   // modo app (sin barra de Safari). `appleWebApp` es lo que iOS mira: sin él
   // queda como un marcador y se comporta como una pestaña más.
-  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "Hermes" },
+  // "black-translucent" dejaba la barra de estado (hora, batería,
+  // notificaciones) TRANSPARENTE, con el contenido de la app dibujándose por
+  // detrás — el padding-top con safe-area-inset-top en SideRail ayudaba pero
+  // no garantizaba nada porque seguía siendo el mismo lienzo. "black" la
+  // vuelve opaca de verdad: iOS reserva ese espacio como una franja negra
+  // sólida y el layout viewport arranca abajo de ella, así que ningún
+  // ícono ni texto puede quedar por detrás nunca, pase lo que pase con el
+  // contenido de la página.
+  appleWebApp: { capable: true, statusBarStyle: "black", title: "Hermes" },
   icons: {
     icon: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
@@ -73,6 +81,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="es" className={`${display.variable} ${mono.variable}`}>
       <body>
+        {/* Blackout permanente del área de la barra de estado (hora, batería,
+            notificaciones, notch). No es solo el padding-top de SideRail: es
+            una franja propia, fija y opaca, encima de TODO (z-index más alto
+            que overlays/toasts), así que aunque algo del contenido cambie
+            nunca vuelve a asomarse por detrás de la barra. Blanca en
+            /laboratorio, oscura en el resto — mismo criterio que ya usa
+            html.lab-route para el fondo. */}
+        <div aria-hidden className="safe-top-blackout" />
         <Providers>{children}</Providers>
       </body>
     </html>

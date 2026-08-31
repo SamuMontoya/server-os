@@ -544,6 +544,8 @@ app.get("/chat/turns/:id/stream", (c) => {
           truncated: snap.truncated,
           attempts: snap.attempts,
           sdkSessionId: snap.sdkSessionId,
+          model: snap.model,
+          effort: snap.effort,
           error: snap.error,
         }),
       onEvent: (e) => void send("turn", e),

@@ -26,6 +26,7 @@ import { appendTurn } from "../conversations.js";
 // ── Eventos ────────────────────────────────────────────────────────────
 export type TurnEventKind =
   | "session" // el SDK anunció su session id (el tab lo adopta para resumir)
+  | "model" // el router eligió modelo (y puede volver a emitirse al escalar)
   | "delta" // texto
   | "tool" // paso agéntico
   | "retry" // se cayó y se está reintentando (el cliente lo puede decir)
@@ -40,6 +41,9 @@ export interface TurnEvent {
   text?: string;
   tool?: ChatToolStep;
   sessionId?: string;
+  /** En `model`: alias del modelo ("opus"|"sonnet"|"haiku") y su esfuerzo. */
+  model?: string;
+  effort?: string;
   /** En `retry`: qué intento viene ahora (2 = el segundo). */
   attempt?: number;
 }
@@ -57,6 +61,13 @@ export interface ChatTurn {
   text: string;
   steps: ChatToolStep[];
   sdkSessionId?: string;
+  /**
+   * Modelo con el que corre/corrió el turno. Vive en el turno (no solo en el
+   * evento) para que quien se engancha tarde lo sepa por el snapshot, sin
+   * depender de un evento que el buffer ya pudo botar.
+   */
+  model?: string;
+  effort?: string;
   /** Intentos consumidos (1 = salió a la primera). */
   attempts: number;
   error?: string;
@@ -130,6 +141,7 @@ export interface TurnRunnerArgs {
   onDelta: (text: string) => void;
   onSession: (sessionId: string) => void;
   onTool: (step: ChatToolStep) => void;
+  onModel: (model: string, effort?: string) => void;
 }
 
 export interface TurnRunnerResult {
@@ -274,6 +286,14 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             turn.steps.push(tool);
             emitEvent(turn.id, { kind: "tool", tool });
           },
+          onModel: (model, effort) => {
+            // Sin cambio no se emite: el escalado repite la llamada y no vale
+            // gastar un seq (ni repintar) para decir lo mismo otra vez.
+            if (turn.model === model && turn.effort === effort) return;
+            turn.model = model;
+            turn.effort = effort;
+            emitEvent(turn.id, { kind: "model", model, effort });
+          },
         });
         if (!result.isError) {
           // El SDK puede cerrar con el texto final sin haber mandado deltas.
@@ -395,6 +415,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
       onDelta: args.onDelta,
       onSession: args.onSession,
       onTool: args.onTool,
+      onModel: args.onModel,
     });
     return { sdkSessionId: r.sdkSessionId, finalText: r.finalText, isError: r.isError };
   },

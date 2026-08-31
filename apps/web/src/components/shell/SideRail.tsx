@@ -120,7 +120,11 @@ export function SideRail() {
   const inHome = pathname === "/";
 
   return (
-    <nav aria-label="Navegación" className="flex w-[60px] shrink-0 flex-col items-center gap-1 border-r border-line py-4">
+    <nav
+      aria-label="Navegación"
+      className="flex w-[60px] shrink-0 flex-col items-center gap-1 border-r border-line pb-4"
+      style={{ paddingTop: "calc(16px + env(safe-area-inset-top))" }}
+    >
       <Link
         href="/laboratorio"
         title="Laboratorio"

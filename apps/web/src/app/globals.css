@@ -1030,6 +1030,24 @@ body::after {
    cerrarlo) enseñaba ese fondo casi negro: la "franja negra".
    La página añade `lab-route` al <html> mientras está montada, y aquí
    apagamos el tema oscuro entero para esa ruta. */
+/* Franja de "blackout" fija sobre la barra de estado del iPhone. z-index por
+   encima de --z-toast (70): tiene que ganarle a cualquier cosa, siempre. La
+   altura es exactamente env(safe-area-inset-top) — 0 en desktop/Android sin
+   notch, así que no roba espacio donde no hace falta. */
+.safe-top-blackout {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top);
+  background: var(--bg);
+  z-index: 999;
+  pointer-events: none;
+}
+html.lab-route .safe-top-blackout {
+  background: #fff;
+}
+
 html.lab-route,
 html.lab-route body {
   background: #fff;
@@ -1121,13 +1139,58 @@ html.lab-route body::after {
 .lab-inputbar {
   margin-top: auto;
   display: flex;
+  /* Columna: composer arriba, pie de estado debajo. El eje principal pasa a
+     ser el vertical, así que quien centra horizontalmente ahora es
+     `align-items` (el justify-content de abajo ya solo agrupa en vertical). */
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  padding: 16px 20px calc(32px + env(safe-area-inset-bottom));
+  /* Un número por eje, en variables, para poder afinar CADA estado (reposo /
+     teclado abierto) sin reescribir el shorthand ni desincronizar los ejes.
+     --lab-bar-safe existe para poder ANULAR la safe-area cuando el teclado
+     está abierto: ahí el borde inferior real ya no es la barra de gestos del
+     iPhone (el teclado la tapa), así que reservarle 34px es aire muerto. */
+  /* El pie de estado (.lab-status) se mete DENTRO del aire que ya había
+     debajo del input, en vez de sumarse a él: si solo se apilara, el input
+     subiría 21px y la barra crecería justo por donde ya sobraba espacio
+     hasta el borde del teléfono. Por eso al padding de abajo se le RESTA el
+     bloque que ocupa el pie (su margin-top + su línea de 11px) — el input
+     queda exactamente donde estaba antes de que existiera el pie, y los
+     numeritos viven en el hueco que quedaba libre. max(0px, …) por si algún
+     estado deja el padding más chico que el propio pie: sin él, un padding
+     negativo sacaría el texto fuera de la barra. */
+  --lab-status-block: 21px;
+  padding: var(--lab-bar-top, 14px) var(--lab-bar-x, 20px)
+    max(
+      0px,
+      calc(
+        var(--lab-bar-bottom, 10px) + var(--lab-bar-safe, env(safe-area-inset-bottom)) -
+          var(--lab-status-block)
+      )
+    );
   background: #fff;
   /* Sin transición a propósito: iOS emite varios `resize` de visualViewport
      durante la animación del teclado, así que la barra ya viene animada desde
      el origen. Interpolar encima solo la hacía llegar tarde y destapaba el
      hueco de abajo. */
+}
+/* Teclado abierto (la página pone `lab-kb` en <html> cuando el viewport
+   visible se encoge). Dos cambios y por qué:
+     · bottom pequeño y safe-area a 0 → el input se sienta casi sobre el
+       teclado, sin la franja blanca que quedaba debajo.
+     · algo más de aire arriba y a los lados → la caja no queda "apretada"
+       contra el teclado ni contra los bordes cuando crece a varias líneas;
+       mantiene la misma proporción visual que en reposo. */
+html.lab-route.lab-kb .lab-inputbar {
+  --lab-bar-top: 16px;
+  --lab-bar-x: 26px;
+  --lab-bar-bottom: 8px;
+  --lab-bar-safe: 0px;
+  /* Con el teclado abierto NO hay aire sobrante debajo (el borde inferior es
+     el teclado, no la barra de gestos), así que el pie no tiene dónde
+     "meterse": vuelve a apilarse normal y los 8px quedan bajo ÉL, no bajo el
+     input. Si no, los numeritos rozarían el teclado. */
+  --lab-status-block: 0px;
 }
 /* Composer: misma estructura que el input del chat principal (caja +
    caret + textarea auto-crecible), retonado al blanco/tinta del Laboratorio
@@ -1159,8 +1222,263 @@ html.lab-route body::after {
   line-height: 1.4;
   outline: none;
   border: none;
+  /* Padding vertical simétrico (no 0): mic y enviar son círculos de 28px, y
+     el composer alinea todo por abajo (`align-items: flex-end` acá abajo).
+     Con height:21px + padding:0 el textarea mide 21px total → sus bordes
+     quedan alineados por abajo con los botones, pero como es 7px más bajo,
+     el placeholder (pegado arriba del textarea) queda ese resto por debajo
+     del centro real de los círculos. 3.5px arriba y abajo suman esos 7px, así
+     el textarea también mide 28px totales y el placeholder cae centrado. */
+  padding: 3.5px 0;
+  margin: 0;
+  box-sizing: border-box;
+  /* La causa real del "pie" bajo el placeholder: sin este `height` explícito,
+     el alto de la caja lo decide el atributo `rows` (React lo sigue mandando
+     al DOM), y eso NO es un problema que el JS pueda arreglar a tiempo —
+     durante el primer pintado (SSR, antes de que React hidrate y corra
+     cualquier useEffect) el navegador YA dibujó la caja con ese alto de más,
+     y un textarea siempre pega su texto arriba, así que el sobrante se ve
+     como hueco debajo. Fijar el alto de una línea aquí, en CSS puro, hace
+     que la caja nazca correcta desde el HTML que manda el servidor — no hay
+     JS que corra a tiempo ni a destiempo. 15px de fuente × line-height 1.4 =
+     21px de contenido. Con box-sizing:border-box el `height` es el TOTAL
+     (contenido + padding), así que hay que sumarle los 7px de padding de
+     arriba: 21 + 7 = 28px — que además es, a propósito, el mismo alto que
+     los círculos de mic/enviar (ver arriba). El JS de page.tsx (resizeInput)
+     solo la hace crecer al escribir varias líneas; el punto de partida ya no
+     depende de él. */
+  height: 28px;
 }
 .lab-textarea::placeholder { color: #9b9a97; }
+/* Pie del composer: consumo · modelo · reinicio.
+   Mismo ancho que el composer (720px) para que los extremos caigan justo bajo
+   sus bordes, no flotando en el medio de la pantalla.
+   Los laterales llevan `flex:1` en vez de dejarlo todo a space-between: con
+   tres hijos de anchos distintos ("100%" es más ancho que "5%"), el de en
+   medio quedaría descentrado tanto como difieran los lados. Dándole a cada
+   lateral la mitad del sobrante, el del centro cae en el centro GEOMÉTRICO
+   de la barra pase lo que pase con los números.
+   `tabular-nums` fija el ancho de cada dígito: sin eso el porcentaje y el
+   reloj empujan a los vecinos cada vez que cambian de valor. */
+.lab-status {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 720px;
+  margin-top: 10px;
+  /* Aire lateral propio, mayor que el del composer: estos números viven en la
+     franja de abajo del todo, donde las esquinas redondeadas de la pantalla
+     del iPhone se comen los extremos. 14px (los mismos que el padding interno
+     del composer) los alinea además con el texto del input, no con su borde. */
+  padding: 0 14px;
+  font-family: var(--font-notion);
+  font-size: 11px;
+  line-height: 1;
+  /* Alto reservado aunque los tres datos estén vacíos (el modelo se pinta en
+     blanco entre turnos): así la fila nunca aparece/desaparece empujando el
+     input hacia arriba y hacia abajo. */
+  min-height: 11px;
+  color: #9b9a97;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.lab-status > span:first-child { flex: 1; text-align: left; }
+.lab-status > span:last-child { flex: 1; text-align: right; }
+/* El modelo es el dato "vivo" de los tres (cambia si el router escala a mitad
+   del turno), así que se pinta en tinta plena para que se lea primero. */
+.lab-status > span:nth-child(2) {
+  color: #37352f;
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* Área de mensajes enviados: entre la flecha de volver y la barra de input.
+   `flex: 1` le come todo el alto que sobra en el papel, así que ya empuja la
+   barra al fondo por sí sola (el margin-top:auto de .lab-inputbar sigue
+   ahí de red de seguridad si esta lista está vacía). overflow-y:auto porque
+   con muchos mensajes esta lista sí debe scrollear, a diferencia del papel. */
+.lab-messages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding: 8px 20px 4px;
+}
+/* Burbuja "enviado": gris clara + colita, el patrón clásico de mensajería.
+   Alineada a la derecha porque es lo que Samu mandó, igual que un chat común. */
+.lab-bubble {
+  position: relative;
+  align-self: flex-end;
+  max-width: 78%;
+  padding: 10px 14px;
+  /* La esquina inferior derecha casi a 0: es donde sale la colita. Si queda
+     redondeada (como las otras tres), el borde curvo de la burbuja no llega
+     hasta donde empieza el triángulo recto de abajo y se ve un hueco blanco
+     en forma de media luna entre los dos — eso era el "espacio blanco". Con
+     esta esquina recta, el triángulo continúa la burbuja sin costura. */
+  border-radius: 16px 16px 3px 16px;
+  background: #ececea;
+  color: #37352f;
+  font-family: var(--font-notion);
+  font-size: 15px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* La colita: un triángulo recortado con clip-path, del mismo gris que la
+   burbuja. `right: -1px` la solapa un pelo con el borde de la burbuja (en vez
+   de dejarla separada) para que no quede ninguna rendija de blanco entre
+   ambas piezas, ni siquiera por redondeo de subpíxel. */
+.lab-bubble::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  background: #ececea;
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+}
+/* Respuesta del asistente: SIN burbuja y a la izquierda, a propósito —
+   Notion no mete sus respuestas en globos, las escribe como texto normal de
+   la página. Reusa las clases `.md*` del renderizador (components/Markdown)
+   pero con la paleta clara: son las mismas reglas que ya existen para
+   `.doc-paper` (el visor de documentos), repetidas aquí en vez de reusar esa
+   clase porque `.doc-paper` también trae su propia caja/sombra/tope de alto
+   pensados para un modal, que acá no aplican. */
+.lab-answer {
+  align-self: flex-start;
+  max-width: 100%;
+  width: 100%;
+}
+.lab-answer .md {
+  font-family: var(--font-notion);
+  font-size: 15px;
+  line-height: 1.6;
+  color: #37352f;
+}
+.lab-answer .md-h {
+  color: #1f1e1b;
+  font-weight: 700;
+}
+.lab-answer .md-h1 { font-size: 20px; margin: 0.2em 0 0.4em; }
+.lab-answer .md-h2 { font-size: 17px; margin: 0.9em 0 0.35em; }
+.lab-answer .md-h3 { font-size: 15px; margin: 0.8em 0 0.3em; }
+.lab-answer .md-p { margin: 0.5em 0; }
+.lab-answer .md-ul .md-li::before,
+.lab-answer .md-li::marker {
+  color: #9b9a97;
+}
+.lab-answer .md-code {
+  background: rgba(135, 131, 120, 0.15);
+  color: #eb5757;
+}
+.lab-answer .md-pre {
+  background: #f7f6f3;
+  border: 1px solid #ededec;
+}
+.lab-answer .md-pre code {
+  color: #37352f;
+}
+.lab-answer .md-quote {
+  border-left: 3px solid #37352f;
+  background: transparent;
+  color: #37352f;
+}
+.lab-answer .md-hr {
+  border-top-color: #ededec;
+}
+.lab-answer .md-link,
+.lab-answer .md-ref {
+  color: #2563eb;
+}
+/* Pasos del turno (AgentSteps): el componente es el mismo que usa el chat
+   principal — mismos verbos, mismos glifos, sin duplicar ese mapa acá — pero
+   sus clases (text-violet, text-amber, text-text-dim, border-line) pintan
+   con `color: var(--color-violet)` etc, así que sobreescribir esas variables
+   CSS en este contenedor repinta TODO el componente a la paleta Notion sin
+   tocar una sola línea de AgentSteps.tsx. Cascada pura, cero JS. */
+.lab-steps {
+  --color-violet: #2563eb; /* glifo/acento — mismo azul que los links del md */
+  --color-amber: #d9730d; /* glifo del paso EN CURSO (live) */
+  --color-text: #37352f; /* verbo del paso en curso */
+  --color-text-dim: #9b9a97; /* verbo terminado + objetivo (ruta/URL) */
+  --color-line: rgba(55, 53, 47, 0.13); /* el trazo vertical de la lista */
+  font-family: var(--font-notion);
+}
+/* "Pensando": tres puntos grises saltando en cascada. Nada de violeta acá
+   (ese es el acento del HUD oscuro) — gris, como el placeholder del input. */
+.lab-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 15px;
+}
+.lab-thinking span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #9b9a97;
+  animation: lab-thinking-bounce 1s ease-in-out infinite;
+}
+.lab-thinking span:nth-child(2) { animation-delay: 0.16s; }
+.lab-thinking span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes lab-thinking-bounce {
+  0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lab-thinking span { animation: none; opacity: 0.7; }
+}
+
+/* Micrófono (dictado voz → texto): mismo círculo negro que el botón de
+   enviar, a la izquierda del textarea. A diferencia del chat principal (que
+   lo pone rojo pulsante al grabar), acá se queda siempre negro — grabando
+   simplemente cambia lo que hay DENTRO del círculo: el ícono de mic se
+   reemplaza por 4 barritas verticales animadas (estilo ecualizador), más
+   sobrio que un pulso y encima comunica "te estoy escuchando" sin alarmar. */
+.lab-mic {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: #37352f;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.lab-mic:hover { background: #000; }
+.lab-mic--listening { background: #000; }
+.lab-mic-bars {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 12px;
+}
+.lab-mic-bars span {
+  width: 2px;
+  height: 4px;
+  border-radius: 1px;
+  background: #fff;
+  animation: lab-mic-bar 0.9s ease-in-out infinite;
+}
+.lab-mic-bars span:nth-child(1) { animation-delay: 0s; }
+.lab-mic-bars span:nth-child(2) { animation-delay: 0.15s; }
+.lab-mic-bars span:nth-child(3) { animation-delay: 0.3s; }
+.lab-mic-bars span:nth-child(4) { animation-delay: 0.45s; }
+@keyframes lab-mic-bar {
+  0%, 100% { height: 4px; }
+  50% { height: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lab-mic-bars span { animation: none; height: 8px; }
+}
+
 /* Botón enviar: círculo oscuro a la derecha del composer, mismo patrón del
    chat principal. Se apaga (sin interacción) cuando el draft está vacío. */
 .lab-send {
@@ -1184,9 +1502,20 @@ html.lab-route body::after {
 .lab-send:not(:disabled):hover { background: #000; }
 /* iOS Safari hace auto-zoom al enfocar un input/textarea con font-size
    menor a 16px. Forzamos 16px solo en viewports táctiles/estrechos para
-   no cambiar el tamaño visual en desktop. */
+   no cambiar el tamaño visual en desktop. Mismo problema en el composer
+   del chat principal: su --text-base son 13px (pensados para HUD/desktop),
+   así que en móvil también dispara el zoom incómodo al enfocar. */
 @media (max-width: 768px) {
-  .lab-textarea {
+  .lab-textarea,
+  .chat-textarea {
     font-size: 16px;
   }
+}
+/* El textarea del chat principal desbordaba con palabras/URLs largas sin
+   espacios (el break-words de Tailwind ya corta eso), pero en iOS el
+   auto-crecido a veces deja una línea más ancha que la caja durante el
+   primer render; forzar el wrap aquí es la red de seguridad. */
+.chat-textarea {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }

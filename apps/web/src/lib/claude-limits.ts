@@ -9,7 +9,8 @@
  *
  *   1. env  CLAUDE_OAUTH_TOKEN   (en apps/web/.env)
  *   2. file ~/.hermes-os/claude-token   (lo escribe scripts/hermes-usage-token.mjs)
- *   3. Keychain (opt-in con CLAUDE_USAGE_KEYCHAIN=1; puede pedir permiso)
+ *   3. file ~/.claude/.credentials.json (lo mantiene Claude Code en Linux)
+ *   4. Keychain (opt-in con CLAUDE_USAGE_KEYCHAIN=1; puede pedir permiso)
  */
 
 import { promises as fs } from "fs";
@@ -91,6 +92,36 @@ async function readClaudeJsonPlan(): Promise<string | null> {
 // El Keychain puede tener dos items "Claude Code-credentials": el CLI moderno
 // guarda con account=<usuario> y las instalaciones viejas con account="Claude
 // Code" (token muerto). Probamos primero el del usuario y saltamos caducados.
+/**
+ * Fuente nativa en Linux (y en instalaciones sin Keychain): Claude Code guarda
+ * ahí el OAuth de la suscripción en claro, con permisos 600. Es una lectura
+ * local más —igual que ~/.claude.json o ~/.claude/projects— y no rota nada, así
+ * que no puede desloguear al CLI. Con esto el panel de consumo funciona sin que
+ * Samu tenga que pegar el token a mano.
+ */
+async function readCredentialsFile(): Promise<Credential> {
+  try {
+    const raw = await fs.readFile(
+      path.join(os.homedir(), ".claude", ".credentials.json"),
+      "utf8",
+    );
+    const cred = (JSON.parse(raw) as Record<string, unknown>).claudeAiOauth as
+      | Record<string, unknown>
+      | undefined;
+    if (!cred) return { token: null, plan: null };
+    // Un token caducado da 401 y ensuciaría el panel con "renueva el token"
+    // aunque el CLI ya lo haya refrescado: lo descartamos aquí.
+    const expired =
+      typeof cred.expiresAt === "number" && cred.expiresAt < Date.now();
+    return {
+      token: expired ? null : ((cred.accessToken as string | undefined) ?? null),
+      plan: planLabel(cred.subscriptionType, cred.rateLimitTier),
+    };
+  } catch {
+    return { token: null, plan: null };
+  }
+}
+
 function readKeychainEntry(account: string | null): Promise<Credential> {
   const args = ["find-generic-password", "-s", "Claude Code-credentials"];
   if (account) args.push("-a", account);
@@ -139,11 +170,14 @@ async function resolveCredential(): Promise<Credential> {
     /* sin archivo */
   }
 
+  const fromCreds = await readCredentialsFile();
+  if (fromCreds.token) return { token: fromCreds.token, plan: plan ?? fromCreds.plan };
+
   if (process.env.CLAUDE_USAGE_KEYCHAIN === "1") {
     const cred = await readKeychainCredential();
     return { token: cred.token, plan: plan ?? cred.plan };
   }
-  return { token: null, plan };
+  return { token: null, plan: plan ?? fromCreds.plan };
 }
 
 // ── Fetch + mapeo ───────────────────────────────────────────────────────

@@ -102,6 +102,12 @@ export interface RunTurnOptions {
   /** Avisa cada tool_use del turno (la consola los pinta como pasos). */
   onTool?: (step: ChatToolStep) => void;
   /**
+   * Avisa QUÉ modelo va a correr este turno, en cuanto el router lo decide.
+   * Se dispara otra vez en el escalado (la recursión vuelve a pasar por aquí),
+   * así que el cliente ve el salto haiku→sonnet→opus tal como pasa de verdad.
+   */
+  onModel?: (model: string, effort?: string) => void;
+  /**
    * Cancelación EXPLÍCITA del turno (⏹ Detener). Ojo: no atar esto al signal
    * de un request — que el cliente se vaya (pantalla bloqueada, cambio de app)
    * no es una orden de cancelar. Ver agent/chat-turns.ts.
@@ -164,6 +170,9 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     model: tierOpts.model,
     ...(effort && tierOpts.model !== "haiku" ? { effort } : {}),
   };
+  // El modelo se anuncia SIEMPRE (aunque el nivel venga fijado por la sesión):
+  // el cliente necesita saber con qué está respondiendo, no solo cuándo cambia.
+  opts.onModel?.(tierOpts.model, effort);
   if (!route.pinned) {
     emit({
       kind: "text",

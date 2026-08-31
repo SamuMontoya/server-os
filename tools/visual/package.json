@@ -1,0 +1,13 @@
+{
+  "name": "@hermes/visual",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Auditoría visual de la web de HERMES OS: screenshots con Playwright, emulación móvil y teclado virtual simulado.",
+  "scripts": {
+    "shot": "node shot.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

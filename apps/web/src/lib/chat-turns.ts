@@ -23,6 +23,9 @@ export interface TurnState {
   truncated: boolean;
   attempts: number;
   sdkSessionId?: string;
+  /** Modelo que el router puso a correr este turno ("opus"|"sonnet"|"haiku"). */
+  model?: string;
+  effort?: string;
   error?: string;
 }
 
@@ -32,6 +35,8 @@ export interface TurnHandlers {
   onDelta?: (text: string, seq: number) => void;
   onTool?: (step: ChatToolStep, seq: number) => void;
   onSession?: (sdkSessionId: string) => void;
+  /** El router eligió modelo (o escaló a uno mayor a mitad del turno). */
+  onModel?: (model: string, effort?: string) => void;
   /** El servidor se cayó y va a reintentar: se puede decir "reintentando 2/3". */
   onRetry?: (attempt: number, reason: string) => void;
   onEnd?: (status: TurnStatus, seq: number) => void;
@@ -129,6 +134,8 @@ export function attachTurn(
         text?: string;
         tool?: ChatToolStep;
         sessionId?: string;
+        model?: string;
+        effort?: string;
         attempt?: number;
       };
       // Defensa contra el replay repetido: nunca procesar hacia atrás.
@@ -143,6 +150,9 @@ export function attachTurn(
           break;
         case "session":
           if (e.sessionId) handlers.onSession?.(e.sessionId);
+          break;
+        case "model":
+          if (e.model) handlers.onModel?.(e.model, e.effort);
           break;
         case "retry":
           handlers.onRetry?.(e.attempt ?? 0, e.text ?? "");

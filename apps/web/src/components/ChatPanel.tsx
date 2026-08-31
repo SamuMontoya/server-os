@@ -949,7 +949,7 @@ export function ChatPanel({
                   ? `pregunta sobre ${projectName ?? selectedProject}…`
                   : "ordena algo…"
           }
-          className="max-h-[120px] flex-1 resize-none bg-transparent text-base leading-snug outline-none placeholder:opacity-40"
+          className="chat-textarea max-h-[120px] flex-1 resize-none bg-transparent text-base leading-snug outline-none placeholder:opacity-40 break-words"
           disabled={active.busy}
         />
 
