@@ -1,0 +1,17 @@
+[Unit]
+Description=server-os · vigía (levanta agente y dashboard si se cayeron)
+# Sin Restart ni StartLimit: es un oneshot que corre y sale. El que insiste
+# es el timer.
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOT__
+
+Environment=HOME=__HOME__
+Environment=PATH=__PATH__
+
+ExecStart=__ROOT__/scripts/hermes-watchdog.sh
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-os-watchdog

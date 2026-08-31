@@ -82,7 +82,7 @@ UNIT_PATH="$(dirname "$NODE_BIN"):$(dirname "$PNPM_BIN")"
 UNIT_PATH="$UNIT_PATH:/usr/local/bin:/usr/bin:/bin"
 
 mkdir -p "$UNITS"
-for svc in hermes-agent hermes-web; do
+for svc in hermes-agent hermes-web hermes-watchdog; do
   sed -e "s|__ROOT__|$ROOT|g" \
       -e "s|__HOME__|$HOME|g" \
       -e "s|__PATH__|$UNIT_PATH|g" \
@@ -90,6 +90,13 @@ for svc in hermes-agent hermes-web; do
       "$ROOT/scripts/systemd/$svc.service" > "$UNITS/$svc.service"
   ok "$UNITS/$svc.service"
 done
+
+# El vigía es lo único que trae timer aparte: el .service es un oneshot y
+# quien insiste cada minuto es el .timer.
+sed -e "s|__ROOT__|$ROOT|g" \
+    "$ROOT/scripts/systemd/hermes-watchdog.timer" > "$UNITS/hermes-watchdog.timer"
+ok "$UNITS/hermes-watchdog.timer"
+chmod +x "$ROOT/scripts/hermes-watchdog.sh"
 
 systemctl --user daemon-reload
 
@@ -102,6 +109,8 @@ fi
 
 systemctl --user enable --now hermes-agent.service
 systemctl --user enable --now hermes-web.service
+# Se habilita el TIMER, no el servicio: habilitar un oneshot no lo agenda.
+systemctl --user enable --now hermes-watchdog.timer
 
 echo
 sleep 3
