@@ -47,3 +47,4 @@ apps/agent/native/window-helper
 # Persona del dueño: vive en ~/.hermes-os/SOUL.md, nunca en el repo
 SOUL.md
 !docs/SOUL.example.md
+.build-logs/

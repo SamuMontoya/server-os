@@ -90,6 +90,18 @@ const DESTS: Dest[] = [
       <circle cx="12" cy="12" r="9" opacity=".45" />,
     ),
   },
+  // Laboratorio: pantalla nueva para experimentar sin tocar el resto del flujo.
+  {
+    kind: "route",
+    href: "/laboratorio",
+    label: "Laboratorio",
+    icon: (
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M9 4.5a2.5 2.5 0 0 0-2.5 2.5c0 .3.03.6.1.88A2.5 2.5 0 0 0 5 10.2v1.1a2.5 2.5 0 0 0 .8 4.6c.15 1.4 1.35 2.5 2.8 2.5.4 0 .78-.08 1.13-.23A2 2 0 0 0 11.5 20V6.5A2 2 0 0 0 9 4.5Z" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M15 4.5a2.5 2.5 0 0 1 2.5 2.5c0 .3-.03.6-.1.88A2.5 2.5 0 0 1 19 10.2v1.1a2.5 2.5 0 0 1-.8 4.6c-.15 1.4-1.35 2.5-2.8 2.5-.4 0-.78-.08-1.13-.23A2 2 0 0 1 12.5 20V6.5A2 2 0 0 1 15 4.5Z" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
   // Estudio de contenido (marca RuloCode): claqueta.
   {
     kind: "route",
@@ -109,12 +121,16 @@ export function SideRail() {
 
   return (
     <nav aria-label="Navegación" className="flex w-[60px] shrink-0 flex-col items-center gap-1 border-r border-line py-4">
-      <span aria-hidden className="mb-5 grid h-6.5 w-6.5 place-items-center drop-shadow-[0_0_7px_rgb(167_139_250_/_0.55)]">
+      <Link
+        href="/laboratorio"
+        title="Laboratorio"
+        className="mb-5 grid h-6.5 w-6.5 place-items-center drop-shadow-[0_0_7px_rgb(167_139_250_/_0.55)] transition-transform hover:scale-110"
+      >
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
           <path d="M12 2 21.5 7v10L12 22 2.5 17V7z" stroke="currentColor" strokeWidth="1.2" className="text-violet" fill="rgb(167 139 250 / 0.09)" />
           <circle cx="12" cy="12" r="3.1" className="fill-violet-hot" />
         </svg>
-      </span>
+      </Link>
 
       <div className="flex flex-1 flex-col gap-1">
         {DESTS.map((d) => {

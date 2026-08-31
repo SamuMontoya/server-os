@@ -7,7 +7,7 @@ import { env } from "../env.js";
  * en el loop, así que esto es la última línea de defensa.
  *
  * - Bash: deny-list de comandos destructivos.
- * - Write/Edit: solo dentro del vault, ~/dev y el repo hermes-os.
+ * - Write/Edit: solo dentro del vault, ~/dev, ~/Documents y el repo server-os.
  */
 const DENY_PATTERNS: RegExp[] = [
   /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b/i, // rm -rf / -fr
@@ -28,6 +28,7 @@ const ALLOWED_WRITE_ROOTS = [
   env.VAULT_PATH,
   resolve(HOME, "dev"),
   resolve(HOME, "Documents"),
+  resolve(HOME, "server-os"),
 ].filter(Boolean);
 
 function pathAllowed(p: string): boolean {

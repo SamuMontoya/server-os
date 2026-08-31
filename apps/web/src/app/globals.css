@@ -1017,3 +1017,176 @@ body::after {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Laboratorio ─────────────────────────────────────────────────────────
+   Lienzo en blanco puro (#fff), sin textura ni grano: la pantalla queda
+   totalmente limpia a propósito. Tinta #37352f para heredar el tono del
+   visor de documentos en lo poco que se dibuje encima. */
+
+/* El <html> y el <body> del dashboard son oscuros (#05060f + nébulas +
+   scanlines). En el Laboratorio el papel se comprime al viewport visible
+   cuando se abre el teclado, así que TODO lo que quede fuera del papel
+   (hueco del teclado, rebote del scroll, milisegundos de animación al
+   cerrarlo) enseñaba ese fondo casi negro: la "franja negra".
+   La página añade `lab-route` al <html> mientras está montada, y aquí
+   apagamos el tema oscuro entero para esa ruta. */
+html.lab-route,
+html.lab-route body {
+  background: #fff;
+  background-image: none;
+  color: #37352f;
+  /* Sin rebote elástico: en iOS el overscroll destapa el fondo del documento. */
+  overscroll-behavior: none;
+}
+/* El scroll del documento era el bug: al abrir el teclado el navegador
+   desplazaba la página y el usuario tenía que scrollear a mano para que todo
+   volviera a encajar. Aquí el Laboratorio no tiene contenido scrolleable —
+   es una sola pantalla — así que le quitamos el scroll al documento entero.
+   Sin scroll posible no hay desalineación que corregir a mano: lo que se ve
+   siempre es el papel, completo, ocupando el alto disponible. */
+html.lab-route {
+  height: 100%;
+  overflow: hidden;
+}
+/* `fixed` + `overflow:hidden` ya deja el documento sin scroll. Nada de
+   `touch-action: none` aquí: un ancestro con `none` corta también el gesto de
+   scroll DENTRO del textarea, y este crece hasta 5 líneas con overflow propio.
+   El arrastre de la página ya no lleva a ningún sitio porque no hay nada que
+   scrollear. */
+html.lab-route body {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+/* Las scanlines ambientales son un multiply negro a pantalla completa:
+   sobre blanco lo grisan todo. Fuera en esta ruta. */
+html.lab-route body::after {
+  content: none;
+}
+
+.lab-paper {
+  /* `fixed` + `inset:0` en vez de `relative` + alto por JS: así el papel
+     blanco cubre el viewport completo desde el primer pintado del server
+     (sin esperar al useEffect que agrega `lab-route`), y ningún rebote de
+     scroll ni parpadeo antes de hidratar puede enseñar el fondo oscuro del
+     dashboard detrás. `100dvh` seguido de la var JS como refuerzo: el
+     primero ya seduce el teclado en navegadores modernos sin ayuda de JS. */
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  height: var(--lab-vh, 100dvh);
+  overflow: hidden;
+  background: #fff;
+  color: #37352f;
+  font-family: var(--font-notion);
+  /* El papel ES la ventana visible. Se alinea con el visual viewport en los
+     navegadores que solo lo desplazan (Safari iOS) en vez de encogerlo: el JS
+     escribe el desfase en --lab-vp-top. En Chrome, con
+     `interactive-widget=resizes-content`, esto vale 0 y basta con el alto.
+     Ojo: el transform crea containing block, por eso la barra de abajo es
+     `absolute` respecto a este elemento y no otro `fixed` suelto. */
+  transform: translateY(var(--lab-vp-top, 0px));
+  display: flex;
+  flex-direction: column;
+}
+/* Flecha de volver: solo el glifo. Sin borde ni fondo hasta el hover, donde
+   apenas se insinúa un gris muy tenue para dar feedback de que es clickeable. */
+.lab-back {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin: 16px 0 0 16px;
+  border-radius: 6px;
+  color: #787774;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+.lab-back:hover {
+  color: #37352f;
+  background: #f1f1ef;
+}
+
+/* Barra de input al pie del Laboratorio. Ya NO es `fixed` con un `bottom`
+   calculado a mano: es el último hijo del papel con `margin-top: auto`, así
+   que se pega al borde inferior de lo que el papel mida en cada momento.
+   Un solo sistema de coordenadas — antes eran dos `fixed` independientes
+   (papel y barra) que había que mantener sincronizados por JS, y cualquier
+   desfase entre ambos era justo el hueco que aparecía al abrir el teclado.
+   El padding-bottom con safe-area evita que la barra de gestos la tape. */
+.lab-inputbar {
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  padding: 16px 20px calc(32px + env(safe-area-inset-bottom));
+  background: #fff;
+  /* Sin transición a propósito: iOS emite varios `resize` de visualViewport
+     durante la animación del teclado, así que la barra ya viene animada desde
+     el origen. Interpolar encima solo la hacía llegar tarde y destapaba el
+     hueco de abajo. */
+}
+/* Composer: misma estructura que el input del chat principal (caja +
+   caret + textarea auto-crecible), retonado al blanco/tinta del Laboratorio
+   en vez del hud oscuro. */
+.lab-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  width: 100%;
+  max-width: 720px;
+  padding: 12px 14px;
+  border: 1px solid #e9e9e7;
+  border-radius: 10px;
+  background: #fff;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.lab-composer:focus-within {
+  border-color: #d3d1cb;
+  box-shadow: 0 0 0 3px rgba(55, 53, 47, 0.06);
+}
+.lab-textarea {
+  flex: 1;
+  resize: none;
+  max-height: 120px;
+  background: transparent;
+  color: #37352f;
+  font-family: var(--font-notion);
+  font-size: 15px;
+  line-height: 1.4;
+  outline: none;
+  border: none;
+}
+.lab-textarea::placeholder { color: #9b9a97; }
+/* Botón enviar: círculo oscuro a la derecha del composer, mismo patrón del
+   chat principal. Se apaga (sin interacción) cuando el draft está vacío. */
+.lab-send {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: #37352f;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.lab-send:disabled {
+  background: #d3d1cb;
+  cursor: default;
+}
+.lab-send:not(:disabled):hover { background: #000; }
+/* iOS Safari hace auto-zoom al enfocar un input/textarea con font-size
+   menor a 16px. Forzamos 16px solo en viewports táctiles/estrechos para
+   no cambiar el tamaño visual en desktop. */
+@media (max-width: 768px) {
+  .lab-textarea {
+    font-size: 16px;
+  }
+}
