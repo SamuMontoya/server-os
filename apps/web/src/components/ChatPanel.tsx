@@ -10,7 +10,7 @@ import {
   type ChatMessage,
   type ClaudeExecConfig,
 } from "@/lib/hermes";
-import { startTurn, attachTurn, stopTurn, fetchTurn } from "@/lib/chat-turns";
+import { startTurn, attachTurn, stopTurn, fetchTurn, fetchTurnResilient } from "@/lib/chat-turns";
 import {
   loadChat,
   saveChat,
@@ -140,6 +140,10 @@ export function ChatPanel({
   const prevProj = useRef(projKey);
   /** Desengancha los streams vivos, por tab. Nunca cancela el turno. */
   const followers = useRef(new Map<string, () => void>());
+  /** tabs con un reintento acotado de `resumePendingTurns` ya agendado (ver
+   *  fetchTurnResilient devolviendo null): evita apilar varios si visible +
+   *  online se disparan casi juntos al volver de segundo plano. */
+  const resumeRetryPending = useRef(new Set<string>());
 
   const [histOpen, setHistOpen] = useState(false);
   const [hist, setHist] = useState<ChatSessionSummary[] | null>(null);
@@ -517,8 +521,14 @@ export function ChatPanel({
           messages: [...t.messages, { role: "assistant", content: "" }],
         }));
       }
-      void fetchTurn(pending.id, pending.seq).then((st) => {
-        if (!st) {
+      // `fetchTurnResilient` reintenta contra blips transitorios (token de
+      // Supabase a punto de refrescar, 5xx del agente, red caída un instante)
+      // antes de concluir nada. Solo "not-found" confirmado es pérdida real;
+      // `null` es "no se pudo confirmar todavía" y NO debe leerse como
+      // "perdido" — eso era lo que obligaba a repetir la pregunta con el
+      // turno vivísimo del otro lado.
+      void fetchTurnResilient(pending.id, pending.seq).then((st) => {
+        if (st === "not-found") {
           // El agente se reinició y el turno ya no existe. Lo honesto es
           // decirlo, no dejar el tab ocupado para siempre.
           updateTab(tab.key, (t) => {
@@ -533,6 +543,19 @@ export function ChatPanel({
             return { ...t, messages: msgs, busy: false, stalled: false, pendingTurn: undefined };
           });
           schedulePersist();
+          return;
+        }
+        if (st === null) {
+          // Inconclusive: se deja el tab tal cual (busy, pendingTurn) y se
+          // agenda UN reintento acotado — mejor que declarar perdido algo que
+          // probablemente sigue corriendo.
+          if (!resumeRetryPending.current.has(tab.key)) {
+            resumeRetryPending.current.add(tab.key);
+            window.setTimeout(() => {
+              resumeRetryPending.current.delete(tab.key);
+              resumePendingTurns();
+            }, 8000);
+          }
           return;
         }
         // Corriendo o cerrado, `follow` resuelve los dos casos: su primer

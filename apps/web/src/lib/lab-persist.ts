@@ -1,5 +1,5 @@
 /**
- * El hilo de /laboratorio, guardado en el navegador.
+ * Los hilos de /laboratorio, guardados en el navegador.
  *
  * Hermano de chat-persist.ts (el mismo patrón, para el chat viejo/deprecado):
  * localStorage propio, recorte por cuota, versión de esquema, y un
@@ -15,6 +15,15 @@
  * Puro a propósito (nada de React ni de red): la parte con reglas —qué se
  * recorta, en qué orden, qué se descarta— es la que conviene poder testear
  * con node a secas.
+ *
+ * v2: antes había UN hilo por proyecto (`byProject: Record<projKey, LabThread>`).
+ * Samu pidió poder tener VARIOS chats abiertos a la vez por proyecto, cada uno
+ * con su turno corriendo en paralelo (igual que los tabs de ChatPanel), más
+ * poder archivarlos o borrarlos desde una pantalla de lista con swipe. Eso
+ * exige un id propio por hilo — ya no basta la clave del proyecto — así que
+ * el mapa pasa a `byChat: Record<chatStorageKey, LabThread>` (clave
+ * `"${project}::${chatId}"`) más `activeByProject` para recordar cuál de los
+ * chats de cada proyecto es el que se retoma al volver.
  */
 import type { ChatToolStep } from "@hermes/shared";
 
@@ -41,8 +50,17 @@ export interface PendingLabTurn {
   seq: number;
 }
 
-/** Un hilo continuo (no hay tabs en /laboratorio: una conversación por proyecto). */
+/** Un chat del Laboratorio: una conversación con su propio turno en vuelo. */
 export interface LabThread {
+  /** Id propio del chat (uuid), estable mientras exista. */
+  id: string;
+  /** true = archivado (swipe a la derecha en la lista): sigue existiendo,
+   *  solo se saca de la lista principal y no cuenta como "el activo" de un
+   *  proyecto al hidratar. */
+  archived: boolean;
+  /** Última vez que este chat recibió actividad — ordena la lista y decide
+   *  qué se recorta primero cuando hay que liberar cuota. */
+  updatedAt: number;
   /** sesión SDK que este hilo resume (uuid del jsonl); null = aún sin crear. */
   sdkSessionId: string | null;
   /** Id de sesión del CLIENTE (agrupa turnos del mismo hilo). Vacío = generar uno nuevo. */
@@ -55,20 +73,34 @@ export interface LabThread {
   pendingTurn?: PendingLabTurn;
 }
 
-/** Estado completo del laboratorio: un hilo por proyecto en foco. */
+/** Estado completo del laboratorio: todos los chats + cuál está activo por proyecto. */
 export interface PersistedLab {
   v: number;
-  /** projectKey ("general" o el slug) → su hilo. */
-  byProject: Record<string, LabThread>;
+  /** clave = `chatStorageKey(project, chat.id)`. */
+  byChat: Record<string, LabThread>;
+  /** projectKey ("general" o el slug) → id del chat que se retoma al volver. */
+  activeByProject: Record<string, string>;
   savedAt: number;
+}
+
+/** Forma en memoria que usa laboratorio/page.tsx tras hidratar. */
+export interface HydratedLab {
+  byChat: Record<string, LabThread>;
+  activeByProject: Record<string, string>;
 }
 
 export const STORAGE_KEY = "hermes_os_lab_chat";
 /** Subir esto invalida lo guardado (cambio de forma incompatible). */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
+
+export function chatStorageKey(project: string, chatId: string): string {
+  return `${project}::${chatId}`;
+}
 
 // ── Recortes ───────────────────────────────────────────────────────────
-const MAX_PROJECTS = 6;
+/** Techo GLOBAL de chats retenidos (antes era por proyecto: con varios chats
+ *  por proyecto el límite que importa es el total, no cuántos proyectos hay). */
+const MAX_CHATS = 40;
 const MAX_MESSAGES = 60;
 const MAX_CHARS_PER_BLOCK = 12_000;
 const MAX_BYTES = 900_000;
@@ -102,21 +134,45 @@ function worthKeeping(thread: LabThread): boolean {
   return thread.messages.length > 0 || thread.draft.trim().length > 0 || !!thread.pendingTurn;
 }
 
-export function serializeLab(byProject: Record<string, LabThread>, now: number): string | null {
-  const entries = Object.entries(byProject)
+export function serializeLab(
+  byChat: Record<string, LabThread>,
+  activeByProject: Record<string, string>,
+  now: number,
+): string | null {
+  // Los chats activos (los que se retoman al volver) nunca se descartan por
+  // cuota aunque sean los más viejos: perder EL que se está viendo ahora
+  // mismo sería mucho peor que perder uno archivado de hace días.
+  const activeIds = new Set(Object.values(activeByProject));
+  const entries = Object.entries(byChat)
     .filter(([, t]) => worthKeeping(t))
     .map(([k, t]) => [k, trimThread(t)] as const)
-    .slice(-MAX_PROJECTS);
+    .sort((a, b) => {
+      const aActive = activeIds.has(a[1].id) ? 1 : 0;
+      const bActive = activeIds.has(b[1].id) ? 1 : 0;
+      if (aActive !== bActive) return bActive - aActive; // activos primero
+      return b[1].updatedAt - a[1].updatedAt; // luego los más recientes
+    })
+    .slice(0, MAX_CHATS);
   if (entries.length === 0) return null;
 
-  const payload: PersistedLab = { v: SCHEMA_VERSION, byProject: Object.fromEntries(entries), savedAt: now };
+  const keptIds = new Set(entries.map(([, t]) => t.id));
+  const prunedActive = Object.fromEntries(
+    Object.entries(activeByProject).filter(([, id]) => keptIds.has(id)),
+  );
+
+  const payload: PersistedLab = {
+    v: SCHEMA_VERSION,
+    byChat: Object.fromEntries(entries),
+    activeByProject: prunedActive,
+    savedAt: now,
+  };
   let raw = JSON.stringify(payload);
   // Todavía muy grande: se recorta más fuerte antes de rendirse. Perder los
   // mensajes viejos es mejor que no guardar nada.
   for (const cap of [30, 12, 4]) {
     if (raw.length <= MAX_BYTES) break;
-    payload.byProject = Object.fromEntries(
-      Object.entries(payload.byProject).map(([k, t]) => [k, trimThread(t, cap)]),
+    payload.byChat = Object.fromEntries(
+      Object.entries(payload.byChat).map(([k, t]) => [k, trimThread(t, cap)]),
     );
     raw = JSON.stringify(payload);
   }
@@ -144,16 +200,20 @@ function isPendingTurn(p: unknown): p is PendingLabTurn {
  * viejo, forma inesperada— devuelve null: arrancar limpio es aceptable,
  * romperse al arrancar no.
  */
-export function parseLab(raw: string | null, now: number): Record<string, LabThread> | null {
+export function parseLab(raw: string | null, now: number): HydratedLab | null {
   if (!raw) return null;
   try {
     const data = JSON.parse(raw) as PersistedLab;
-    if (!data || data.v !== SCHEMA_VERSION || typeof data.byProject !== "object") return null;
+    if (!data || data.v !== SCHEMA_VERSION || typeof data.byChat !== "object") return null;
     if (typeof data.savedAt === "number" && now - data.savedAt > MAX_AGE_MS) return null;
-    const out: Record<string, LabThread> = {};
-    for (const [k, t] of Object.entries(data.byProject)) {
-      if (!t || !Array.isArray(t.messages) || !t.messages.every(isMessage)) continue;
-      out[k] = {
+    const byChat: Record<string, LabThread> = {};
+    for (const [k, t] of Object.entries(data.byChat)) {
+      if (!t || typeof t.id !== "string" || !t.id) continue;
+      if (!Array.isArray(t.messages) || !t.messages.every(isMessage)) continue;
+      byChat[k] = {
+        id: t.id,
+        archived: t.archived === true,
+        updatedAt: typeof t.updatedAt === "number" ? t.updatedAt : now,
         sdkSessionId: typeof t.sdkSessionId === "string" ? t.sdkSessionId : null,
         sessionKey: typeof t.sessionKey === "string" ? t.sessionKey : "",
         messages: t.messages,
@@ -162,7 +222,14 @@ export function parseLab(raw: string | null, now: number): Record<string, LabThr
         pendingTurn: isPendingTurn(t.pendingTurn) ? t.pendingTurn : undefined,
       };
     }
-    return Object.keys(out).length > 0 ? out : null;
+    if (Object.keys(byChat).length === 0) return null;
+    const activeByProject: Record<string, string> = {};
+    if (data.activeByProject && typeof data.activeByProject === "object") {
+      for (const [proj, id] of Object.entries(data.activeByProject)) {
+        if (typeof id === "string" && id) activeByProject[proj] = id;
+      }
+    }
+    return { byChat, activeByProject };
   } catch {
     return null;
   }
@@ -172,7 +239,7 @@ export function parseLab(raw: string | null, now: number): Record<string, LabThr
 // Todo envuelto: en modo privado de Safari el simple acceso puede lanzar, y
 // eso no puede tumbar el laboratorio.
 
-export function loadLab(now = Date.now()): Record<string, LabThread> | null {
+export function loadLab(now = Date.now()): HydratedLab | null {
   try {
     return parseLab(localStorage.getItem(STORAGE_KEY), now);
   } catch {
@@ -180,9 +247,13 @@ export function loadLab(now = Date.now()): Record<string, LabThread> | null {
   }
 }
 
-export function saveLab(byProject: Record<string, LabThread>, now = Date.now()): void {
+export function saveLab(
+  byChat: Record<string, LabThread>,
+  activeByProject: Record<string, string>,
+  now = Date.now(),
+): void {
   try {
-    const raw = serializeLab(byProject, now);
+    const raw = serializeLab(byChat, activeByProject, now);
     if (raw === null) localStorage.removeItem(STORAGE_KEY);
     else localStorage.setItem(STORAGE_KEY, raw);
   } catch {

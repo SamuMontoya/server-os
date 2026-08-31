@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { useWorkspace } from "@/state/WorkspaceContext";
-import { startTurn, attachTurn, fetchTurn, stopTurn } from "@/lib/chat-turns";
+import { startTurn, attachTurn, fetchTurn, fetchTurnResilient, stopTurn } from "@/lib/chat-turns";
 import { Markdown } from "@/components/Markdown";
 import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
@@ -21,11 +21,14 @@ import { OrbeIA } from "@/components/orbe/OrbeIA";
 import {
   loadLab,
   saveLab,
+  chatStorageKey,
+  type HydratedLab,
   type LabBlock,
   type LabMessage,
   type LabThread,
   type PendingLabTurn,
 } from "@/lib/lab-persist";
+import { LabChatsScreen, type LabChatSummary } from "@/components/LabChatsScreen";
 
 /**
  * Un tramo de la respuesta, EN EL ORDEN EN QUE PASÓ.
@@ -83,9 +86,42 @@ export default function Laboratorio() {
   // chat nuevo y vacío sobre una conversación que seguía existiendo en el
   // servidor. Mismo patrón que ChatPanel (lib/chat-persist.ts), en su propio
   // storage (lib/lab-persist.ts) para no mezclar los dos historiales.
-  const hydratedRef = useRef<Record<string, LabThread> | null | undefined>(undefined);
+  const hydratedRef = useRef<HydratedLab | null | undefined>(undefined);
   if (hydratedRef.current === undefined) hydratedRef.current = loadLab();
-  const initialThread = hydratedRef.current?.[projKey];
+
+  // Con VARIOS chats por proyecto (antes uno solo) hay que decidir, al
+  // arrancar, cuál de los del proyecto en foco es "el activo": el que
+  // `activeByProject` recuerda si sigue vivo y sin archivar, o si no el más
+  // reciente sin archivar de ese proyecto, o si no hay ninguno, uno nuevo en
+  // blanco. Se resuelve UNA vez (mismo truco de ref-lazy-init que ya usa
+  // `sessionKeyRef` más abajo) para que el resto del componente pueda seguir
+  // tratando "el chat activo" como si fuera el único, igual que antes.
+  const initRef = useRef<{ activeChatId: string; thread: LabThread | null } | undefined>(undefined);
+  if (initRef.current === undefined) {
+    const byChat = hydratedRef.current?.byChat ?? {};
+    const savedId = hydratedRef.current?.activeByProject[projKey];
+    let chosenId: string | null = null;
+    let chosenThread: LabThread | null = null;
+    if (savedId) {
+      const t = byChat[chatStorageKey(projKey, savedId)];
+      if (t && !t.archived) {
+        chosenId = savedId;
+        chosenThread = t;
+      }
+    }
+    if (!chosenThread) {
+      for (const [key, t] of Object.entries(byChat)) {
+        if (!key.startsWith(`${projKey}::`) || t.archived) continue;
+        if (!chosenThread || t.updatedAt > chosenThread.updatedAt) chosenThread = t;
+      }
+      chosenId = chosenThread?.id ?? null;
+    }
+    initRef.current = { activeChatId: chosenId ?? uuid(), thread: chosenThread };
+  }
+  // Copia local: TS no estrecha `initRef.current` como definido a través de
+  // dos statements separados, y esto se lee varias veces más abajo.
+  const init = initRef.current;
+  const initialThread = init.thread;
 
   const [draft, setDraft] = useState(initialThread?.draft ?? "");
   const [messages, setMessages] = useState<LabMessage[]>(initialThread?.messages ?? []);
@@ -153,6 +189,11 @@ export default function Laboratorio() {
    * cada bloque nuevo tironeaba la vista.
    */
   const userPinnedRef = useRef(false);
+  /** true = hay suficiente texto por encima del fondo como para mostrar el
+   *  botón circular de "ir al final" sobre el composer. */
+  const [showJumpDown, setShowJumpDown] = useState(false);
+  /** true = está abierta la pantalla de "chats abiertos" (menú hamburguesa). */
+  const [showChats, setShowChats] = useState(false);
   /**
    * TODOS los object URLs creados en esta visita. Un object URL mantiene el
    * blob vivo hasta que se revoca explícitamente, y las imágenes ya enviadas
@@ -178,16 +219,35 @@ export default function Laboratorio() {
   const sdkSessionIdRef = useRef<string | null>(initialThread?.sdkSessionId ?? null);
   const unfollowRef = useRef<(() => void) | null>(null);
 
-  // Hilos de OTROS proyectos, guardados por referencia (no en estado: nadie
-  // los pinta mientras no están en foco). Al cambiar `selectedProject` se
-  // guarda el actual aquí y se restaura el que corresponda — igual que
-  // `byProject` en ChatPanel.
-  const byProjectRef = useRef(
+  /** Id del chat activo ahora mismo (el que vive en `messages`/`draft`/etc.
+   *  de arriba). Con un solo chat por proyecto esto no hacía falta; ahora
+   *  puede haber varios, y todo lo que no es el activo vive "guardado" en
+   *  `chatsRef`, no en el estado de React (nadie lo pinta mientras no está
+   *  en foco). */
+  const activeChatIdRef = useRef(init.activeChatId);
+  /** TODOS los demás chats (de este proyecto y de otros), guardados por
+   *  referencia — igual que `byProject` en ChatPanel, un nivel más profundo
+   *  (antes era un hilo por proyecto; ahora son varios). Clave =
+   *  `chatStorageKey(proyecto, chat.id)`. */
+  const chatsRef = useRef(
     new Map<string, LabThread>(
-      Object.entries(hydratedRef.current ?? {}).filter(([k]) => k !== projKey),
+      Object.entries(hydratedRef.current?.byChat ?? {}).filter(
+        ([key]) => key !== chatStorageKey(projKey, init.activeChatId),
+      ),
     ),
   );
+  /** proyecto → id del chat que se retoma ahí. Se persiste tal cual. */
+  const activeByProjectRef = useRef<Record<string, string>>({
+    ...(hydratedRef.current?.activeByProject ?? {}),
+    [projKey]: init.activeChatId,
+  });
   const prevProjRef = useRef(projKey);
+  /** Sube cada vez que `chatsRef`/`activeChatIdRef` cambian por fuera de un
+   *  render (crear/archivar/borrar/cambiar de chat): es lo único que hace
+   *  falta para que la pantalla de chats (que lee esos refs directamente)
+   *  se vuelva a pintar. */
+  const [chatsVersion, setChatsVersion] = useState(0);
+  const bumpChatsVersion = () => setChatsVersion((v) => v + 1);
 
   // Refs-espejo del estado React: `persistNow` necesita leer el valor MÁS
   // RECIENTE aunque se dispare fuera de un render (debounce, pagehide). Se
@@ -200,26 +260,182 @@ export default function Laboratorio() {
   const modelRef = useRef(model);
   modelRef.current = model;
 
-  /** Snapshot del hilo actual, tal como debe guardarse ahora mismo. */
-  const buildThread = (): LabThread => ({
+  /** Snapshot del chat activo, tal como debe guardarse ahora mismo. */
+  const buildThread = (overrides?: Partial<LabThread>): LabThread => ({
+    id: activeChatIdRef.current,
+    archived: false,
+    updatedAt: Date.now(),
     sdkSessionId: sdkSessionIdRef.current,
     sessionKey: sessionKeyRef.current ?? "",
     messages: messagesRef.current,
     draft: draftRef.current,
     model: modelRef.current,
     pendingTurn: pendingTurnRef.current ?? undefined,
+    ...overrides,
   });
 
+  /** Vuelca el chat activo dentro de `chatsRef` (con sus overrides, p. ej.
+   *  `{archived: true}`), SIN cambiar cuál es el chat en foco. Primer paso de
+   *  cualquier cambio de chat: guardar antes de reemplazar lo que se ve. */
+  const saveActiveIntoMap = (overrides?: Partial<LabThread>) => {
+    chatsRef.current.set(chatStorageKey(projKey, activeChatIdRef.current), buildThread(overrides));
+  };
+
   const persistNow = () => {
-    const all = Object.fromEntries(byProjectRef.current);
-    all[projKey] = buildThread();
-    saveLab(all);
+    const byChat = Object.fromEntries(chatsRef.current);
+    byChat[chatStorageKey(projKey, activeChatIdRef.current)] = buildThread();
+    saveLab(byChat, activeByProjectRef.current);
   };
   const persistNowRef = useRef(persistNow);
   persistNowRef.current = persistNow;
   /** Guardar tras una mutación fuera de render (setState es asíncrono: llamar
    *  a persistNow() en la misma línea guardaría el estado ANTERIOR). */
   const schedulePersist = () => setTimeout(() => persistNowRef.current(), 0);
+
+  // ── Varios chats por proyecto ────────────────────────────────────────
+  //
+  // Antes había un solo hilo por proyecto; ahora puede haber varios (pantalla
+  // de la lista, ver LabChatsScreen), cada uno con su propio turno. El
+  // servidor (chat-turns.ts) ya corre turnos en paralelo sin pisarse por
+  // sesión ni proyecto — lo único que hay AQUÍ es "cuál de esos chats es el
+  // que se ve ahora mismo". Cambiar de chat es la MISMA operación que cambiar
+  // de proyecto (ver el efecto de `projKey` más abajo), un nivel más
+  // profundo: guardar el actual en `chatsRef`, cargar el otro en el estado.
+  //
+  // IMPORTANTE (alcance de "paralelo" en esta versión): el turno de un chat
+  // en segundo plano sigue corriendo en el servidor sin importar si alguien
+  // lo mira — eso es gratis, viene del motor. Lo que NO hace esta versión es
+  // mostrar el streaming en vivo de dos chats a la vez: al volver a uno que
+  // quedó trabajando, `resumePending` lo reengancha y se pone al día de una,
+  // no palabra por palabra. Ver DECISIONES.md si algún día hace falta más.
+
+  /** Primeras palabras del primer mensaje del usuario — lo que se ve en la
+   *  card de la lista cuando el chat no tiene título propio. */
+  const deriveTitle = (msgs: LabMessage[]): string => {
+    const first = msgs.find((m) => m.role === "user" && m.content.trim());
+    if (!first) return "Chat nuevo";
+    const flat = first.content.trim().replace(/\s+/g, " ");
+    return flat.length > 48 ? `${flat.slice(0, 48)}…` : flat;
+  };
+
+  /** Todos los chats de un proyecto, activo incluido, para pintar la lista.
+   *  Lee `chatsRef` + (si es el proyecto en foco) el estado de arriba. */
+  const listChatsForProject = (pk: string): LabChatSummary[] => {
+    const out: LabChatSummary[] = [];
+    if (pk === projKey) {
+      out.push({
+        id: activeChatIdRef.current,
+        title: deriveTitle(messagesRef.current),
+        updatedAt: Date.now(),
+        archived: false,
+        running: busy || !!pendingTurnRef.current,
+      });
+    }
+    for (const [key, t] of chatsRef.current) {
+      if (!key.startsWith(`${pk}::`)) continue;
+      out.push({
+        id: t.id,
+        title: deriveTitle(t.messages),
+        updatedAt: t.updatedAt,
+        archived: t.archived,
+        running: !!t.pendingTurn,
+      });
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  };
+
+  /** Reemplaza lo que hay en `messages`/`draft`/etc. por el chat `id` (o uno
+   *  en blanco si `thread` es null). Asume que quien llama YA decidió qué
+   *  hacer con el chat que se estaba viendo (guardarlo, archivarlo, nada). */
+  const loadChatIntoState = (id: string, thread: LabThread | null) => {
+    unfollowRef.current?.();
+    unfollowRef.current = null;
+    chatsRef.current.delete(chatStorageKey(projKey, id));
+    activeChatIdRef.current = id;
+    activeByProjectRef.current[projKey] = id;
+    turnIdRef.current = null;
+    setStopping(false);
+    sdkSessionIdRef.current = thread?.sdkSessionId ?? null;
+    sessionKeyRef.current = thread?.sessionKey || uuid();
+    pendingTurnRef.current = thread?.pendingTurn ?? null;
+    lastSeqRef.current = thread?.pendingTurn?.seq ?? 0;
+    setMessages(thread?.messages ?? []);
+    setDraft(thread?.draft ?? "");
+    setModel(thread?.model ?? null);
+    setBusy(false);
+    // Si el chat que se abre tenía un turno vivo, intenta reengancharse.
+    resumePendingRef.current();
+  };
+
+  /** El primer chat no archivado del proyecto que encuentre en `chatsRef`, o
+   *  uno nuevo en blanco si no queda ninguno — para no dejar el Laboratorio
+   *  sin chat activo tras archivar/borrar el que se estaba viendo. */
+  const loadAnyOtherChat = () => {
+    for (const [key, t] of chatsRef.current) {
+      if (key.startsWith(`${projKey}::`) && !t.archived) {
+        loadChatIntoState(t.id, t);
+        return;
+      }
+    }
+    loadChatIntoState(uuid(), null);
+  };
+
+  const switchToChat = (id: string) => {
+    if (id === activeChatIdRef.current) {
+      setShowChats(false);
+      return;
+    }
+    saveActiveIntoMap();
+    const thread = chatsRef.current.get(chatStorageKey(projKey, id)) ?? null;
+    loadChatIntoState(id, thread);
+    setShowChats(false);
+    schedulePersist();
+  };
+
+  const createNewChat = () => {
+    saveActiveIntoMap();
+    loadChatIntoState(uuid(), null);
+    setShowChats(false);
+    schedulePersist();
+  };
+
+  /** Swipe a la derecha en la lista: archivar. Si es el chat activo, hay que
+   *  dejar OTRO en foco (no se puede archivar y seguir viéndolo). */
+  const archiveChat = (id: string) => {
+    if (id === activeChatIdRef.current) {
+      saveActiveIntoMap({ archived: true });
+      loadAnyOtherChat();
+    } else {
+      const key = chatStorageKey(projKey, id);
+      const t = chatsRef.current.get(key);
+      if (t) chatsRef.current.set(key, { ...t, archived: true });
+    }
+    schedulePersist();
+    bumpChatsVersion();
+  };
+
+  const unarchiveChat = (id: string) => {
+    const key = chatStorageKey(projKey, id);
+    const t = chatsRef.current.get(key);
+    if (t) chatsRef.current.set(key, { ...t, archived: false, updatedAt: Date.now() });
+    schedulePersist();
+    bumpChatsVersion();
+  };
+
+  /** Swipe a la izquierda: eliminar. No cancela el turno en el servidor si
+   *  seguía vivo (igual que cerrar un tab en ChatPanel) — solo se deja de
+   *  escuchar y de guardar localmente. */
+  const deleteChat = (id: string) => {
+    if (id === activeChatIdRef.current) {
+      unfollowRef.current?.();
+      unfollowRef.current = null;
+      loadAnyOtherChat();
+    } else {
+      chatsRef.current.delete(chatStorageKey(projKey, id));
+    }
+    schedulePersist();
+    bumpChatsVersion();
+  };
 
   /**
    * Reenganche perezoso: `follow` (más abajo) necesita poder llamar a
@@ -228,6 +444,10 @@ export default function Laboratorio() {
    * archivo — se asigna la función real más abajo, en cada render.
    */
   const resumePendingRef = useRef<() => void>(() => {});
+  /** true = ya hay un reintento acotado de `resumePending` agendado (ver
+   *  fetchTurnResilient devolviendo null): evita apilar varios si visible +
+   *  online se disparan casi juntos al volver de segundo plano. */
+  const resumeRetryPendingRef = useRef(false);
 
   // Textarea auto-crecible (hasta ~5 líneas), igual que en ChatPanel.
   //
@@ -560,6 +780,29 @@ export default function Laboratorio() {
   };
 
   /**
+   * Visibilidad del botón circular de "ir al final" (sobre el composer).
+   * A diferencia de `onUserScroll` (que solo debe reaccionar a gestos
+   * directos, ver arriba), este SÍ puede dispararse con `scroll` nativo —
+   * incluye nuestros propios `scrollTo`— porque no hace más que reflejar
+   * dónde quedó la vista, no decidir si el auto-anclaje sigue activo.
+   */
+  const onListScrollForJump = () => {
+    const list = listRef.current;
+    if (!list) return;
+    const gap = list.scrollHeight - list.scrollTop - list.clientHeight;
+    setShowJumpDown(gap > 200);
+  };
+
+  /** Clic en el botón de "ir al final": salta al fondo real y suelta el
+   *  anclaje manual, para que el próximo mensaje vuelva a seguirse solo. */
+  const jumpToBottom = () => {
+    const list = listRef.current;
+    if (!list) return;
+    userPinnedRef.current = false;
+    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+  };
+
+  /**
    * Durante el stream: el contenido crece, así que el colchón sobra de a
    * poco. Encogerlo mantiene el scroll máximo justo en el punto donde el
    * ancla está arriba, así que la vista NO se mueve. Throttled a un frame
@@ -571,6 +814,9 @@ export default function Laboratorio() {
     requestAnimationFrame(() => {
       shrinkPendingRef.current = false;
       syncSpacer({ shrinkOnly: true });
+      // El contenido creció por debajo: si Samu está leyendo arriba, el hueco
+      // hasta el fondo real también creció, aunque no haya habido scroll.
+      onListScrollForJump();
     });
   };
 
@@ -748,8 +994,14 @@ export default function Laboratorio() {
     }
     turnIdRef.current = pending.id;
     setBusy(true);
-    void fetchTurn(pending.id, pending.seq).then((st) => {
-      if (!st) {
+    // `fetchTurnResilient` ya reintenta contra blips transitorios (token de
+    // Supabase a punto de refrescar, 5xx del agente, red caída un instante).
+    // Solo un "not-found" confirmado es pérdida real; `null` significa "no se
+    // pudo confirmar nada todavía" y NO debe leerse como "se perdió" — eso es
+    // justo lo que obligaba a repetir la pregunta con el turno vivísimo del
+    // otro lado.
+    void fetchTurnResilient(pending.id, pending.seq).then((st) => {
+      if (st === "not-found") {
         // El agente se reinició y el turno ya no existe. Lo honesto es
         // decirlo, no dejar el composer bloqueado para siempre.
         turnIdRef.current = null;
@@ -757,6 +1009,21 @@ export default function Laboratorio() {
         setBusy(false);
         appendNotice(replyId, "⚠ el turno se perdió al reiniciarse el agente. Vuelve a preguntar.");
         schedulePersist();
+        return;
+      }
+      if (st === null) {
+        // Inconclusive tras los reintentos: no se sabe si sigue vivo o no.
+        // Se deja todo como estaba (busy, pendingTurn) — más vale reintentar
+        // solo cuando vuelva la visibilidad/red que declarar perdido algo que
+        // probablemente sigue corriendo. Un reintento acotado por si la
+        // pantalla se quedó abierta y visible pero la red seguía inestable.
+        if (!resumeRetryPendingRef.current) {
+          resumeRetryPendingRef.current = true;
+          window.setTimeout(() => {
+            resumeRetryPendingRef.current = false;
+            resumePendingRef.current();
+          }, 8000);
+        }
         return;
       }
       // Corriendo o ya cerrado, `follow` resuelve los dos casos: replayea
@@ -815,32 +1082,39 @@ export default function Laboratorio() {
     };
   }, []);
 
-  // Cambio de proyecto en foco: guarda el hilo actual bajo su clave y
-  // restaura el del proyecto nuevo (o uno en blanco si nunca habló ahí). El
-  // turno en vuelo pertenece al hilo VIEJO — se suelta el stream, no se
-  // cancela el turno del servidor, y su `pendingTurn` viaja guardado por si
-  // se vuelve a ese proyecto más tarde.
+  // Cambio de proyecto en foco: guarda el chat activo bajo su clave vieja y
+  // restaura el que estaba activo en el proyecto nuevo (el más reciente sin
+  // archivar si nunca se guardó cuál era, o uno en blanco si el proyecto no
+  // tiene ninguno). El turno en vuelo pertenece al chat VIEJO — se suelta el
+  // stream, no se cancela el turno del servidor, y su `pendingTurn` viaja
+  // guardado por si se vuelve a ese chat más tarde.
   useEffect(() => {
     if (prevProjRef.current === projKey) return;
-    byProjectRef.current.set(prevProjRef.current, buildThread());
+    const oldProj = prevProjRef.current;
+    chatsRef.current.set(chatStorageKey(oldProj, activeChatIdRef.current), buildThread());
     prevProjRef.current = projKey;
 
-    unfollowRef.current?.();
-    unfollowRef.current = null;
-    turnIdRef.current = null;
-    setStopping(false);
-
-    const next = byProjectRef.current.get(projKey);
-    sdkSessionIdRef.current = next?.sdkSessionId ?? null;
-    sessionKeyRef.current = next?.sessionKey || uuid();
-    pendingTurnRef.current = next?.pendingTurn ?? null;
-    lastSeqRef.current = next?.pendingTurn?.seq ?? 0;
-    setMessages(next?.messages ?? []);
-    setDraft(next?.draft ?? "");
-    setModel(next?.model ?? null);
-    setBusy(false);
-    // Si el hilo del proyecto nuevo tenía un turno vivo, intenta reengancharse.
-    resumePendingRef.current();
+    // Resolver cuál chat retoma el proyecto nuevo: el que recuerde
+    // `activeByProject` si sigue vivo y sin archivar, si no el más reciente
+    // sin archivar de ese proyecto, si no hay ninguno uno nuevo en blanco.
+    const savedId = activeByProjectRef.current[projKey];
+    let nextId: string | null = null;
+    let nextThread: LabThread | null = null;
+    if (savedId) {
+      const t = chatsRef.current.get(chatStorageKey(projKey, savedId));
+      if (t && !t.archived) {
+        nextId = savedId;
+        nextThread = t;
+      }
+    }
+    if (!nextThread) {
+      for (const [key, t] of chatsRef.current) {
+        if (!key.startsWith(`${projKey}::`) || t.archived) continue;
+        if (!nextThread || t.updatedAt > nextThread.updatedAt) nextThread = t;
+      }
+      nextId = nextThread?.id ?? null;
+    }
+    loadChatIntoState(nextId ?? uuid(), nextThread);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projKey]);
 
@@ -1001,7 +1275,51 @@ export default function Laboratorio() {
 
   return (
     <main className="lab-paper">
-      <div className="lab-messages" ref={listRef} onWheel={onUserScroll} onTouchMove={onUserScroll}>
+      {/* Barra superior: antes tenía la flecha de "volver" (quitada el
+          2026-08-29 para dejar la pantalla en blanco puro). Vuelve, con el
+          icono cambiado por un menú hamburguesa que abre la lista de chats
+          del proyecto en foco (varios chats en paralelo, swipe para
+          archivar/borrar — ver LabChatsScreen). */}
+      <div className="lab-topbar">
+        <button
+          type="button"
+          className="lab-menu-btn"
+          aria-label="Ver chats abiertos"
+          title="Chats"
+          onClick={() => setShowChats(true)}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M4 6h16M4 12h16M4 18h16"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+      {showChats && (
+        <LabChatsScreen
+          // `chatsVersion` fuerza a recalcular la lista tras crear/archivar/
+          // borrar (chatsRef es un ref: mutarlo no dispara un re-render solo).
+          key={chatsVersion}
+          chats={listChatsForProject(projKey)}
+          activeId={activeChatIdRef.current}
+          onClose={() => setShowChats(false)}
+          onOpen={switchToChat}
+          onNew={createNewChat}
+          onArchive={archiveChat}
+          onUnarchive={unarchiveChat}
+          onDelete={deleteChat}
+        />
+      )}
+      <div
+        className="lab-messages"
+        ref={listRef}
+        onWheel={onUserScroll}
+        onTouchMove={onUserScroll}
+        onScroll={onListScrollForJump}
+      >
         {messages.map((m, idx) => {
           if (m.role === "user") {
             return (
@@ -1056,10 +1374,12 @@ export default function Laboratorio() {
                 // "Pensando" solo hasta el primer bloque: a partir de ahí los
                 // pasos ya cuentan qué está haciendo (igual que ChatPanel).
                 // Antes eran tres puntos grises saltando; ahora es el orbe en
-                // miniatura (sin ojos: a 20px no caben) para que "pensando" se
-                // lea como el mismo personaje en todo Hermes.
+                // miniatura, ya con ojos (a 56px caben) para que "pensando"
+                // se lea como el mismo personaje en todo Hermes (igual que
+                // en el arranque). Tamaño = el doble del botón circular de
+                // enviar (.lab-send, 28px), o sea 56px.
                 <span role="status" aria-label="Hermes está pensando">
-                  <OrbeIA tam="20px" ojos={false} ariaLabel="" />
+                  <OrbeIA tam="56px" ojos ariaLabel="" />
                 </span>
               ) : null}
             </div>
@@ -1072,6 +1392,28 @@ export default function Laboratorio() {
       </div>
 
       <div className="lab-inputbar">
+        {showJumpDown && (
+          <button
+            type="button"
+            className="lab-jumpdown"
+            onClick={jumpToBottom}
+            aria-label="Ir al final de la conversación"
+            title="Ir al final"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              <path d="M12 5v14" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M5 12l7 7 7-7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
         <form
           className={`lab-composer ${dropping ? "lab-composer--drop" : ""}`}
           onSubmit={(e) => {
