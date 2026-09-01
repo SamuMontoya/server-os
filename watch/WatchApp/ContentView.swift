@@ -62,7 +62,23 @@ struct ContentView: View {
   @State private var saltoDesde: Date?
   @State private var sacudidaDesde: Date?
 
-  var body: some View {
+  var body: some View { orbe }
+
+  /// El toque abre el dictado EN EL ACTO y lanza el salto a la vez. El salto
+  /// se deja disparado igual: al volver del dictado (o al cancelarlo) todavía
+  /// alcanza a verse, y esperar a que terminara metía 1,6 s de retraso entre
+  /// tocar y poder hablar.
+  private func tocar() {
+    saltoDesde = Date()
+    // El texto dictado no se pinta: el "Listo" del dictado del sistema ya
+    // cierra el gesto, y una pantalla más encima sobra. Aquí es donde irá el
+    // envío al agente cuando el reloj hable con el servidor.
+    Dictado.pedir { _ in
+      saltoDesde = nil
+    }
+  }
+
+  private var orbe: some View {
     GeometryReader { geo in
       let lienzo = min(geo.size.width, geo.size.height) * Self.ladoOrbe * Self.margenLienzo
       let r = lienzo / 2 / Self.margenLienzo          // radio del orbe en puntos
@@ -100,7 +116,7 @@ struct ContentView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .contentShape(Rectangle())
-      .onTapGesture { saltoDesde = Date() }
+      .onTapGesture(perform: tocar)
     }
     .ignoresSafeArea()
     .onChange(of: atenuada) { _, ahoraAtenuada in

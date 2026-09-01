@@ -50,7 +50,7 @@ targets:
     info:
       path: Container/Info.plist
       properties:
-        CFBundleDisplayName: Hermes
+        CFBundleDisplayName: OS
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -77,9 +77,41 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
         GENERATE_INFOPLIST_FILE: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: HermesComplicacion
+        embed: true
+        copy:
+          destination: plugins
     info:
       path: WatchApp/Info.plist
       properties:
-        CFBundleDisplayName: Hermes
+        CFBundleDisplayName: OS
+        # El dictado del sistema pide el micrófono; sin esta clave la app se
+        # cierra al presentarlo, sin mensaje útil.
+        NSMicrophoneUsageDescription: Hermes usa el micrófono para dictarle.
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.samumontoya.hermes
+
+  # ── Complicación ──────────────────────────────────────────────────────────
+  # Acceso directo en la esfera. Es una extensión de WidgetKit: en watchOS 9+
+  # las complicaciones ya no son ClockKit, son widgets con las familias
+  # `accessory*`.
+  HermesComplicacion:
+    type: app-extension
+    platform: watchOS
+    sources: [Complicacion]
+    settings:
+      base:
+        # El id cuelga del de la app del reloj, igual que el del reloj cuelga
+        # del iPhone: Apple exige esa cadena para reconocer la pareja.
+        PRODUCT_BUNDLE_IDENTIFIER: com.samumontoya.hermes.watchkitapp.complicacion
+        PRODUCT_NAME: HermesComplicacion
+        TARGETED_DEVICE_FAMILY: "4"
+        GENERATE_INFOPLIST_FILE: "NO"
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
+    info:
+      path: Complicacion/Info.plist
+      properties:
+        CFBundleDisplayName: OS
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
