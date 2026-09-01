@@ -135,9 +135,18 @@ struct Respuesta: View {
   @ViewBuilder
   private func vistaPaso(_ p: Paso) -> some View {
     VStack(spacing: 3) {
-      Image(systemName: p.simbolo)
-        .font(.system(size: 17))
-        .foregroundStyle(Self.tinta)
+      // El icono LATE mientras el paso está en curso. Quieto se lee como una
+      // captura congelada —"¿se colgó?"—; latiendo se lee como trabajo en
+      // marcha. Va sobre el reloj del sistema y no sobre un `withAnimation`
+      // repetido, para que no se desincronice entre pasos.
+      TimelineView(.animation) { t in
+        let fase = t.date.timeIntervalSinceReferenceDate
+          .truncatingRemainder(dividingBy: 1.1) / 1.1
+        Image(systemName: p.simbolo)
+          .font(.system(size: 17))
+          .foregroundStyle(Self.tinta)
+          .opacity(corriendo ? 0.35 + 0.65 * (0.5 + 0.5 * cos(fase * 2 * .pi)) : 1)
+      }
 
       Text(p.verbo)
         .font(.system(size: 14, weight: .medium))

@@ -41,6 +41,11 @@ Reglas, sin excepción:
 - Nunca uses asteriscos, almohadillas ni guiones: en un reloj se ven como
   basura, no como formato.
 
+Si te piden APUNTAR, guardar o recordar algo suelto ("apunta que...",
+"recuérdame que...", "guarda esta idea"), responde únicamente:
+IDEA: <la idea, redactada en una frase clara y completa>. Nada más. No lo
+confundas con preguntas SOBRE lo ya guardado, que sí necesitan consultar.
+
 Si te piden VER una imagen de algo ("muéstrame un husky", "enséñame una foto
 de X"), responde únicamente: IMAGEN: <término>. Nada más.
 
@@ -94,6 +99,23 @@ class SesionRapida {
   calentar(): void {
     this.asegurar();
     this.encolar({ prompt: "Responde únicamente: OK", silencioso: true });
+  }
+
+  /**
+   * Le cuenta a la sesión rápida algo que pasó FUERA de ella.
+   *
+   * Cuando un turno escalado responde, esa respuesta no existe para la sesión
+   * rápida: es otro proceso. Sin esto, preguntar "¿y eso por qué?" justo
+   * después de una consulta escalada recibiría un "¿a qué te refieres?", que
+   * en una conversación de muñeca se siente roto. Va como turno silencioso:
+   * ocupa su sitio en la cola (la correlación es FIFO) pero no emite nada.
+   */
+  anotar(_resumen: string): void {
+    this.asegurar();
+    this.encolar({
+      prompt: `[contexto, no respondas nada más que OK] ${_resumen}`,
+      silencioso: true,
+    });
   }
 
   preguntar(prompt: string, onDelta: (t: string) => void): Promise<string> {
