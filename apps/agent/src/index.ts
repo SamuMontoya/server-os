@@ -610,98 +610,107 @@ app.post("/watch/ask", async (c) => {
   const message = b.message?.trim();
   if (!message) return c.json({ error: "message requerido" }, 400);
 
-  // El turno tiene ID y sus eventos se GUARDAN. Eso es lo que permite que
-  // bajar la muñeca deje de perder la respuesta: watchOS suspende la app y
-  // mata el SSE, pero el turno sigue vivo aquí y el reloj se re-engancha desde
-  // su cursor. Sin esto no hay arreglo posible en el cliente — watchOS no
-  // permite background sessions para data tasks ni WebSocket (TN3135).
   const turnoId = randomUUID();
   relojTurnos.crear(turnoId);
 
-  return streamSSE(c, async (stream) => {
-    const enviar = (event: string, data: unknown) => {
-      // Se guarda ANTES de escribir: si el socket ya murió, el evento tiene
-      // que quedar registrado igual para quien vuelva a por él.
-      relojTurnos.emitir(turnoId, event, data);
-      return stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {
-        /* el reloj se fue; el turno sigue */
-      });
-    };
+  // EL TRABAJO CORRE SUELTO, no dentro del stream.
+  //
+  // Antes iba dentro del handler del SSE y `pipeTurn` recibía
+  // `c.req.raw.signal`: al desconectarse el reloj —o sea, al bajar la muñeca—
+  // la señal abortaba y el turno terminaba a medias. Guardar los eventos no
+  // servía de nada si el trabajo moría con el socket. Ahora el turno vive por
+  // su cuenta y el stream solo RELATA lo que va pasando; irse solo quita un
+  // oyente.
+  void trabajarReloj(turnoId, message);
 
+  return streamSSE(c, async (stream) => {
     // Lo primero, el id: el reloj lo guarda y con él puede volver.
     await stream.writeSSE({ event: "turno", data: JSON.stringify({ id: turnoId }) });
 
-    // El latido arranca AQUÍ, no al escalar. Antes solo existía en la rama
-    // escalada, así que si la sesión rápida se atascaba el stream se quedaba
-    // abierto sin emitir un byte y el reloj giraba para siempre — sin nada que
-    // distinguir "pensando" de "colgado".
-    let latido: ReturnType<typeof setInterval> | null =
-      setInterval(() => void enviar("latido", {}), 3000);
-    const pararLatido = () => {
-      if (latido) clearInterval(latido);
-      latido = null;
-    };
-
-    const rapida = await relojRapido.preguntar(message, (t) => {
-      void enviar("delta", { text: t });
+    await new Promise<void>((resolve) => {
+      const soltar = relojTurnos.seguir(turnoId, 0, (e) => {
+        void stream.writeSSE({ event: e.tipo, data: JSON.stringify(e.datos) });
+        if (e.tipo === "fin" || e.tipo === "error") {
+          soltar?.();
+          resolve();
+        }
+      });
+      if (!soltar) return resolve();
+      c.req.raw.signal.addEventListener("abort", () => {
+        soltar();
+        resolve();
+      });
     });
+  });
+});
 
+/**
+ * El turno del reloj, de principio a fin, emitiendo a su registro.
+ *
+ * No recibe el `Context` de Hono a propósito: nada de aquí debe poder morir
+ * porque el cliente se fue. Es lo que hace que bajar la muñeca a mitad de una
+ * respuesta ya no la pierda.
+ */
+async function trabajarReloj(turnoId: string, message: string): Promise<void> {
+  const emitir = (tipo: string, datos: unknown = {}) =>
+    relojTurnos.emitir(turnoId, tipo, datos);
+
+  // Latido desde el byte cero: si la sesión rápida se atasca, sin esto el
+  // stream se queda mudo y no hay forma de distinguir "pensando" de "colgado".
+  let latido: ReturnType<typeof setInterval> | null =
+    setInterval(() => emitir("latido"), 3000);
+  const pararLatido = () => {
+    if (latido) clearInterval(latido);
+    latido = null;
+  };
+
+  try {
+    const rapida = await relojRapido.preguntar(message, (t) => emitir("delta", { text: t }));
     const limpia = rapida.trim();
 
-    // Capturar una idea es UNA escritura: escalar costaría ~28 s por algo
-    // que aquí tarda lo que tarde la base de datos.
+    // Capturar una idea es UNA escritura: escalar costaría ~28 s por algo que
+    // tarda lo que tarde la base de datos.
     if (limpia.toUpperCase().startsWith(CENTINELA_IDEA)) {
       const idea = limpia.slice(CENTINELA_IDEA.length).trim();
       const ok = await capturarIdea(idea);
-      const dicho = ok ? "Apuntado." : "No pude guardarlo.";
-      await enviar("delta", { text: dicho });
+      emitir("delta", { text: ok ? "Apuntado." : "No pude guardarlo." });
       if (ok) relojRapido.anotar(`Se apuntó esta idea del usuario: ${idea}`);
-      pararLatido();
-      await enviar("fin", { via: "idea" });
       return;
     }
 
-    // Petición de imagen: se resuelve aquí, sin gastar un turno completo.
     if (limpia.toUpperCase().startsWith(CENTINELA_IMAGEN)) {
       const q = limpia.slice(CENTINELA_IMAGEN.length).trim();
       const url = await buscarImagen(q, 0);
       if (url) {
         ultimaImagen = { q, indice: 0 };
-        await enviar("imagen", { url, q });
+        emitir("imagen", { url, q });
       } else {
-        await enviar("delta", { text: `No encontré una imagen de ${q}.` });
+        emitir("delta", { text: `No encontré una imagen de ${q}.` });
       }
-      await enviar("fin", { via: "imagen" });
       return;
     }
 
     // "Esa no, otra": la siguiente de la MISMA búsqueda.
     if (limpia.toUpperCase() === CENTINELA_OTRA) {
       if (!ultimaImagen) {
-        await enviar("delta", { text: "No sé de qué imagen hablas." });
+        emitir("delta", { text: "No sé de qué imagen hablas." });
       } else {
         const siguiente = ultimaImagen.indice + 1;
         const url = await buscarImagen(ultimaImagen.q, siguiente);
         if (url) {
           ultimaImagen = { q: ultimaImagen.q, indice: siguiente };
-          await enviar("imagen", { url, q: ultimaImagen.q });
+          emitir("imagen", { url, q: ultimaImagen.q });
         } else {
-          await enviar("delta", { text: "No hay más imágenes." });
+          emitir("delta", { text: "No hay más imágenes." });
         }
       }
-      pararLatido();
-      await enviar("fin", { via: "imagen" });
       return;
     }
 
-    if (limpia.toUpperCase() !== CENTINELA) {
-      pararLatido();
-      await enviar("fin", { via: "rapido" });
-      return;
-    }
+    if (limpia.toUpperCase() !== CENTINELA) return;
 
     // Escalada: la pregunta necesita mirar el sistema.
-    await enviar("escala", {});
+    emitir("escala");
     const turno = chatTurns.start({
       prompt: `${ESTILO_ESCALADA}\n\n${message}`,
       sessionKey: "reloj",
@@ -709,29 +718,53 @@ app.post("/watch/ask", async (c) => {
       magro: true,
       cwd: await resolveChatCwd(undefined),
     });
-    await pipeTurn(turno.id, 0, {
-      signal: c.req.raw.signal,
-      onEvent: (ev) => {
-        const e = ev as {
+
+    // Sin `signal`: este turno NO se cancela porque el reloj se haya ido.
+    // `attach` devuelve el snapshot de lo ya ocurrido más la suscripción, y
+    // hay que repartir PRIMERO el snapshot: entre el start y el attach ya
+    // pueden haber pasado eventos.
+    await new Promise<void>((resolve) => {
+      // `attach` puede devolver undefined si el turno ya no existe. Se
+      // declara antes para que el reparto pueda soltarse a sí mismo.
+      let attached: ReturnType<typeof chatTurns.attach> | undefined;
+      const reparte = (e: TurnEvent) => {
+        const x = e as unknown as {
           kind?: string;
           text?: string;
           tool?: { name?: string; target?: string };
         };
-        if (e.kind === "delta" && e.text) void enviar("delta", { text: e.text });
-        else if (e.kind === "tool" && e.tool?.name)
-          void enviar("paso", { name: e.tool.name, target: e.tool.target ?? "" });
-      },
+        if (x.kind === "delta" && x.text) emitir("delta", { text: x.text });
+        else if (x.kind === "tool" && x.tool?.name) {
+          emitir("paso", { name: x.tool.name, target: x.tool.target ?? "" });
+        }
+        if (x.kind === "done" || x.kind === "error" || x.kind === "stopped") {
+          attached?.unsubscribe();
+          resolve();
+        }
+      };
+      attached = chatTurns.attach(turno.id, 0, reparte);
+      if (!attached) return resolve();
+      for (const e of attached.snapshot.events) reparte(e);
+      if (attached.snapshot.status !== "running") {
+        attached.unsubscribe();
+        resolve();
+      }
     });
-    pararLatido();
+
     const cerrado = chatTurns.snapshot(turno.id, 0);
     if (cerrado?.text) {
       relojRapido.anotar(
         `El usuario preguntó "${message}" y se le respondió: ${cerrado.text.slice(0, 400)}`,
       );
     }
-    await enviar("fin", { via: "completo" });
-  });
-});
+  } catch (err) {
+    console.error("[reloj] turno falló:", err);
+    emitir("delta", { text: "Algo falló de mi lado." });
+  } finally {
+    pararLatido();
+    emitir("fin", {});
+  }
+}
 
 app.post("/chat/turns", async (c) => {
   const b = await c.req
