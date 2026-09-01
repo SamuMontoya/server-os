@@ -11,13 +11,19 @@ enum Agente {
   /// URL y clave se inyectan al compilar desde el `.env` del repo (lo hace
   /// `scripts/install-watch.sh`), para no dejar la clave escrita en el
   /// proyecto, que sí va a git.
-  /// DOS direcciones y se prueba en orden. La LAN primero porque es directa;
-  /// la de Tailscale como respaldo. El reloj NO corre Tailscale (watchOS no
-  /// está soportado), así que la segunda solo sirve mientras el iPhone haga
-  /// de puente — por eso la LAN manda cuando estás en casa.
+  /// TRES direcciones, probadas en orden: LAN → tailnet → Funnel público.
+  ///
+  /// La LAN primero porque es directa y no sale de casa. El tailnet después.
+  /// Y la pública al final, que es la ÚNICA que funciona fuera de casa: el
+  /// reloj no corre Tailscale (watchOS no lo soporta) y NO hereda la VPN del
+  /// iPhone —su tráfico va por su propia pila de red—, así que sin una URL
+  /// alcanzable desde internet se queda sin conexión en la calle.
+  ///
+  /// El orden importa por algo más que la velocidad: probar primero las
+  /// privadas evita sacar el tráfico a internet cuando no hace falta.
   static var bases: [String] {
-    [Bundle.main.object(forInfoDictionaryKey: "HermesURL") as? String ?? "",
-     Bundle.main.object(forInfoDictionaryKey: "HermesURLAlt") as? String ?? ""]
+    ["HermesURL", "HermesURLAlt", "HermesURLPub"]
+      .compactMap { Bundle.main.object(forInfoDictionaryKey: $0) as? String }
       .filter { !$0.isEmpty }
   }
   static var base: String { bases.first ?? "" }
@@ -26,6 +32,41 @@ enum Agente {
   }
 
   static var configurado: Bool { !bases.isEmpty }
+
+  /// La última dirección que funcionó, recordada entre sesiones.
+  ///
+  /// Sin esto, fuera de casa el reloj probaría la LAN primero y esperaría su
+  /// timeout ENTERO antes de pasar a la siguiente — la app se sentiría
+  /// colgada justo cuando más la necesitas. Recordando la buena, el caso
+  /// normal es un solo sondeo.
+  private static var ultimaBuena: String? {
+    get { UserDefaults.standard.string(forKey: "ultimaBase") }
+    set { UserDefaults.standard.set(newValue, forKey: "ultimaBase") }
+  }
+
+  /// Orden de intento: la que funcionó la última vez y luego las demás.
+  private static var ordenadas: [String] {
+    guard let u = ultimaBuena, bases.contains(u) else { return bases }
+    return [u] + bases.filter { $0 != u }
+  }
+
+  /// Sondea `/health`, que NO pide autenticación, con un plazo corto.
+  ///
+  /// Es la forma barata de saber si una dirección está viva sin arriesgar el
+  /// turno: un timeout corto en la petición real cortaría el streaming a
+  /// mitad de una respuesta larga.
+  private static func vive(_ servidor: String) async -> Bool {
+    guard let u = URL(string: "\(servidor)/health") else { return false }
+    var r = URLRequest(url: u)
+    r.timeoutInterval = 2.5
+    r.cachePolicy = .reloadIgnoringLocalCacheData
+    do {
+      let (_, resp) = try await URLSession.shared.data(for: r)
+      return (resp as? HTTPURLResponse)?.statusCode == 200
+    } catch {
+      return false
+    }
+  }
 
   /// Lo que el reloj sabe pintar. El resto de eventos del contrato (`model`,
   /// `session`, `retry`) se ignoran a propósito: en una pantalla así no
@@ -55,11 +96,20 @@ enum Agente {
       alRecibir(.fallo("Sin servidor configurado"))
       return
     }
-    for (i, servidor) in bases.enumerated() {
-      let ultima = i == bases.count - 1
+    let candidatas = ordenadas
+    for (i, servidor) in candidatas.enumerated() {
+      let ultima = i == candidatas.count - 1
+      // Se sondea antes de comprometer el turno, salvo en la última: si es la
+      // única que queda, mejor intentarlo y dar su error real que descartarla
+      // por un sondeo que pudo fallar por otra cosa.
+      if !ultima, await !vive(servidor) { continue }
       if await intentar(servidor, texto: texto, sesion: sesion,
-                        alRecibir: alRecibir, silencioso: !ultima) { return }
+                        alRecibir: alRecibir, silencioso: !ultima) {
+        ultimaBuena = servidor
+        return
+      }
     }
+    alRecibir(.fallo("Sin conexión con el servidor"))
   }
 
   /// Devuelve `true` si llegó a abrir el turno. Con `silencioso` no reporta el

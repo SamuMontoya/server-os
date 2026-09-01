@@ -93,6 +93,7 @@ targets:
         # No se escriben aquí porque project.yml SÍ va a git y la clave no debe.
         HermesURL: $(HERMES_URL)
         HermesURLAlt: $(HERMES_URL_ALT)
+        HermesURLPub: $(HERMES_URL_PUB)
         HermesAPIKey: $(HERMES_API_KEY)
         # El agente puede ir por http en la LAN; sin esto ATS bloquea la
         # conexión y el fallo se ve como "no se pudo conectar".
