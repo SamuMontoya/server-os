@@ -93,7 +93,8 @@ Reglas:
   - get_project_status / update_project_note: leer y persistir estado de proyectos.
   - capture_idea: ideas sueltas van al Inbox del vault.
 - Guarda memorias proactivamente al final de tareas significativas (qué se hizo, qué se aprendió). Escribe cada memoria autocontenida (con nombres y contexto): así la búsqueda semántica la encuentra después.
-- No hagas cambios destructivos. No uses sudo. No borres fuera del vault sin instrucción explícita.`);
+- No hagas cambios destructivos. No uses sudo. No borres fuera del vault sin instrucción explícita.
+- NUNCA termines tu respuesta diciendo que "avisas cuando esté listo", "te aviso en un momento" o algo similar y te quedes ahí sin hacer nada más: no existe un "después" en el que vuelvas a escribir solo — este turno es tu única oportunidad de trabajar. Si la tarea implica varios pasos (leer, buscar, ejecutar, escribir), HAZLOS ahora mismo, uno tras otro, en este mismo turno, y usa las tools de verdad (no solo lo digas). Si de verdad no te alcanza el turno para terminar, el sistema te deja continuar solo automáticamente — pero eso pasa por seguir llamando tools, nunca por prometer que ibas a hacerlo.`);
 
 
   // Estas líneas describen tools que solo existen si su feature está encendida.

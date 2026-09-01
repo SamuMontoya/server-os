@@ -172,14 +172,15 @@ function SwipeableCard({
           </div>
           {chat.running ? (
             // TRABAJANDO: en vez del último texto (que está congelado en lo
-            // que se dijo antes de irse, y por tanto miente) van dos barras de
-            // esqueleto con el brillo corriendo de izquierda a derecha. Es la
-            // forma de decir "aquí abajo está pasando algo que todavía no se
-            // puede mostrar" sin inventar un texto. Al abrir el chat se ve la
-            // conversación real, no esto.
-            <span className="lab-skel" role="status" aria-label="Trabajando">
-              <span className="lab-skel-bar" />
-              <span className="lab-skel-bar lab-skel-bar--short" />
+            // que se dijo antes de irse, y por tanto miente) va el orbe SIN
+            // ojos, chiquito. Es la forma de decir "aquí abajo está pasando
+            // algo que todavía no se puede mostrar" sin inventar un texto ni
+            // recurrir a barras de esqueleto — Samu quería el mismo lenguaje
+            // visual del orbe, no un placeholder genérico. Sin ojos: en la
+            // lista no es "Hermes mirando", es solo el pulso de actividad.
+            // Al abrir el chat se ve la conversación real, no esto.
+            <span className="lab-chatcard-orbe" role="status" aria-label="Trabajando">
+              <OrbeIA tam="16px" ojos={false} ariaLabel="" />
             </span>
           ) : chat.preview ? (
             <span className="lab-chatcard-preview">{chat.preview}</span>

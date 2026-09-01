@@ -410,9 +410,14 @@ app.post("/v1/chat/completions", async (c) => {
     // Serializamos las escrituras para conservar el orden de los deltas.
     let queue: Promise<unknown> = Promise.resolve();
     const send = (data: unknown) => {
-      queue = queue.then(() =>
-        stream.writeSSE({ data: typeof data === "string" ? data : JSON.stringify(data) }),
-      );
+      // Mismo `.catch` que en /chat/turns/:id/stream: escribirle a un cliente
+      // que ya se fue no puede convertirse en un unhandled rejection que
+      // tumbe el proceso entero (y con él, los turnos de todos los demás).
+      queue = queue
+        .then(() =>
+          stream.writeSSE({ data: typeof data === "string" ? data : JSON.stringify(data) }),
+        )
+        .catch(() => {});
       return queue;
     };
     // El id del turno viaja primero: con él, un cliente que se cayó puede
@@ -613,29 +618,48 @@ app.get("/chat/turns/:id/stream", (c) => {
   return streamSSE(c, async (stream) => {
     let queue: Promise<unknown> = Promise.resolve();
     const send = (event: string, data: unknown) => {
-      queue = queue.then(() => stream.writeSSE({ event, data: JSON.stringify(data) }));
+      // El `.catch` no es cosmética: si el cliente ya se fue (iPhone bloqueado,
+      // WiFi caído), `writeSSE` rechaza y sin esto quedaría un unhandled
+      // rejection que en Node tumba el PROCESO — o sea, un cliente que se va
+      // mataría los turnos de todos los demás. Escribir a un socket muerto no
+      // es un error del turno: el turno sigue, esta conexión no.
+      queue = queue
+        .then(() => stream.writeSSE({ event, data: JSON.stringify(data) }))
+        .catch(() => {});
       return queue;
     };
-    await pipeTurn(id, from, {
-      // `state` primero: el cliente sabe de una si el turno ya terminó
-      // mientras no estaba, y con `text` puede repintar sin depender del
-      // buffer de eventos (que sí se recorta).
-      onSnapshot: (snap) =>
-        void send("state", {
-          status: snap.status,
-          text: snap.text,
-          steps: snap.steps,
-          seq: snap.seq,
-          truncated: snap.truncated,
-          attempts: snap.attempts,
-          sdkSessionId: snap.sdkSessionId,
-          model: snap.model,
-          effort: snap.effort,
-          error: snap.error,
-        }),
-      onEvent: (e) => void send("turn", e),
-      signal: c.req.raw.signal,
-    });
+    // Latido cada 15 s. Sin él, un turno que pasa dos minutos dentro de una
+    // sola herramienta (un subagente, un build) no manda un solo byte, y ni el
+    // navegador ni ningún proxy de por medio pueden distinguir "trabajando" de
+    // "conexión muerta": iOS congela la pestaña, el socket queda medio abierto
+    // y el EventSource nunca dispara `onerror` — la respuesta parecía perdida
+    // aunque el servidor la estuviera escribiendo. Con el latido, el cliente
+    // sabe medir el silencio y reengancharse (ver STALE_MS en lib/chat-turns).
+    const beat = setInterval(() => void send("ping", { t: Date.now() }), 15_000);
+    try {
+      await pipeTurn(id, from, {
+        // `state` primero: el cliente sabe de una si el turno ya terminó
+        // mientras no estaba, y con `text` puede repintar sin depender del
+        // buffer de eventos (que sí se recorta).
+        onSnapshot: (snap) =>
+          void send("state", {
+            status: snap.status,
+            text: snap.text,
+            steps: snap.steps,
+            seq: snap.seq,
+            truncated: snap.truncated,
+            attempts: snap.attempts,
+            sdkSessionId: snap.sdkSessionId,
+            model: snap.model,
+            effort: snap.effort,
+            error: snap.error,
+          }),
+        onEvent: (e) => void send("turn", e),
+        signal: c.req.raw.signal,
+      });
+    } finally {
+      clearInterval(beat);
+    }
     const final = chatTurns.snapshot(id);
     await send("end", { status: final?.status ?? "done", seq: final?.seq ?? 0 });
     await queue;

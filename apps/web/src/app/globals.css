@@ -1342,44 +1342,14 @@ html.lab-route body::after {
   color: #b8b7b4;
   white-space: nowrap;
 }
-/* ── Esqueleto de un chat TRABAJANDO en la lista ──────────────────────────
-   Dos barras con un brillo que corre de izquierda a derecha. El movimiento va
-   en `background-position` sobre un gradiente 3x de ancho (no en `left` ni en
-   `transform` de un hijo): así no hace falta un pseudo-elemento posicionado
-   ni `overflow:hidden`, y la animación queda en una propiedad que el
-   compositor puede resolver sin recalcular layout en cada frame. */
-.lab-skel {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+/* ── Indicador de un chat TRABAJANDO en la lista ──────────────────────────
+   Reemplaza las barras de esqueleto de antes: el pulso de actividad es el
+   orbe (sin ojos — aquí no "mira", solo late) a 16px, alineado con la
+   segunda línea de la card igual que iba el preview de texto que sustituye. */
+.lab-chatcard-orbe {
+  display: inline-flex;
+  align-items: center;
   padding: 3px 0 2px;
-}
-.lab-skel-bar {
-  height: 7px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #efeeea 0%, #e2e1dc 50%, #efeeea 100%);
-  background-size: 300% 100%;
-  animation: lab-skel-slide 1.4s ease-in-out infinite;
-}
-/* La segunda más corta: dos barras iguales se leen como una tabla, no como
-   texto a medio escribir. */
-.lab-skel-bar--short {
-  width: 55%;
-}
-/* La de abajo entra desfasada — si las dos brillan a la vez el bloque
-   parpadea entero en lugar de parecer que algo lo recorre. */
-.lab-skel-bar--short {
-  animation-delay: 0.18s;
-}
-@keyframes lab-skel-slide {
-  from { background-position: 100% 0; }
-  to { background-position: -100% 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .lab-skel-bar {
-    animation: none;
-    background: #ebeae6;
-  }
 }
 .lab-chatcard-dot {
   flex-shrink: 0;
@@ -1420,11 +1390,14 @@ html.lab-route body::after {
      estado deja el padding más chico que el propio pie: sin él, un padding
      negativo sacaría el texto fuera de la barra. */
   --lab-status-block: 21px;
+  /* --lab-bar-bottom en reposo: Samu la sintió "pegada abajo" — subida de
+     10px a 22px para que quede un respiro real sobre la barra de gestos del
+     teléfono (además de la safe-area, que ya se suma abajo). */
   padding: var(--lab-bar-top, 14px) var(--lab-bar-x, 20px)
     max(
       8px,
       calc(
-        var(--lab-bar-bottom, 10px) + var(--lab-bar-safe, env(safe-area-inset-bottom)) -
+        var(--lab-bar-bottom, 22px) + var(--lab-bar-safe, env(safe-area-inset-bottom)) -
           var(--lab-status-block)
       )
     );
