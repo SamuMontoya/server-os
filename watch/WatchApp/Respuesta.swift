@@ -70,7 +70,7 @@ struct Respuesta: View {
           } else if let paso {
             vistaPaso(paso)
           } else if corriendo {
-            ProgressView().tint(Self.tinta)
+            OrbeCargando()
           } else {
             // Terminó sin texto ni paso. Antes esto dejaba la pantalla en
             // blanco, que no dice si falló o si simplemente no contestó.
@@ -116,5 +116,37 @@ struct Respuesta: View {
     }
     .transition(.opacity)
     .id(p.id)
+  }
+}
+
+
+/// El orbe girando: es el "cargando".
+///
+/// Un spinner del sistema en esta pantalla se lee como "el aparato está
+/// esperando". El orbe girando se lee como "está pensando", que es lo que de
+/// verdad ocurre — y de paso mantiene en pantalla al mismo personaje en vez de
+/// cambiarlo por un widget genérico.
+struct OrbeCargando: View {
+  /// Una vuelta cada 0,7 s. Más lento parece que se ha colgado; más rápido
+  /// deja de leerse como un giro y se convierte en parpadeo.
+  private static let vuelta = 0.7
+
+  var body: some View {
+    TimelineView(.animation) { t in
+      let s = t.date.timeIntervalSinceReferenceDate
+      let i = Int(s * 30) % 211
+      let giro = (s.truncatingRemainder(dividingBy: Self.vuelta) / Self.vuelta) * 360
+      // El bote va al DOBLE del giro: toca suelo en cada media vuelta, que es
+      // cuando el orbe se ve de perfil. Sincronizados se lee como un salto;
+      // desfasados parecen dos animaciones distintas peleándose.
+      let bote = -abs(sin(s * .pi / (Self.vuelta / 2))) * 7
+
+      Image(String(format: "orbe-%03d", i))
+        .resizable()
+        .scaledToFit()
+        .frame(width: 64, height: 64)
+        .rotation3DEffect(.degrees(giro), axis: (x: 0, y: 1, z: 0))
+        .offset(y: bote)
+    }
   }
 }
