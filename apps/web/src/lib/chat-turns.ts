@@ -98,6 +98,24 @@ export async function fetchChatTitle(message: string): Promise<string> {
   }
 }
 
+/**
+ * Vincula este turno al reloj: es lo que sigue `GET /watch/link` en el Watch
+ * (ver watch/active-link.ts en el servidor). Se dispara sin await, igual que
+ * el título — es un adorno del chat en curso, nunca debe demorar el envío ni
+ * romperlo si el agente no responde.
+ */
+export async function linkWatchTurn(turnId: string, title: string): Promise<void> {
+  try {
+    await hermesFetch("/watch/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turn_id: turnId, title }),
+    });
+  } catch {
+    // Sin reloj vinculado, o el agente no respondió: no es un error del chat.
+  }
+}
+
 /** Estado del turno sin abrir stream. Para saber si vale la pena engancharse. */
 export async function fetchTurn(turnId: string, from = 0): Promise<TurnState | null> {
   const res = await hermesFetch(`/chat/turns/${turnId}?from=${from}`);

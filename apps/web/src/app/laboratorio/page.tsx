@@ -24,6 +24,7 @@ import {
   fetchTurnResilient,
   stopTurn,
   fetchChatTitle,
+  linkWatchTurn,
 } from "@/lib/chat-turns";
 import { Markdown } from "@/components/Markdown";
 import { LabSteps } from "@/components/LabSteps";
@@ -250,6 +251,13 @@ export default function Laboratorio() {
     if (copyToastTimerRef.current) clearTimeout(copyToastTimerRef.current);
     copyToastTimerRef.current = setTimeout(() => setCopyToast(false), 1400);
   };
+
+  // "Vincular al reloj": mientras está activo, CADA turno que se manda desde
+  // este chat se registra en el servidor (POST /watch/link) como "el que
+  // sigue el reloj ahora". No se persiste entre recargas a propósito —igual
+  // que el reloj mismo, es "lo que estoy mirando ahora", no una config del
+  // chat. Se apaga solo al cambiar de chat (ver switchToChat/createNewChat).
+  const [watchLinked, setWatchLinked] = useState(false);
 
   // Hidratación: UNA lectura del navegador en el primer render. Sin esto,
   // cada remontaje —y iOS remonta cada vez que recupera la pestaña que mató
@@ -615,6 +623,9 @@ export default function Laboratorio() {
     setDraft(thread?.draft ?? "");
     setModel(thread?.model ?? null);
     setBusy(false);
+    // El vínculo con el reloj es "lo que estoy mirando ahora", no algo del
+    // chat: cambiar de chat (o abrir uno nuevo) lo apaga siempre.
+    setWatchLinked(false);
     // Si el chat que se abre tenía un turno vivo, intenta reengancharse.
     resumePendingRef.current();
   };
@@ -1161,6 +1172,9 @@ export default function Laboratorio() {
       });
       turnIdRef.current = turnId;
       lastSeqRef.current = 0;
+      if (watchLinked) {
+        void linkWatchTurn(turnId, titleRef.current || text.slice(0, 120) || "Chat");
+      }
       // Se guarda YA, antes de que llegue el primer evento: si la pestaña se
       // cierra en el primer segundo, `resumePending` igual sabe qué turno
       // reenganchar (igual que ChatPanel al arrancar un turno).
@@ -1584,9 +1598,37 @@ export default function Laboratorio() {
             sobra a cada lado es idéntico. Cuando la lista está abierta dice
             "Chats" — la barra no se oculta, así que tiene que contar dónde
             está uno parado. */}
-        <span className="lab-topbar-title" title={showChats ? undefined : topTitle || undefined}>
-          {showChats ? "Chats" : topTitle}
-        </span>
+        {/* Wrapper del slot central (flex:1): el texto trunca con ellipsis
+            adentro; el botón de reloj queda FUERA de esa caja truncada
+            (flex-shrink:0) para no desaparecer con un título largo. Mismo
+            centro óptico que antes: los dos botones de 34px siguen
+            enmarcando este wrapper entero, no el texto. */}
+        <div className="lab-topbar-titlewrap">
+          <span className="lab-topbar-title" title={showChats ? undefined : topTitle || undefined}>
+            {showChats ? "Chats" : topTitle}
+          </span>
+          {/* Vincular al reloj: solo tiene sentido con un chat abierto y algo
+              que seguir. */}
+          {!showChats && messages.length > 0 && (
+            <button
+              type="button"
+              className={`lab-watch-btn${watchLinked ? " lab-watch-btn--on" : ""}`}
+              aria-pressed={watchLinked}
+              title={
+                watchLinked
+                  ? "Reloj vinculado: cada mensaje que mandes aquí lo sigue. Toca para desvincular."
+                  : "Vincular el reloj a este chat: el próximo mensaje que mandes lo podrá seguir."
+              }
+              onClick={() => setWatchLinked((v) => !v)}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle cx="12" cy="12" r="7" stroke="currentColor" strokeWidth="2" />
+                <path d="M12 9v3.5l2.2 2.2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                <path d="M9 3h6M9 21h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </div>
         <button
           type="button"
           className="lab-menu-btn lab-menu-btn--new"

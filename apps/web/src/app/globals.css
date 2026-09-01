@@ -1161,8 +1161,15 @@ html.lab-route body::after {
    dos botones que lo flanquean miden 34px exactos, así que el centro
    geométrico y el óptico coinciden. `min-width:0` para que el puntito de
    ellipsis funcione dentro del flex en vez de desbordar la barra. */
-.lab-topbar-title {
+.lab-topbar-titlewrap {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.lab-topbar-title {
   min-width: 0;
   text-align: center;
   font-size: 13.5px;
@@ -1171,6 +1178,37 @@ html.lab-route body::after {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Vincular al reloj (ver useLongPressCopy más abajo para el otro gesto de
+   este chat, esto es aparte). Circulito de 20px: a propósito más chico que
+   los botones de 34px del navbar — es un adorno del título, no una acción de
+   primer nivel. flex-shrink:0 para no desaparecer si el título es largo. */
+.lab-watch-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  color: #9b9a97;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+.lab-watch-btn:hover {
+  color: #37352f;
+  background: #f1f1ef;
+}
+.lab-watch-btn--on {
+  color: #2f9e6e;
+}
+.lab-watch-btn--on:hover {
+  color: #2f9e6e;
+  background: rgba(47, 158, 110, 0.12);
 }
 .lab-menu-btn {
   display: inline-flex;

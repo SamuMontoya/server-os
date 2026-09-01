@@ -233,6 +233,8 @@ import { buscarImagen } from "./watch/imagen.js";
 import { capturarIdea, CENTINELA_IDEA } from "./watch/intenciones.js";
 import { limitesDelPlan } from "./limits.js";
 import * as relojTurnos from "./watch/turnos.js";
+import * as relojVinculo from "./watch/active-link.js";
+import { gistForAnswer } from "./agent/chat-gist.js";
 
 const app = new Hono();
 const startedAt = Date.now();
@@ -821,6 +823,47 @@ app.post("/chat/title", async (c) => {
   const message = (b.message ?? "").trim();
   if (!message) return c.json({ error: "message requerido" }, 400);
   return c.json({ title: await titleForChat(message) });
+});
+
+/**
+ * Frase de una línea para la pantalla del reloj, a partir de un texto largo
+ * (la respuesta ya terminada de un turno). Ver agent/chat-gist.ts.
+ */
+app.post("/chat/gist", async (c) => {
+  const b = await c.req.json<{ text?: string }>().catch(() => ({}) as Record<string, never>);
+  const text = (b.text ?? "").trim();
+  if (!text) return c.json({ error: "text requerido" }, 400);
+  return c.json({ gist: await gistForAnswer(text) });
+});
+
+/**
+ * "Chat vinculado al reloj" — ver watch/active-link.ts.
+ *
+ * POST lo llama quien está en un chat del Laboratorio (web o iPhone) y
+ * quiere que el reloj lo siga: manda el turno que arrancó y un título corto
+ * para la pantalla de "vincular". GET lo llama el reloj para saber a qué
+ * turno engancharse — sigue `/chat/turns/:id/stream` con el MISMO contrato
+ * que ya usan el dashboard y la app de iPhone, no hace falta nada nuevo ahí.
+ */
+app.post("/watch/link", async (c) => {
+  const b = await c.req
+    .json<{ turn_id?: string; title?: string }>()
+    .catch(() => ({}) as Record<string, never>);
+  const turnId = b.turn_id?.trim();
+  if (!turnId) return c.json({ error: "turn_id requerido" }, 400);
+  relojVinculo.vincular(turnId, b.title ?? "");
+  return c.json({ ok: true });
+});
+
+app.delete("/watch/link", (c) => {
+  relojVinculo.desvincular();
+  return c.json({ ok: true });
+});
+
+app.get("/watch/link", (c) => {
+  const v = relojVinculo.activo();
+  if (!v) return c.json({ linked: false });
+  return c.json({ linked: true, turn_id: v.turnId, title: v.title });
 });
 
 /** Estado + lo que falte desde `from`. Es lo que pide quien vuelve. */

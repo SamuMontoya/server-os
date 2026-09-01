@@ -48,9 +48,15 @@ struct ContentView: View {
   @State private var imagen: URL?
   @State private var corriendo = false
   @State private var enRespuesta = false
+  /// Chat vinculado que se está siguiendo (ver Espejo.swift). Vive aparte de
+  /// `enRespuesta`: son dos canales distintos, uno propio del reloj
+  /// (Agente/preguntar) y otro que solo mira un turno ajeno.
+  @State private var vinculo: Espejo.Vinculo?
 
   var body: some View {
-    if enRespuesta {
+    if let vinculo {
+      EspejoView(vinculo: vinculo) { self.vinculo = nil }
+    } else if enRespuesta {
       Respuesta(paso: paso, texto: respuesta, imagen: imagen, corriendo: corriendo) {
         // UN solo toque: vuelve al orbe y abre el dictado de una. Antes hacían
         // falta dos (uno para volver, otro para dictar), que en la muñeca es
@@ -86,6 +92,19 @@ struct ContentView: View {
         await Agente.preguntar(dicho) { ev in
           Task { @MainActor in aplicar(ev) }
         }
+      }
+    }
+  }
+
+  /// Mantener presionado: ¿hay un chat vinculado ahora mismo? Un click seco
+  /// si no lo hay — sin eso, un press largo que no hace nada en pantalla se
+  /// siente como que el reloj no lo captó.
+  private func intentarEspejo() {
+    Task {
+      if let v = await Espejo.vinculoActivo() {
+        await MainActor.run { vinculo = v }
+      } else {
+        WKInterfaceDevice.current().play(.click)
       }
     }
   }
@@ -169,6 +188,14 @@ struct ContentView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .contentShape(Rectangle())
       .onTapGesture(perform: tocar)
+      // Mantener presionado el orbe: ¿hay un chat vinculado desde la web o
+      // el iPhone (ver /watch/link)? Si lo hay, se abre el espejo. Si no,
+      // un solo click confirma que se detectó el gesto sin fingir que pasó
+      // algo. `simultaneousGesture` y no `.onLongPressGesture` a secas: así
+      // no le quita el toque normal (dictar) al resto del gesto.
+      .simultaneousGesture(
+        LongPressGesture(minimumDuration: 0.6).onEnded { _ in intentarEspejo() }
+      )
     }
     .ignoresSafeArea()
     .task {
