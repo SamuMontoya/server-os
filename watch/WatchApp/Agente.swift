@@ -11,21 +11,56 @@ enum Agente {
   /// URL y clave se inyectan al compilar desde el `.env` del repo (lo hace
   /// `scripts/install-watch.sh`), para no dejar la clave escrita en el
   /// proyecto, que sí va a git.
-  /// DOS direcciones y se prueba en orden. La LAN primero porque es directa;
-  /// la de Tailscale como respaldo. El reloj NO corre Tailscale (watchOS no
-  /// está soportado), así que la segunda solo sirve mientras el iPhone haga
-  /// de puente — por eso la LAN manda cuando estás en casa.
+  /// UNA sola dirección: la pública.
+  ///
+  /// Antes había tres (LAN, tailnet, Funnel) sondeadas en paralelo. Se quitan
+  /// las privadas, y no por gusto — por cómo funciona la red en watchOS:
+  ///
+  /// · Con el iPhone cerca, watchOS NO usa la red del reloj: manda la petición
+  ///   por un túnel IPsec al teléfono y la hace ÉL (WWDC15/711). Así que "la
+  ///   LAN de casa" no es la del reloj, es la del iPhone, y depende de dónde
+  ///   esté el teléfono, no el reloj.
+  /// · Hay un fallo ABIERTO de Apple (FB23469093, reportado en watchOS 26.5
+  ///   con un Apple Watch SE 3) por el que si el iPhone está cerca pero sin
+  ///   internet, watchOS insiste en el túnel y NUNCA cae a la wifi del reloj.
+  ///   Apple no tiene solución ni API pública para forzar la otra ruta. Tener
+  ///   tres direcciones no lo esquiva: las tres salen por el mismo túnel roto.
+  /// · Y el Funnel funciona en las dos situaciones, dentro y fuera de casa.
+  ///
+  /// La ganancia real es quitar peticiones: en watchOS cada una se paga por el
+  /// túnel Bluetooth, y Apple pide "reducir el número de peticiones al mínimo
+  /// absoluto" (WWDC19/716).
   static var bases: [String] {
-    [Bundle.main.object(forInfoDictionaryKey: "HermesURL") as? String ?? "",
-     Bundle.main.object(forInfoDictionaryKey: "HermesURLAlt") as? String ?? ""]
+    ["HermesURLPub", "HermesURL", "HermesURLAlt"]
+      .compactMap { Bundle.main.object(forInfoDictionaryKey: $0) as? String }
       .filter { !$0.isEmpty }
   }
   static var base: String { bases.first ?? "" }
+
+  static var configurado: Bool { !bases.isEmpty }
+
   private static var clave: String {
     (Bundle.main.object(forInfoDictionaryKey: "HermesAPIKey") as? String) ?? ""
   }
 
-  static var configurado: Bool { !bases.isEmpty }
+  /// Sesión propia, no `URLSession.shared`.
+  ///
+  /// `waitsForConnectivity` es lo que Apple recomienda EN LUGAR de sondear
+  /// (Tech Talk 111378: "los chequeos previos suelen ser incorrectos"). En vez
+  /// de preguntar si hay red, se lanza la petición y el sistema la retiene
+  /// hasta que se pueda, avisando en vez de fallar.
+  ///
+  /// OJO con su alcance: solo cubre ESTABLECER la conexión. Si se cae a mitad,
+  /// llega el error igual — por eso sigue habiendo reintentos abajo.
+  private static let sesionHTTP: URLSession = {
+    let c = URLSessionConfiguration.default
+    c.waitsForConnectivity = true
+    // Generoso a propósito: una escalada con tools puede tardar minutos, y el
+    // servidor manda un latido cada 3s para que no parezca colgada.
+    c.timeoutIntervalForRequest = 90
+    c.timeoutIntervalForResource = 600
+    return URLSession(configuration: c)
+  }()
 
   /// Lo que el reloj sabe pintar. El resto de eventos del contrato (`model`,
   /// `session`, `retry`) se ignoran a propósito: en una pantalla así no
@@ -55,19 +90,41 @@ enum Agente {
       alRecibir(.fallo("Sin servidor configurado"))
       return
     }
-    for (i, servidor) in bases.enumerated() {
-      let ultima = i == bases.count - 1
-      if await intentar(servidor, texto: texto, sesion: sesion,
-                        alRecibir: alRecibir, silencioso: !ultima) { return }
+    // Reintentos con espera creciente. Hacen falta a pesar de
+    // `waitsForConnectivity`: ese cubre "todavía no hay red", no "el túnel al
+    // iPhone está en pie pero no lleva a ningún sitio", que es el fallo
+    // abierto de Apple. Tres intentos y se rinde, porque en la muñeca esperar
+    // más ya no es útil.
+    let esperas: [Double] = [0.6, 2.0]
+    for intento in 0...esperas.count {
+      if await intentar(base, texto: texto, sesion: sesion,
+                        alRecibir: alRecibir, silencioso: intento < esperas.count) {
+        return
+      }
+      if intento < esperas.count {
+        try? await Task.sleep(for: .seconds(esperas[intento]))
+      }
     }
   }
 
-  /// Devuelve `true` si llegó a abrir el turno. Con `silencioso` no reporta el
-  /// fallo: es un intento intermedio y todavía queda otra dirección que probar.
+  /// Devuelve `true` si el turno se completó.
+  ///
+  /// OJO con reintentar: `/watch/ask` NO es idempotente — puede apuntar una
+  /// idea en la base y siempre alimenta la memoria de la sesión rápida. Si ya
+  /// se vio texto, repetir duplicaría el trabajo del servidor y la respuesta
+  /// en pantalla. Por eso `hablo` corta los reintentos.
   private static func intentar(_ servidor: String, texto: String, sesion: String,
                                alRecibir: @escaping (Evento) -> Void,
                                silencioso: Bool) async -> Bool {
     guard let u = URL(string: "\(servidor)/watch/ask") else { return false }
+
+    /// Se enciende cuando el usuario YA vio u oyó algo. A partir de ahí no se
+    /// puede reintentar: /watch/ask escribe en la base y alimenta la memoria
+    /// de la sesión, así que repetir duplicaría las dos cosas.
+    var hablo = false
+    /// El servidor cierra con `fin`. Acabar sin él es un CORTE, no un final.
+    var vioFin = false
+
     do {
       var p = URLRequest(url: u)
       p.httpMethod = "POST"
@@ -92,9 +149,13 @@ enum Agente {
             with: Data(crudo.utf8))) as? [String: Any] ?? [:]
           switch evento {
           case "delta":
-            if let t = j["text"] as? String, !t.isEmpty { alRecibir(.texto(t)) }
+            if let t = j["text"] as? String, !t.isEmpty {
+              hablo = true
+              alRecibir(.texto(t))
+            }
           case "paso":
             if let n = j["name"] as? String, !n.isEmpty {
+              hablo = true
               alRecibir(.paso(nombre: n, objetivo: j["target"] as? String ?? ""))
             }
           case "imagen":
@@ -110,6 +171,7 @@ enum Agente {
             // la vía rápida y a partir de aquí se ven los pasos.
             alRecibir(.escala)
           case "fin":
+            vioFin = true
             alRecibir(.fin)
             return true
           default:
@@ -117,9 +179,22 @@ enum Agente {
           }
         }
       }
-      alRecibir(.fin)
-      return true
+      if vioFin { return true }
+      // Se acabó el stream sin que el servidor dijera `fin`.
+      if hablo {
+        // Ya se vio texto: no se reintenta (no es idempotente), pero tampoco
+        // se miente diciendo que terminó bien.
+        alRecibir(.fallo("Se cortó a medias"))
+        return true
+      }
+      if !silencioso { alRecibir(.fallo("El servidor no dijo nada")) }
+      return false
     } catch {
+      // Si ya habló, se corta aquí: reintentar duplicaría lo dicho.
+      if hablo {
+        alRecibir(.fallo("Se cortó a medias"))
+        return true
+      }
       if !silencioso { alRecibir(.fallo("No se pudo conectar")) }
       return false
     }

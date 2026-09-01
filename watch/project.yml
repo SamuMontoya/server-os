@@ -9,7 +9,11 @@ name: Hermes
 options:
   bundleIdPrefix: com.samumontoya
   deploymentTarget:
-    iOS: "16.0"
+    # 17.0 y no menos: onChange(of:initial:_:) y las APIs que usa el
+
+    # Laboratorio nativo llegaron en iOS 17.
+
+    iOS: "17.0"
     # 10.0 y no 9.0: `onChange(of:initial:_:)` y las APIs de estado que usa
     # ContentView llegaron en watchOS 10.
     watchOS: "10.0"
@@ -51,6 +55,19 @@ targets:
       path: Container/Info.plist
       properties:
         CFBundleDisplayName: OS
+        # Misma configuración que el reloj: la app del iPhone habla con el
+        # mismo agente. Se rellenan al compilar desde el .env (gitignorado),
+        # para que la clave no viva en project.yml, que sí va a git.
+        HermesURL: $(HERMES_URL)
+        HermesURLAlt: $(HERMES_URL_ALT)
+        HermesURLPub: $(HERMES_URL_PUB)
+        HermesAPIKey: $(HERMES_API_KEY)
+        # El agente puede ir por http en la LAN; sin esto ATS lo bloquea y el
+        # fallo se ve como "sin conexión".
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSMicrophoneUsageDescription: OS usa el micrófono para dictar.
+        NSSpeechRecognitionUsageDescription: OS transcribe lo que dictas.
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -93,6 +110,7 @@ targets:
         # No se escriben aquí porque project.yml SÍ va a git y la clave no debe.
         HermesURL: $(HERMES_URL)
         HermesURLAlt: $(HERMES_URL_ALT)
+        HermesURLPub: $(HERMES_URL_PUB)
         HermesAPIKey: $(HERMES_API_KEY)
         # El agente puede ir por http en la LAN; sin esto ATS bloquea la
         # conexión y el fallo se ve como "no se pudo conectar".
