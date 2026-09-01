@@ -87,13 +87,15 @@ enum Turnos {
   }
 
   // ── Arrancar ─────────────────────────────────────────────────────────────
-  static func arrancar(mensaje: String, sesion: String, resume: String?) async throws -> (String, String) {
+  static func arrancar(mensaje: String, sesion: String, resume: String?,
+                      adjuntos: [String] = []) async throws -> (String, String) {
     guard let base = await servidor() else {
       throw NSError(domain: "hermes", code: -1,
                     userInfo: [NSLocalizedDescriptionKey: "Sin conexión con el servidor"])
     }
     var cuerpo: [String: Any] = ["message": mensaje, "session_key": sesion]
     if let resume { cuerpo["resume"] = resume }
+    if !adjuntos.isEmpty { cuerpo["attachments"] = adjuntos }
     guard let r = peticion(base, "/chat/turns", metodo: "POST", cuerpo: cuerpo) else {
       throw NSError(domain: "hermes", code: -2)
     }
@@ -132,6 +134,35 @@ enum Turnos {
   static func detener(_ base: String, _ turno: String) async {
     guard let r = peticion(base, "/chat/turns/\(turno)/stop", metodo: "POST") else { return }
     _ = try? await URLSession.shared.data(for: r)
+  }
+
+  /// Sube una imagen y devuelve su id.
+  ///
+  /// El servidor la guarda en disco y al modelo le pasa la RUTA, que abre con
+  /// `Read`. Por eso el turno viaja con ids y no con base64: mandar cuatro
+  /// capturas cuesta lo mismo que ninguna.
+  static func subirImagen(_ base: String, datos: Data, nombre: String) async -> String? {
+    guard let u = URL(string: base + "/chat/attachments") else { return nil }
+    let linde = "hermes-\(UUID().uuidString)"
+    var r = URLRequest(url: u)
+    r.httpMethod = "POST"
+    r.setValue("Bearer \(clave)", forHTTPHeaderField: "Authorization")
+    r.setValue("multipart/form-data; boundary=\(linde)", forHTTPHeaderField: "Content-Type")
+    r.timeoutInterval = 60
+
+    var cuerpo = Data()
+    cuerpo.append("--\(linde)\r\n".data(using: .utf8)!)
+    cuerpo.append("Content-Disposition: form-data; name=\"image\"; filename=\"\(nombre)\"\r\n"
+      .data(using: .utf8)!)
+    cuerpo.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+    cuerpo.append(datos)
+    cuerpo.append("\r\n--\(linde)--\r\n".data(using: .utf8)!)
+    r.httpBody = cuerpo
+
+    guard let (d, resp) = try? await URLSession.shared.data(for: r),
+          (resp as? HTTPURLResponse)?.statusCode == 200,
+          let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+    return j["id"] as? String
   }
 
   private static func parsearEstado(_ d: Data) -> Estado? {
