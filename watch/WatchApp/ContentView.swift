@@ -69,9 +69,12 @@ struct ContentView: View {
   var body: some View {
     if enRespuesta {
       Respuesta(paso: paso, texto: respuesta, corriendo: corriendo) {
-        // Un toque vuelve al orbe. Si el turno sigue vivo no se cancela: es
-        // un trabajo del servidor y seguirá su curso.
+        // UN solo toque: vuelve al orbe y abre el dictado de una. Antes hacían
+        // falta dos (uno para volver, otro para dictar), que en la muñeca es
+        // un toque de más para lo que siempre quieres hacer a continuación.
+        // El turno anterior no se cancela: es un trabajo del servidor.
         enRespuesta = false
+        tocar()
       }
     } else {
       orbe
