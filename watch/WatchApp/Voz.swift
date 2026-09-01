@@ -17,34 +17,6 @@ final class Voz {
   private let sintetizador = AVSpeechSynthesizer()
   private var pendiente = ""
 
-  /// Volumen, 0…1. Lo mueve el dial del reloj.
-  ///
-  /// Se aplica por FRASE, no en caliente: `AVSpeechUtterance.volume` se fija
-  /// al encolar y no se puede cambiar a media frase. Como aquí se habla frase
-  /// a frase, el cambio se nota casi de inmediato — bastante mejor que cortar
-  /// y volver a empezar, que se oiría como un salto.
-  var volumen: Float {
-    get { Self.guardado }
-    set {
-      let v = min(max(newValue, 0), 1)
-      Self.guardado = v
-      // Silencio total = callar lo que quede en la cola. Si no, bajar a cero
-      // no haría nada hasta la frase siguiente.
-      if v == 0 { sintetizador.stopSpeaking(at: .immediate) }
-    }
-  }
-
-  private static let clave = "volumenVoz"
-  private static var guardado: Float {
-    get {
-      // Sin valor guardado NO se devuelve 0: el usuario abriría la app muda y
-      // parecería que la voz está rota.
-      let d = UserDefaults.standard
-      return d.object(forKey: clave) as? Float ?? 0.8
-    }
-    set { UserDefaults.standard.set(newValue, forKey: clave) }
-  }
-
   private lazy var voz: AVSpeechSynthesisVoice? = Self.mejor()
 
   private static func mejor() -> AVSpeechSynthesisVoice? {
@@ -58,11 +30,17 @@ final class Voz {
   }
 
   private init() {
-    // Sin sesión de audio activa el reloj no saca sonido por el altavoz y
-    // falla en silencio, que es de los fallos más difíciles de diagnosticar.
-    try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio,
-                                                     options: [.duckOthers])
-    try? AVAudioSession.sharedInstance().setActive(true)
+    // LA CLAVE de que sonara: con `usesApplicationAudioSession = true` (el
+    // valor por defecto) la app tiene que activar la sesión de audio ella
+    // misma, y en watchOS eso falla EN SILENCIO — no lanza, no avisa,
+    // simplemente no sale sonido por el altavoz. Delegándolo al sistema, él
+    // activa y desactiva la sesión, resuelve el enrutado al altavoz o a los
+    // auriculares, y gestiona las interrupciones.
+    //
+    // Y trae de regalo lo que se pedía: al ser audio del sistema, el DIAL
+    // controla el volumen con la barra nativa del reloj. No hace falta —ni
+    // conviene— pintar otra.
+    sintetizador.usesApplicationAudioSession = false
   }
 
   /// Habla por FRASES según van llegando, no al final.
@@ -93,13 +71,13 @@ final class Voz {
 
   private func decir(_ t: String) {
     let limpio = t.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !limpio.isEmpty, Self.guardado > 0 else { return }
+    guard !limpio.isEmpty else { return }
     let u = AVSpeechUtterance(string: limpio)
     u.voice = voz
     // Un pelo por encima del ritmo por defecto: en un reloj la respuesta es
     // corta y el ritmo de serie se arrastra.
     u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.05
-    u.volume = Self.guardado
+
     sintetizador.speak(u)
   }
 }

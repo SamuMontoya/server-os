@@ -51,12 +51,21 @@ async function deWikipedia(q: string, lang: string): Promise<string | null> {
   return Object.values(j.query?.pages ?? {})[0]?.thumbnail?.source ?? null;
 }
 
-async function deOpenverse(q: string): Promise<string | null> {
+/**
+ * Openverse, que sí PAGINA. Es lo que permite "esa no, otra".
+ *
+ * Wikipedia da UNA imagen por artículo (la de portada), así que para pasar a
+ * la siguiente no sirve: hay que ir a un buscador con varios resultados.
+ */
+async function deOpenverse(q: string, indice: number): Promise<string | null> {
   const u =
     `https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}` +
-    // Fotografías y no ilustraciones: para "muéstrame un husky" se espera un
-    // perro real, no un dibujo ni un logo.
-    `&page_size=1&mature=false&category=photograph`;
+    // SIN `category=photograph`. Parecía lo correcto —se quiere un perro
+    // real, no un dibujo— pero estrangula el catálogo: para "husky siberiano"
+    // deja 2 resultados donde sin él hay 240. Con dos, pedir "otra" se queda
+    // sin imágenes al segundo intento. La relevancia de Openverse ya pone las
+    // fotos primero.
+    `&page_size=1&mature=false&page=${indice + 1}`;
   const r = await fetch(u, { headers: { "User-Agent": UA } });
   if (!r.ok) return null;
   const j = (await r.json()) as { results?: { thumbnail?: string; url?: string }[] };
@@ -64,16 +73,30 @@ async function deOpenverse(q: string): Promise<string | null> {
   return hit?.thumbnail ?? hit?.url ?? null;
 }
 
-export async function buscarImagen(q: string): Promise<string | null> {
+/**
+ * `indice` 0 es la primera imagen; 1, 2… son "esa no, otra".
+ *
+ * Wikipedia solo entra en el índice 0, porque da UNA imagen por artículo: la
+ * de portada, que para "un husky" es la más certera que existe. A partir de
+ * ahí manda Openverse, que pagina de verdad. Sin esta división, pedir otra
+ * devolvería la misma foto de Wikipedia una y otra vez.
+ */
+export async function buscarImagen(q: string, indice = 0): Promise<string | null> {
   const consulta = q.trim();
   if (!consulta) return null;
-  // Español primero: la consulta viene dictada en español y el artículo local
-  // suele acertar mejor con nombres comunes de animales y cosas.
-  for (const paso of [
-    () => deWikipedia(consulta, "es"),
-    () => deWikipedia(consulta, "en"),
-    () => deOpenverse(consulta),
-  ]) {
+
+  const fuentes =
+    indice === 0
+      ? [
+          // Español primero: la consulta viene dictada en español y el
+          // artículo local acierta mejor con nombres comunes.
+          () => deWikipedia(consulta, "es"),
+          () => deWikipedia(consulta, "en"),
+          () => deOpenverse(consulta, 0),
+        ]
+      : [() => deOpenverse(consulta, indice - 1)];
+
+  for (const paso of fuentes) {
     try {
       const url = await paso();
       if (url?.startsWith("https://")) return url;

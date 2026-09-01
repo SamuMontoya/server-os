@@ -221,7 +221,13 @@ import { homedir } from "node:os";
 import { join as joinPath } from "node:path";
 import { Readable } from "node:stream";
 import { OWNER } from "./owner.js";
-import { relojRapido, CENTINELA, CENTINELA_IMAGEN, ESTILO_ESCALADA } from "./watch/rapido.js";
+import {
+  relojRapido,
+  CENTINELA,
+  CENTINELA_IMAGEN,
+  CENTINELA_OTRA,
+  ESTILO_ESCALADA,
+} from "./watch/rapido.js";
 import { buscarImagen } from "./watch/imagen.js";
 import { capturarIdea, CENTINELA_IDEA } from "./watch/intenciones.js";
 
@@ -532,6 +538,15 @@ app.get("/chat/attachments/:id", async (c) => {
 });
 
 /**
+ * Última imagen enseñada en el reloj, para poder pasar a la siguiente.
+ *
+ * Vive en memoria del proceso y no en la base de datos a propósito: "esa no,
+ * otra" solo tiene sentido en los segundos siguientes, y persistirlo obligaría
+ * a decidir cuándo caduca.
+ */
+let ultimaImagen: { q: string; indice: number } | null = null;
+
+/**
  * Canal del reloj: DOS velocidades.
  *
  * Primero pregunta a la sesión persistente (sin tools, proceso ya vivo): eso
@@ -573,9 +588,31 @@ app.post("/watch/ask", async (c) => {
     // Petición de imagen: se resuelve aquí, sin gastar un turno completo.
     if (limpia.toUpperCase().startsWith(CENTINELA_IMAGEN)) {
       const q = limpia.slice(CENTINELA_IMAGEN.length).trim();
-      const url = await buscarImagen(q);
-      if (url) await enviar("imagen", { url, q });
-      else await enviar("delta", { text: `No encontré una imagen de ${q}.` });
+      const url = await buscarImagen(q, 0);
+      if (url) {
+        ultimaImagen = { q, indice: 0 };
+        await enviar("imagen", { url, q });
+      } else {
+        await enviar("delta", { text: `No encontré una imagen de ${q}.` });
+      }
+      await enviar("fin", { via: "imagen" });
+      return;
+    }
+
+    // "Esa no, otra": la siguiente de la MISMA búsqueda.
+    if (limpia.toUpperCase() === CENTINELA_OTRA) {
+      if (!ultimaImagen) {
+        await enviar("delta", { text: "No sé de qué imagen hablas." });
+      } else {
+        const siguiente = ultimaImagen.indice + 1;
+        const url = await buscarImagen(ultimaImagen.q, siguiente);
+        if (url) {
+          ultimaImagen = { q: ultimaImagen.q, indice: siguiente };
+          await enviar("imagen", { url, q: ultimaImagen.q });
+        } else {
+          await enviar("delta", { text: "No hay más imágenes." });
+        }
+      }
       await enviar("fin", { via: "imagen" });
       return;
     }
