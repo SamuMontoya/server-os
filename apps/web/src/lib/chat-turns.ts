@@ -77,6 +77,57 @@ export async function startTurn(input: {
   return data.turn_id;
 }
 
+/**
+ * Nombre corto (2-3 palabras) para el chat, a partir de su primer mensaje.
+ * Lo genera haiku en el servidor (agent/chat-title.ts). Devuelve "" ante
+ * cualquier problema: es un adorno, jamás debe romper ni demorar un envío —
+ * por eso quien llama lo dispara sin await y pinta el título cuando llegue.
+ */
+export async function fetchChatTitle(message: string): Promise<string> {
+  try {
+    const res = await hermesFetch("/chat/title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) return "";
+    const data = (await res.json()) as { title?: string };
+    return (data.title ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Vincula este turno al reloj: es lo que sigue `GET /watch/link` en el Watch
+ * (ver watch/active-link.ts en el servidor). Se dispara sin await, igual que
+ * el título — es un adorno del chat en curso, nunca debe demorar el envío ni
+ * romperlo si el agente no responde.
+ */
+export async function linkWatchTurn(turnId: string, title: string): Promise<void> {
+  try {
+    await hermesFetch("/watch/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ turn_id: turnId, title }),
+    });
+  } catch {
+    // Sin reloj vinculado, o el agente no respondió: no es un error del chat.
+  }
+}
+
+/** Corta el vínculo con el reloj YA — no solo deja de renovarlo con el
+ *  próximo turno, borra el puntero del servidor de una. Mismo criterio de
+ *  "adorno, nunca revienta el chat" que linkWatchTurn. */
+export async function unlinkWatchTurn(): Promise<void> {
+  try {
+    await hermesFetch("/watch/link", { method: "DELETE" });
+  } catch {
+    // No hay mucho que hacer si el agente no respondió: el vínculo vence
+    // solo a las 2h del lado del servidor (ver watch/active-link.ts).
+  }
+}
+
 /** Estado del turno sin abrir stream. Para saber si vale la pena engancharse. */
 export async function fetchTurn(turnId: string, from = 0): Promise<TurnState | null> {
   const res = await hermesFetch(`/chat/turns/${turnId}?from=${from}`);
@@ -133,6 +184,26 @@ const MAX_RECONNECTS = 5;
 const RECONNECT_MS = [500, 1500, 3000, 6000, 10_000];
 
 /**
+ * Silencio máximo tolerado antes de dar la conexión por muerta y reengancharse.
+ *
+ * El servidor manda un `ping` cada 15 s (ver /chat/turns/:id/stream), así que
+ * 45 s son tres latidos perdidos: no es un turno lento, es un socket muerto.
+ *
+ * Esto existe porque `onerror` NO siempre llega. iOS congela la pestaña al
+ * bloquear la pantalla o al salir de la PWA; el socket queda medio abierto y
+ * al volver el EventSource sigue diciendo que está conectado mientras no
+ * entra un solo byte. Ese era el caso en que "se moría la sesión": el turno
+ * seguía corriendo en el servidor y la pantalla se quedaba mirando un stream
+ * que ya no existía.
+ */
+const STALE_MS = 45_000;
+/** Cada cuánto se revisa el silencio. */
+const WATCHDOG_MS = 5_000;
+/** Al volver a primer plano no se esperan 45 s: si el último byte es más viejo
+ *  que esto, se reengancha en el acto (es cuando iOS ya mató la conexión). */
+const RESUME_STALE_MS = 8_000;
+
+/**
  * Engancha el turno desde `from` y lo sigue hasta que cierre.
  *
  * La reconexión la manejamos a mano en vez de dejársela a EventSource: el
@@ -151,19 +222,61 @@ export function attachTurn(
   let tries = 0;
   let es: EventSource | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** Último byte recibido del servidor (evento o latido). Es el reloj del
+   *  watchdog: mientras avance, la conexión está viva de verdad. */
+  let lastBeat = Date.now();
+  let watchdog: ReturnType<typeof setInterval> | null = null;
 
-  const cleanup = () => {
+  /** Cierra SOLO el socket (el turno sigue vivo del otro lado). */
+  const closeEs = () => {
     es?.close();
     es = null;
     if (timer) clearTimeout(timer);
     timer = null;
   };
 
+  /** Cierra todo, incluido el watchdog: solo al terminar o al desengancharse. */
+  const cleanup = () => {
+    closeEs();
+    if (watchdog) clearInterval(watchdog);
+    watchdog = null;
+    document.removeEventListener("visibilitychange", onVisible);
+  };
+
+  /**
+   * Reengancha YA, sin gastar presupuesto de reintentos: no es un fallo de
+   * conexión, es una conexión que se quedó muda. El cursor `seq` va al día,
+   * así que el servidor replayea exactamente lo que faltó y no se duplica ni
+   * se pierde un delta.
+   */
+  const reconnectNow = () => {
+    if (closed) return;
+    closeEs();
+    lastBeat = Date.now();
+    tries = 0;
+    open();
+  };
+
+  function onVisible() {
+    if (closed) return;
+    if (document.visibilityState !== "visible") return;
+    // Volvimos a primer plano. Si hace rato que no entra nada, la conexión
+    // que "sigue abierta" es un fantasma: se rehace sin esperar al watchdog.
+    if (Date.now() - lastBeat > RESUME_STALE_MS) reconnectNow();
+  }
+
   const open = () => {
     if (closed) return;
+    lastBeat = Date.now();
     es = new EventSource(sseUrl(`/chat/turns/${turnId}/stream?from=${seq}`));
 
+    // Latido del servidor: no lleva datos, solo prueba que el socket vive.
+    es.addEventListener("ping", () => {
+      lastBeat = Date.now();
+    });
+
     es.addEventListener("state", (ev) => {
+      lastBeat = Date.now();
       const state = JSON.parse((ev as MessageEvent).data) as TurnState;
       seq = Math.max(seq, state.seq);
       tries = 0; // conexión buena: el presupuesto de reintentos se renueva
@@ -171,6 +284,7 @@ export function attachTurn(
     });
 
     es.addEventListener("turn", (ev) => {
+      lastBeat = Date.now();
       const e = JSON.parse((ev as MessageEvent).data) as {
         seq: number;
         kind: string;
@@ -224,8 +338,9 @@ export function attachTurn(
       if (++tries > MAX_RECONNECTS) {
         // Rendirse en la CONEXIÓN, no en el turno: sigue corriendo en el
         // servidor y se puede recuperar con fetchTurn/attachTurn más tarde.
-        handlers.onDisconnected?.(seq);
         closed = true;
+        cleanup(); // sin esto quedaban vivos el watchdog y el listener
+        handlers.onDisconnected?.(seq);
         return;
       }
       timer = setTimeout(open, RECONNECT_MS[tries - 1] ?? 10_000);
@@ -233,6 +348,15 @@ export function attachTurn(
   };
 
   open();
+  // El watchdog vive fuera de `open`: sobrevive a las reconexiones y es lo
+  // único que detecta el caso feo (socket abierto pero mudo), donde `onerror`
+  // nunca llega y por tanto nadie se entera de que hay que reenganchar.
+  watchdog = setInterval(() => {
+    if (closed) return;
+    if (Date.now() - lastBeat > STALE_MS) reconnectNow();
+  }, WATCHDOG_MS);
+  document.addEventListener("visibilitychange", onVisible);
+
   return () => {
     closed = true;
     cleanup();

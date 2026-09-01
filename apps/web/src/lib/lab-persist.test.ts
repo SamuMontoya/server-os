@@ -7,7 +7,6 @@ const AHORA = 1_700_000_000_000;
 function hilo(id: string, over: Partial<LabThread> = {}): LabThread {
   return {
     id,
-    archived: false,
     updatedAt: AHORA,
     sdkSessionId: "sdk-1",
     sessionKey: "sesion-1",
@@ -74,18 +73,12 @@ test("cada chat guarda su propio hilo, incluso del mismo proyecto", () => {
   assert.equal(out?.byChat[kB].messages[0].content, "solo del chat b");
 });
 
-test("archivado se conserva", () => {
-  const key = chatStorageKey("general", "c1");
-  const out = ida({ [key]: hilo("c1", { archived: true }) });
-  assert.equal(out?.byChat[key].archived, true);
-});
-
 test("basura guardada no rompe el arranque", () => {
   assert.equal(parseLab("{no es json", AHORA), null);
   assert.equal(parseLab(null, AHORA), null);
   assert.equal(parseLab(JSON.stringify({ v: 99, byChat: {} }), AHORA), null);
-  // Esquema v1 (byProject, sin id/archived/updatedAt): se descarta entero, no
-  // se intenta migrar — arrancar limpio es aceptable, adivinar no.
+  // Esquema v1 (byProject, sin id/updatedAt): se descarta entero, no se
+  // intenta migrar — arrancar limpio es aceptable, adivinar no.
   assert.equal(parseLab(JSON.stringify({ v: 1, byProject: { general: hilo("c1") } }), AHORA), null);
 });
 
@@ -100,12 +93,11 @@ test("un hilo con mensajes corruptos se descarta entero, sin tumbar el resto", (
   const kMalo = chatStorageKey("general", "malo");
   const kBueno = chatStorageKey("general", "bueno");
   const raw = JSON.stringify({
-    v: 2,
+    v: 3,
     savedAt: AHORA,
     byChat: {
       [kMalo]: {
         id: "malo",
-        archived: false,
         updatedAt: AHORA,
         sdkSessionId: null,
         sessionKey: "x",

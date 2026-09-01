@@ -451,6 +451,7 @@ body::after {
   color: var(--violet);
 }
 .md-pre {
+  position: relative;
   margin: 0.7em 0;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -459,6 +460,27 @@ body::after {
   overflow-x: auto;
   font-size: 11.5px;
   line-height: 1.5;
+  /* Clic para copiar (ver components/Markdown.tsx → CodeBlock). */
+  cursor: pointer;
+}
+.md-pre:hover {
+  border-color: var(--violet);
+}
+/* Aviso breve tras copiar: una etiqueta arriba a la derecha del bloque,
+   se desvanece sola cuando `copied` vuelve a false (ver CodeBlock). */
+.md-pre-copied::before {
+  content: "Copiado ✓";
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--violet);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.6;
+  font-family: var(--font-sans, inherit);
+  pointer-events: none;
 }
 .md-code {
   padding: 1px 5px;
@@ -1115,9 +1137,140 @@ html.lab-route body::after {
    estado del iPhone (notch) — ver el fix de 2026-08-31 en SideRail.tsx. */
 .lab-topbar {
   position: relative;
-  z-index: 1;
+  /* Por ENCIMA de .lab-chats-screen (z-index:2), no debajo. Samu pidió que al
+     abrir el menú la hamburguesa y el "+" sigan activos: la lista de chats se
+     monta como una capa sobre el papel, así que si la barra se quedara en
+     z-index:1 la taparía y los dos botones dejarían de ser clickeables. Con
+     la barra arriba, la hamburguesa hace de toggle (abre y cierra) y el "+"
+     crea un chat sin tener que salir de la lista primero.
+     Ambas capas son hijas de .lab-paper, que crea contexto de apilamiento por
+     su `transform` — así que estos z-index se comparan entre sí y con nada
+     más del documento. */
+  z-index: 3;
+  /* Fondo opaco obligatorio ahora que hay algo debajo: la lista scrollea por
+     dentro y sin esto sus cards se verían pasar por detrás de los iconos. */
+  background: #fff;
   flex-shrink: 0;
-  padding: max(16px, calc(env(safe-area-inset-top) + 10px)) 0 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: max(16px, calc(env(safe-area-inset-top) + 10px)) 16px 0 16px;
+}
+/* Nombre del chat en foco, al centro de la barra (lo genera haiku — ver
+   agent/chat-title.ts). `flex:1` + `text-align:center` y no un absolute: los
+   dos botones que lo flanquean miden 34px exactos, así que el centro
+   geométrico y el óptico coinciden. `min-width:0` para que el puntito de
+   ellipsis funcione dentro del flex en vez de desbordar la barra. */
+.lab-topbar-titlewrap {
+  position: relative; /* ancla el menú desplegable justo debajo */
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* El título ahora es un BOTÓN (antes era un <span> mudo): tocarlo abre el
+   menú de "Renombrar" / "Conectar al reloj". Se le quita todo lo que un
+   <button> trae de fábrica para que siga leyéndose como el texto de
+   siempre. */
+.lab-topbar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  border: none;
+  background: none;
+  padding: 4px 2px;
+  font-family: inherit;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #37352f;
+  cursor: pointer;
+}
+.lab-topbar-title:disabled {
+  cursor: default;
+}
+.lab-topbar-title-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Silueta de Apple Watch (WatchGlyph) en el mismo verde #2f9e6e que ya usa
+   la lista de chats (LabChatsScreen) para "hay un turno corriendo" — acá
+   dice "el reloj sigue ESTE chat". A la IZQUIERDA del texto del título (ver
+   orden en el JSX) y flex-shrink:0 para no desaparecer con un título largo. */
+.lab-watch-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: #2f9e6e;
+}
+/* Input de renombrar: mismo lugar y tamaño que el título que reemplaza, para
+   que el cambio de modo no salte la barra. */
+.lab-topbar-rename {
+  width: 100%;
+  max-width: 220px;
+  border: none;
+  border-bottom: 1px solid #37352f;
+  background: none;
+  padding: 3px 2px;
+  font-family: inherit;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #37352f;
+}
+.lab-topbar-rename:focus {
+  outline: none;
+}
+/* Menú de dos opciones. Ancho fijo y centrado bajo el título — no bajo el
+   dedo, que en un toque desde cualquier punto del título se sentiría
+   errático. */
+.lab-title-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+.lab-title-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  min-width: 224px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid #ededec;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+/* Ícono a la IZQUIERDA del texto de cada opción (Samu lo cambió de opinión:
+   antes iba a la derecha con espacio repartido — ahora pegado al texto,
+   como un ítem de menú normal). */
+.lab-title-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: none;
+  padding: 9px 12px;
+  border-radius: 6px;
+  text-align: left;
+  font-family: var(--font-notion);
+  font-size: 13.5px;
+  color: #37352f;
+  cursor: pointer;
+}
+.lab-title-menu button svg {
+  flex-shrink: 0;
+  color: #9b9a97;
+}
+.lab-title-menu button:hover {
+  background: #f1f1ef;
 }
 .lab-menu-btn {
   display: inline-flex;
@@ -1138,12 +1291,23 @@ html.lab-route body::after {
   color: #37352f;
   background: #f1f1ef;
 }
+/* "+" de nuevo chat: esquina superior derecha del Navbar de siempre (Samu no
+   quería el botón ancho que vivía dentro de la pantalla de chats). Mismo
+   tamaño y comportamiento que el de menú, para que la barra quede simétrica. */
+.lab-menu-btn--new {
+  color: #37352f;
+}
+.lab-menu-btn--new:hover {
+  background: #efeeea;
+}
 
 /* ── Pantalla de chats (LabChatsScreen) ──────────────────────────────────
-   Se monta ENCIMA del papel (el mismo blanco, mismo z-index-space que
-   .lab-topbar) cuando se abre el menú hamburguesa. Fixed+inset:0 igual que
-   .lab-paper para cubrir el viewport visible completo desde el primer
-   frame, sin depender de que .lab-paper mida algo todavía. */
+   Se monta ENCIMA del papel cuando se abre el menú hamburguesa, pero DEBAJO
+   de .lab-topbar (z-index:3): la barra tiene que seguir viva y clickeable con
+   la lista abierta. Fixed+inset:0 igual que .lab-paper para cubrir el
+   viewport visible completo desde el primer frame, sin depender de que
+   .lab-paper mida algo todavía; el hueco de la barra se recupera con el
+   padding-top de abajo, no encogiendo la caja. */
 .lab-chats-screen {
   position: fixed;
   inset: 0;
@@ -1151,61 +1315,31 @@ html.lab-route body::after {
   background: #fff;
   display: flex;
   flex-direction: column;
-  padding: max(16px, calc(env(safe-area-inset-top) + 10px)) 20px
-    max(16px, env(safe-area-inset-bottom)) 20px;
-  overflow-y: auto;
-}
-.lab-chats-head {
-  display: flex;
-  justify-content: flex-end;
-}
-.lab-chats-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 6px;
-  border: none;
-  background: none;
-  color: #787774;
-  cursor: pointer;
-}
-.lab-chats-close:hover {
-  color: #37352f;
-  background: #f1f1ef;
+  /* Alto de .lab-topbar = su padding-top con safe-area + los 34px del botón.
+     Se repite aquí (en vez de una var) porque las dos capas son hermanas y
+     ninguna puede medir a la otra; si cambia el tamaño del botón hay que
+     tocar los dos sitios — de ahí este comentario. */
+  padding: calc(max(16px, calc(env(safe-area-inset-top) + 10px)) + 34px + 6px) 20px 0 20px;
+  /* La pantalla misma NO scrollea: solo `.lab-chats-list` (abajo) lo hace. */
+  overflow: hidden;
 }
 .lab-chats-orbe {
   display: flex;
   justify-content: center;
-  padding: 4px 0 12px;
-}
-.lab-chats-new {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 10px;
-  margin-bottom: 18px;
-  border-radius: 8px;
-  border: 1px solid #e7e6e2;
-  background: #fff;
-  color: #37352f;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.lab-chats-new:hover {
-  background: #f7f6f3;
-  border-color: #d3d1cb;
+  padding: 10px 0 22px;
 }
 .lab-chats-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  /* gap 0: las filas ya no son cards flotando (que pedían aire entre ellas)
+     sino renglones separados por su propio borde inferior — con hueco, cada
+     línea se leería como el subrayado de la fila de arriba, no como divisor. */
+  gap: 0;
+  /* Única zona que scrollea dentro de la pantalla (ver `.lab-chats-screen`). */
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 .lab-chats-empty {
   color: #9b9a97;
@@ -1213,13 +1347,15 @@ html.lab-route body::after {
   padding: 8px 2px;
 }
 
-/* Cada card es un asa arrastrable (SwipeableCard) sobre dos fondos de acción
-   que SIEMPRE están en el DOM (izquierda = eliminar, derecha = archivar) —
-   el arrastre solo cambia su opacidad, nunca los monta/desmonta, así no hay
-   parpadeo ni salto de layout durante el gesto. */
+/* Cada card es un asa arrastrable (SwipeableCard) sobre un fondo de acción
+   que SIEMPRE está en el DOM (izquierda = eliminar) — el arrastre solo
+   cambia su opacidad, nunca lo monta/desmonta, así no hay parpadeo ni salto
+   de layout durante el gesto. */
 .lab-chatcard-wrap {
   position: relative;
-  border-radius: 10px;
+  /* Sin `border-radius`: ya no hay caja que redondear (ver .lab-chatcard).
+     El `overflow:hidden` se queda porque es lo que recorta el fondo rojo de
+     "Eliminar" mientras la fila se arrastra. */
   overflow: hidden;
 }
 .lab-chatcard-bg {
@@ -1237,20 +1373,29 @@ html.lab-route body::after {
   background: #e35b4a;
   justify-content: flex-end;
 }
-.lab-chatcard-bg--archive {
-  background: #9b9a97;
-  justify-content: flex-start;
-}
 .lab-chatcard {
   position: relative;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid #efeeea;
-  background: #fff;
+  align-items: flex-start;
+  gap: 12px;
+  /* Un poco de aire a los lados (Samu pidió "pad x para que se vea bien": sin
+     él el texto tocaba el borde de la pantalla y el borde inferior se sentía
+     pegado, no como el filo de una fila). Sigue siendo mucho menos que el
+     padding de card de antes (14px) — esto es respiro, no caja. */
+  padding: 12px 6px;
+  /* NI caja NI papel: Samu pidió que cada chat sea solo una FILA separada por
+     una línea. Se mantiene la estructura (título + subtítulo + tiempo) y se
+     quitan radio, fondo y sombras; lo único que divide es el filo inferior.
+     Se usa `border-bottom` y no un `::after` porque el borde ya participa de
+     la caja y no puede desalinearse al arrastrar la fila. */
+  border: none;
+  border-bottom: 1px solid rgba(55, 53, 47, 0.09);
+  border-radius: 0;
+  /* SIN fondo propio (Samu pidió quitarlo): la fila es transparente y muestra
+     el blanco de `.lab-chats-screen` detrás. Es seguro porque el fondo rojo
+     de "Eliminar" (`.lab-chatcard-bg--delete`) no depende de que esta capa lo
+     tape — su opacidad la controla `leftReveal` en JS y es 0 en reposo. */
+  background: transparent;
   cursor: pointer;
   user-select: none;
   touch-action: pan-y;
@@ -1258,55 +1403,89 @@ html.lab-route body::after {
      a mano en cada frame; transicionarlo de más lo dejaría a destiempo del
      dedo). El "snap back" al soltar sí queda suave porque React vuelve a
      renderizar con dragX:0 UN frame después de terminar el gesto. */
-  transition: transform 0.18s ease-out;
+  transition:
+    transform 0.18s ease-out,
+    background-color 0.18s ease-out;
+}
+/* Samu pidió quitar el lavado gris de hover/foco: la fila se queda blanca
+   (transparente sobre `.lab-chats-screen`) tanto en reposo como al pasar el
+   ratón o al estar activa. Lo único que la marca como "viendo esto" es el
+   título en negro pleno (ver `.lab-chatcard--active .lab-chatcard-title`). */
+.lab-chatcard:hover {
+  background: transparent;
 }
 .lab-chatcard--active {
-  border-color: #37352f;
-  background: #faf9f7;
+  background: transparent;
+}
+.lab-chatcard--active .lab-chatcard-title {
+  color: #1f1e1b;
 }
 .lab-chatcard-main {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+/* Fila superior: punto verde (si corre) + título + tiempo al extremo derecho.
+   El punto va pegado al título, no suelto al otro extremo — así "está
+   corriendo" se lee junto al nombre.
+   `align-items: baseline` (no `center`): el tiempo es más pequeño que el
+   título, y centrarlos por caja los dejaría con las letras a distinta altura,
+   que es exactamente el desalineado que Samu señaló. Con baseline las dos
+   palabras se apoyan en la MISMA línea. */
+.lab-chatcard-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
 }
 .lab-chatcard-title {
-  font-size: 14px;
+  font-size: 14.5px;
+  font-weight: 600;
   color: #37352f;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* El tiempo cede su espacio al título (`min-width:0` + ellipsis arriba) y se
+   va al fondo con `margin-left:auto`; `flex-shrink:0` evita que un título
+   largo lo estruje hasta partir "Hace 10 min" en dos. */
 .lab-chatcard-when {
+  margin-left: auto;
+  flex-shrink: 0;
   font-size: 11.5px;
+  color: #908f8b;
+  white-space: nowrap;
+}
+/* Segunda línea, a modo de subtítulo: la primera frase de lo último hablado
+   (ver `derivePreview` en laboratorio/page.tsx). Empieza EXACTAMENTE donde
+   empieza el título — misma columna de texto, sin sangría propia — porque es
+   su subtítulo, no un dato aparte. */
+.lab-chatcard-preview {
+  font-size: 12.5px;
+  line-height: 1.4;
   color: #9b9a97;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ── Indicador de un chat TRABAJANDO en la lista ──────────────────────────
+   Reemplaza las barras de esqueleto de antes: el pulso de actividad es el
+   orbe (sin ojos — aquí no "mira", solo late) a 16px, alineado con la
+   segunda línea de la card igual que iba el preview de texto que sustituye. */
+.lab-chatcard-orbe {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 0 2px;
 }
 .lab-chatcard-dot {
   flex-shrink: 0;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #2f9e6e;
 }
-.lab-chats-archived-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 10px;
-  padding: 8px 2px;
-  border: none;
-  background: none;
-  color: #9b9a97;
-  font-size: 12.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-}
-.lab-chats-archived-toggle svg {
-  transition: transform 0.15s;
-}
-
 /* Barra de input al pie del Laboratorio. Ya NO es `fixed` con un `bottom`
    calculado a mano: es el último hijo del papel con `margin-top: auto`, así
    que se pega al borde inferior de lo que el papel mida en cada momento.
@@ -1339,11 +1518,14 @@ html.lab-route body::after {
      estado deja el padding más chico que el propio pie: sin él, un padding
      negativo sacaría el texto fuera de la barra. */
   --lab-status-block: 21px;
+  /* --lab-bar-bottom en reposo: Samu la sintió "pegada abajo" — subida de
+     10px a 22px para que quede un respiro real sobre la barra de gestos del
+     teléfono (además de la safe-area, que ya se suma abajo). */
   padding: var(--lab-bar-top, 14px) var(--lab-bar-x, 20px)
     max(
       8px,
       calc(
-        var(--lab-bar-bottom, 10px) + var(--lab-bar-safe, env(safe-area-inset-bottom)) -
+        var(--lab-bar-bottom, 22px) + var(--lab-bar-safe, env(safe-area-inset-bottom)) -
           var(--lab-status-block)
       )
     );
@@ -1571,6 +1753,50 @@ html.lab-route.lab-kb .lab-inputbar {
   overflow-y: auto;
   padding: 8px 20px 4px;
 }
+/* ── Chat en blanco ──────────────────────────────────────────────────────
+   Orbe + "Hola Samu" + una idea corta. `margin:auto 0` es lo que lo centra
+   verticalmente: .lab-messages es un flex column con `flex:1`, así que los
+   dos márgenes automáticos se reparten el alto sobrante por igual. No se usa
+   `justify-content:center` en el contenedor porque ese mismo contenedor, en
+   cuanto llega el primer mensaje, tiene que volver a apilar desde arriba. */
+.lab-hello {
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 0 28px;
+  text-align: center;
+}
+.lab-hello-title {
+  margin: 10px 0 0;
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: #37352f;
+}
+/* La sugerencia es un BOTÓN (al tocarla se copia al composer), pero no debe
+   parecerlo hasta que se pasa por encima: en reposo es una frase gris. */
+.lab-hello-hint {
+  max-width: 30ch;
+  margin-top: 10px;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: #9b9a97;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.lab-hello-hint:hover {
+  background: #f4f3f0;
+  color: #37352f;
+}
 /* Colchón al final de la conversación. Su altura la escribe el JS (ver
    syncSpacer en laboratorio/page.tsx): aporta los píxeles que faltan para
    poder subir el mensaje recién enviado al borde superior, y se encoge a
@@ -1694,6 +1920,28 @@ html.lab-route.lab-kb .lab-inputbar {
 .lab-answer .md-ref {
   color: #2563eb;
 }
+/* Feedback del long-press-para-copiar (mensajes propios y respuestas, ver
+   useLongPressCopy en laboratorio/page.tsx). Flota abajo al centro, encima
+   del inputbar, y no roba toques de lo que está debajo. */
+.lab-copy-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.88);
+  color: #fff;
+  font-size: 12.5px;
+  font-family: var(--font-notion);
+  pointer-events: none;
+  animation: lab-copy-toast-in 160ms ease-out;
+}
+@keyframes lab-copy-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
 /* ── Pasos del turno (LabSteps) ──────────────────────────────────────────
    Un bloque de acciones seguidas. Mientras corre es UNA línea que se releva
    sola (el paso en curso); al pasar a texto o terminar el turno queda un
@@ -1751,7 +1999,13 @@ html.lab-route.lab-kb .lab-inputbar {
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
+  /* SIN overflow:hidden aquí (lo tenía antes): el lienzo del orbe mide 120%
+     de su cuerpo (ver MARGEN en OrbeIA.tsx) y ese 20% de más quedaba cortado
+     contra el borde de esta fila cada vez que el glifo pulsaba a tamaño
+     completo — "se corta un pedacito" al saltar. El truncado de `target`
+     (la ruta/query larga) ya lo resuelve `.lab-step-target` por su cuenta
+     con su propio overflow+ellipsis; esto de aquí era redundante Y el
+     causante del corte. */
 }
 .lab-step-glyph {
   flex-shrink: 0;
@@ -1771,6 +2025,12 @@ html.lab-route.lab-kb .lab-inputbar {
   display: inline-flex;
   align-items: center;
   line-height: 0;
+  /* El orbe es una textura, no un glifo tipográfico: no debe heredar ni el
+     rojo ni el font-size de .lab-step-glyph. Sin `font-size:0` el inline-flex
+     conserva el hueco de media línea del texto de 13,5px y el orbe queda
+     empujado unos px hacia abajo respecto al verbo. */
+  color: inherit;
+  font-size: 0;
 }
 .lab-step-verb {
   flex-shrink: 0;
@@ -1790,6 +2050,14 @@ html.lab-route.lab-kb .lab-inputbar {
    por otra, no una notificación. */
 .lab-step--current {
   animation: lab-step-in 0.18s ease-out;
+  /* CENTRADO, no baseline: esta fila lleva el orbe (22px) junto a un texto de
+     12,5px. Con `baseline` el navegador alinea la línea base del verbo con la
+     del contenido del orbe — que no tiene texto, así que usa su borde
+     inferior — y el orbe quedaba colgando por debajo de "Ejecutando"/"Leyó".
+     Con `center` el orbe y el verbo comparten eje horizontal, que es lo que
+     se lee como "esta acción la está haciendo Hermes". */
+  align-items: center;
+  gap: 7px;
 }
 .lab-step--current .lab-step-verb { color: #37352f; }
 @keyframes lab-step-in {
@@ -1800,9 +2068,16 @@ html.lab-route.lab-kb .lab-inputbar {
    acción todavía está corriendo (el texto no cambia hasta que la tool vuelve,
    y una tool lenta —un Bash de 40s— parecía congelada). Solo late el glifo de
    la línea viva o del resumen; los pasos ya cerrados de la lista quedan
-   quietos, si latieran todos parecería un error. */
-.lab-steps--live .lab-step--current .lab-step-glyph,
-.lab-steps--live .lab-steps-summary .lab-step-glyph {
+   quietos, si latieran todos parecería un error.
+
+   El orbe se EXCLUYE del pulso (`:not(--orbe)`): ya se mueve solo, es una
+   animación WebGL de 211 fotogramas. Encima de eso, el pulso lo encogía a
+   scale(0.88) y lo bajaba a opacity 0.35 una vez por segundo — eso era el
+   "salto" que se veía, y con el recorte de la fila (ya quitado) remataba en
+   un orbe que aparecía mordido. Un glifo estático necesita el latido para
+   decir "sigo vivo"; el orbe ES el latido. */
+.lab-steps--live .lab-step--current .lab-step-glyph:not(.lab-step-glyph--orbe),
+.lab-steps--live .lab-steps-summary .lab-step-glyph:not(.lab-step-glyph--orbe) {
   animation: lab-glyph-pulse 1.15s ease-in-out infinite;
 }
 @keyframes lab-glyph-pulse {
@@ -1958,7 +2233,8 @@ html.lab-route.lab-kb .lab-inputbar {
    así que en móvil también dispara el zoom incómodo al enfocar. */
 @media (max-width: 768px) {
   .lab-textarea,
-  .chat-textarea {
+  .chat-textarea,
+  .lab-topbar-rename {
     font-size: 16px;
   }
   /* Subir la fuente a 16px sin tocar el line-height rompe la cuenta de arriba:

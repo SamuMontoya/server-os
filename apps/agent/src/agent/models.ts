@@ -40,7 +40,9 @@ export type Role =
   | "variants" // 3-5 variantes de un hook
   | "englishReport" // análisis de una sesión de inglés
   | "liveCopilot" // sugerencia en vivo, presupuesto ~2s
-  | "liveCoach"; // métricas de junta cada 20-45s
+  | "liveCoach" // métricas de junta cada 20-45s
+  | "chatTitle" // 2-3 palabras para nombrar un chat, a partir del 1er mensaje
+  | "chatGist"; // una frase para la pantalla del reloj, a partir de la respuesta
 
 type Policy = { model: ModelAlias; effort?: Effort };
 
@@ -67,6 +69,14 @@ const DEFAULTS: Record<Role, Policy> = {
   englishReport: { model: "sonnet", effort: "medium" },
   liveCopilot: { model: "haiku" },
   liveCoach: { model: "haiku" },
+  // Titular un chat es la tarea MÁS barata que hay: una frase de entrada, tres
+  // palabras de salida, sin tools ni contexto. Haiku de sobra — y encima corre
+  // en paralelo al turno real, así que la latencia tampoco puede pesar.
+  chatTitle: { model: "haiku" },
+  // Igual de barata que titular: una respuesta larga de entrada, una frase de
+  // salida, sin tools. La pide el reloj cuando termina un turno que está
+  // siguiendo — ver watch/active-link.ts.
+  chatGist: { model: "haiku" },
 };
 
 // Haiku 4.5 devuelve error si le mandas `effort`. Se filtra aquí y no en cada

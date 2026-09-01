@@ -7,11 +7,26 @@
 // empezar a vivir acá — el resto (persistencia entre recargas, reenganche
 // tras bloquear pantalla, multi-tab) llega en ajustes posteriores.
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { useWorkspace } from "@/state/WorkspaceContext";
-import { startTurn, attachTurn, fetchTurn, fetchTurnResilient, stopTurn } from "@/lib/chat-turns";
+import {
+  startTurn,
+  attachTurn,
+  fetchTurn,
+  fetchTurnResilient,
+  stopTurn,
+  fetchChatTitle,
+  linkWatchTurn,
+  unlinkWatchTurn,
+} from "@/lib/chat-turns";
 import { Markdown } from "@/components/Markdown";
 import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
@@ -76,9 +91,197 @@ type LabAttachment = {
   error?: string;
 };
 
+/**
+ * Sugerencias del chat en blanco. Son FIJAS a propósito: Samu pidió que la
+ * idea de abajo pudiera venir del contexto "o puede ser mensajes genéricos
+ * para no quemar todo esto". Una llamada al modelo cada vez que se abre un
+ * chat vacío es gasto puro por un renglón que muchas veces ni se lee — así
+ * que el contexto se aprovecha GRATIS (ver `hint`: si hay un chat reciente
+ * con nombre, la primera sugerencia es retomarlo) y el resto sale de aquí.
+ */
+const HINTS = [
+  "¿Qué quedó a medias ayer?",
+  "Revisa el último deploy y dime si algo se rompió",
+  "Explícame una parte del código que no entienda",
+  "Resume en qué anda cada proyecto",
+  "Busca en el vault lo último que anoté",
+  "Ayúdame a decidir qué hacer primero hoy",
+];
+
+/** Elige una sugerencia de forma ESTABLE para un chat dado. Nada de
+ *  Math.random(): cambiaría en cada render (y en la hidratación), y la frase
+ *  bailaría bajo el cursor mientras se escribe. El id del chat es la semilla,
+ *  así que un chat nuevo trae frase nueva y el mismo chat siempre la misma. */
+function pickHint(seed: string, pool: string[]): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return pool[h % pool.length];
+}
+
+// Mantener presionado un mensaje (mío o de Hermes) lo copia al portapapeles.
+// 500ms de umbral: suficiente para no dispararse con un tap normal (abrir,
+// hacer scroll) pero corto para no sentirse un gesto "escondido". Se cancela
+// si el dedo/mouse se mueve más de UMBRAL_PX (deja de ser un press quieto,
+// pasa a ser scroll o selección de texto) o si suelta antes de tiempo.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 10;
+
+function useLongPressCopy(getText: () => string, onCopied: () => void) {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const firedRef = useRef(false);
+
+  const clear = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    startRef.current = null;
+  };
+
+  const copy = async () => {
+    const text = getText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      onCopied();
+    } catch {
+      // Sin permiso de portapapeles o navegador viejo: no hay mucho más que
+      // hacer acá, se deja pasar en silencio.
+    }
+  };
+
+  return {
+    onPointerDown: (e: ReactPointerEvent) => {
+      // Solo dedo/mouse principal; un pinch o el botón derecho no cuentan.
+      if (e.button !== undefined && e.button !== 0) return;
+      firedRef.current = false;
+      startRef.current = { x: e.clientX, y: e.clientY };
+      timerRef.current = setTimeout(() => {
+        firedRef.current = true;
+        copy();
+      }, LONG_PRESS_MS);
+    },
+    onPointerMove: (e: ReactPointerEvent) => {
+      const start = startRef.current;
+      if (!start) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_PX) clear();
+    },
+    onPointerUp: clear,
+    onPointerLeave: clear,
+    onPointerCancel: clear,
+    // El long-press ya copió; evita que además dispare un click/selección rara.
+    onContextMenu: (e: ReactMouseEvent) => {
+      if (firedRef.current) e.preventDefault();
+    },
+  };
+}
+
+// Silueta de Apple Watch (caja + dos orejetas + corona), no un reloj
+// genérico de agujas — Samu lo pidió así para el indicador y el ícono del
+// menú de "conectar al reloj". Un solo glifo reusado en los dos sitios para
+// que no se lean como dos conceptos distintos.
+function WatchGlyph({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="9" y="2" width="6" height="3" rx="1.2" fill="currentColor" />
+      <rect x="9" y="19" width="6" height="3" rx="1.2" fill="currentColor" />
+      <rect x="7" y="5" width="10" height="14" rx="3.2" stroke="currentColor" strokeWidth="1.7" />
+      <rect x="17.1" y="10.2" width="2.3" height="3.6" rx="0.9" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Burbuja de un mensaje mío: mantenerla presionada copia el texto tal cual
+// se escribió (sin pasar por Markdown, no lo lleva).
+function UserBubble({ m, onCopied }: { m: LabMessage; onCopied: () => void }) {
+  const press = useLongPressCopy(() => m.content, onCopied);
+  return (
+    <div
+      className="lab-bubble"
+      // `data-anchor`: candidato a quedar pegado arriba. Lo llevan
+      // todos los mensajes y bloques; el que manda en cada momento
+      // es el que apunta anchorKeyRef (ver anchorTo).
+      data-anchor={`u${m.id}`}
+      {...press}
+    >
+      {m.images && m.images.length > 0 && (
+        <div className="lab-bubble-images">
+          {m.images.map((img, i) => (
+            // eslint-disable-next-line @next/next/no-img-element -- object URL local, no un asset de Next.
+            <img key={i} src={img.url} alt={img.name} />
+          ))}
+        </div>
+      )}
+      {/* El texto va en un <span> (no como nodo de texto suelto) para que
+          `.lab-bubble-images:not(:only-child)` en globals.css detecte que
+          hay hermano: `:only-child` solo cuenta ELEMENTOS, no text nodes. */}
+      {m.content ? <span className="lab-bubble-text">{m.content}</span> : null}
+    </div>
+  );
+}
+
+// Un bloque de la respuesta (texto o pasos). Mantenerlo presionado copia
+// SIEMPRE el texto completo de la respuesta (answerText), no solo ese
+// bloque — es lo que uno espera pegar en otro lado.
+function AnswerBlock({
+  anchor,
+  b,
+  streaming,
+  isLast,
+  answerText,
+  project,
+  onCopied,
+}: {
+  anchor: string;
+  b: LabBlock;
+  streaming: boolean;
+  isLast: boolean;
+  answerText: string;
+  project: string | undefined;
+  onCopied: () => void;
+}) {
+  const press = useLongPressCopy(() => answerText, onCopied);
+  return (
+    <div data-anchor={anchor} {...press}>
+      {b.kind === "steps" ? (
+        <LabSteps steps={b.steps} live={streaming && isLast} />
+      ) : (
+        <Markdown source={b.text} project={project} />
+      )}
+    </div>
+  );
+}
+
 export default function Laboratorio() {
   const { selectedProject } = useWorkspace();
   const projKey = selectedProject || "general";
+
+  // Toast mínimo para el feedback de "copiado" del long-press (no reusa
+  // <Toasts/> a propósito: ese componente está atado al feed SSE de eventos
+  // del orquestador, esto es un aviso local y efímero).
+  const [copyToast, setCopyToast] = useState(false);
+  const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashCopyToast = () => {
+    setCopyToast(true);
+    if (copyToastTimerRef.current) clearTimeout(copyToastTimerRef.current);
+    copyToastTimerRef.current = setTimeout(() => setCopyToast(false), 1400);
+  };
+
+  // "Vincular al reloj": mientras está activo, CADA turno que se manda desde
+  // este chat se registra en el servidor (POST /watch/link) como "el que
+  // sigue el reloj ahora". No se persiste entre recargas a propósito —igual
+  // que el reloj mismo, es "lo que estoy mirando ahora", no una config del
+  // chat. Se apaga solo al cambiar de chat (ver switchToChat/createNewChat).
+  const [watchLinked, setWatchLinked] = useState(false);
+  // Menú de dos opciones que abre TOCAR el título ("Renombrar" / conectar el
+  // reloj). Reemplaza el ícono aparte que había antes junto al título —
+  // Samu lo quería así: un solo punto de entrada, no un botón más en la
+  // barra.
+  const [titleMenuOpen, setTitleMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   // Hidratación: UNA lectura del navegador en el primer render. Sin esto,
   // cada remontaje —y iOS remonta cada vez que recupera la pestaña que mató
@@ -91,11 +294,11 @@ export default function Laboratorio() {
 
   // Con VARIOS chats por proyecto (antes uno solo) hay que decidir, al
   // arrancar, cuál de los del proyecto en foco es "el activo": el que
-  // `activeByProject` recuerda si sigue vivo y sin archivar, o si no el más
-  // reciente sin archivar de ese proyecto, o si no hay ninguno, uno nuevo en
-  // blanco. Se resuelve UNA vez (mismo truco de ref-lazy-init que ya usa
-  // `sessionKeyRef` más abajo) para que el resto del componente pueda seguir
-  // tratando "el chat activo" como si fuera el único, igual que antes.
+  // `activeByProject` recuerda si sigue vivo, o si no el más reciente de ese
+  // proyecto, o si no hay ninguno, uno nuevo en blanco. Se resuelve UNA vez
+  // (mismo truco de ref-lazy-init que ya usa `sessionKeyRef` más abajo) para
+  // que el resto del componente pueda seguir tratando "el chat activo" como
+  // si fuera el único, igual que antes.
   const initRef = useRef<{ activeChatId: string; thread: LabThread | null } | undefined>(undefined);
   if (initRef.current === undefined) {
     const byChat = hydratedRef.current?.byChat ?? {};
@@ -104,14 +307,14 @@ export default function Laboratorio() {
     let chosenThread: LabThread | null = null;
     if (savedId) {
       const t = byChat[chatStorageKey(projKey, savedId)];
-      if (t && !t.archived) {
+      if (t) {
         chosenId = savedId;
         chosenThread = t;
       }
     }
     if (!chosenThread) {
       for (const [key, t] of Object.entries(byChat)) {
-        if (!key.startsWith(`${projKey}::`) || t.archived) continue;
+        if (!key.startsWith(`${projKey}::`)) continue;
         if (!chosenThread || t.updatedAt > chosenThread.updatedAt) chosenThread = t;
       }
       chosenId = chosenThread?.id ?? null;
@@ -243,7 +446,7 @@ export default function Laboratorio() {
   });
   const prevProjRef = useRef(projKey);
   /** Sube cada vez que `chatsRef`/`activeChatIdRef` cambian por fuera de un
-   *  render (crear/archivar/borrar/cambiar de chat): es lo único que hace
+   *  render (crear/borrar/cambiar de chat): es lo único que hace
    *  falta para que la pantalla de chats (que lee esos refs directamente)
    *  se vuelva a pintar. */
   const [chatsVersion, setChatsVersion] = useState(0);
@@ -260,10 +463,15 @@ export default function Laboratorio() {
   const modelRef = useRef(model);
   modelRef.current = model;
 
+  /** Título del chat EN FOCO (2-3 palabras, generado por haiku con el primer
+   *  mensaje — ver `nameChat`). Ref y no estado: solo lo lee la lista, que se
+   *  repinta con `chatsVersion`. */
+  const titleRef = useRef<string>(init.thread?.title ?? "");
+
   /** Snapshot del chat activo, tal como debe guardarse ahora mismo. */
   const buildThread = (overrides?: Partial<LabThread>): LabThread => ({
     id: activeChatIdRef.current,
-    archived: false,
+    ...(titleRef.current ? { title: titleRef.current } : {}),
     updatedAt: Date.now(),
     sdkSessionId: sdkSessionIdRef.current,
     sessionKey: sessionKeyRef.current ?? "",
@@ -274,9 +482,9 @@ export default function Laboratorio() {
     ...overrides,
   });
 
-  /** Vuelca el chat activo dentro de `chatsRef` (con sus overrides, p. ej.
-   *  `{archived: true}`), SIN cambiar cuál es el chat en foco. Primer paso de
-   *  cualquier cambio de chat: guardar antes de reemplazar lo que se ve. */
+  /** Vuelca el chat activo dentro de `chatsRef` (con sus overrides), SIN
+   *  cambiar cuál es el chat en foco. Primer paso de cualquier cambio de
+   *  chat: guardar antes de reemplazar lo que se ve. */
   const saveActiveIntoMap = (overrides?: Partial<LabThread>) => {
     chatsRef.current.set(chatStorageKey(projKey, activeChatIdRef.current), buildThread(overrides));
   };
@@ -309,13 +517,127 @@ export default function Laboratorio() {
   // quedó trabajando, `resumePending` lo reengancha y se pone al día de una,
   // no palabra por palabra. Ver DECISIONES.md si algún día hace falta más.
 
-  /** Primeras palabras del primer mensaje del usuario — lo que se ve en la
-   *  card de la lista cuando el chat no tiene título propio. */
+  /** Fallback del nombre de un chat: primeras palabras del primer mensaje.
+   *  Solo se usa mientras el título de haiku no ha llegado (o si falló) —
+   *  ver `nameChat` y el campo `title` de LabThread. */
   const deriveTitle = (msgs: LabMessage[]): string => {
     const first = msgs.find((m) => m.role === "user" && m.content.trim());
     if (!first) return "Chat nuevo";
     const flat = first.content.trim().replace(/\s+/g, " ");
-    return flat.length > 48 ? `${flat.slice(0, 48)}…` : flat;
+    return flat.length > 42 ? `${flat.slice(0, 42)}…` : flat;
+  };
+
+  /** Segunda línea de la card, a modo de SUBTÍTULO: la primera frase de lo
+   *  último hablado, no un recorte ciego a N caracteres. Se prefiere lo último
+   *  que dijo el asistente (más informativo que repetir la pregunta); si aún
+   *  no respondió, el último mensaje del usuario.
+   *
+   *  Dos detalles que Samu pidió y que explican la forma:
+   *   · "la primera frase … y tres puntos": se corta en el primer punto/?/!
+   *     o salto de línea, y SIEMPRE se cierra con "…" si quedaba más texto
+   *     detrás — el "…" es la señal de "sigue", no un adorno;
+   *   · el texto del asistente viene en markdown. Sin limpiarlo, el subtítulo
+   *     empezaría con "## " o "**" y se leería como basura, así que se
+   *     desmaquilla lo mínimo (encabezados, viñetas, negritas, backticks).
+   */
+  const derivePreview = (msgs: LabMessage[]): string => {
+    const MAX = 80;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      const text =
+        m.role === "assistant"
+          ? (m.blocks ?? [])
+              .filter((b): b is { kind: "text"; text: string } => b.kind === "text")
+              .map((b) => b.text)
+              .join("\n")
+          : m.content;
+      const clean = text
+        .replace(/```[\s\S]*?```/g, " ") // bloques de código: no resumen nada
+        .replace(/^\s*#{1,6}\s+/gm, "") // encabezados
+        .replace(/^\s*[-*+]\s+/gm, "") // viñetas
+        .replace(/^\s*\d+[.)]\s+/gm, "") // listas numeradas
+        .replace(/[*_`>]/g, "")
+        .trim();
+      if (!clean) continue;
+      // Primera frase: hasta el primer cierre de oración o salto de línea.
+      const cut = clean.search(/[.!?\n]/);
+      let frase = (cut === -1 ? clean : clean.slice(0, cut)).replace(/\s+/g, " ").trim();
+      // Quedaba texto detrás (más frases, o la frase misma no cabía) → "…".
+      let hayMas = cut !== -1 && clean.slice(cut).replace(/[.!?\s]/g, "").length > 0;
+      if (frase.length > MAX) {
+        frase = frase.slice(0, MAX).replace(/\s+\S*$/, ""); // no partir palabras
+        hayMas = true;
+      }
+      if (frase) return hayMas ? `${frase}…` : frase;
+    }
+    return "";
+  };
+
+  /**
+   * Pide a haiku el nombre del chat (2-3 palabras) con su PRIMER mensaje y lo
+   * guarda en el hilo. Se dispara sin await desde `handleSend`: es un adorno
+   * de la lista, no puede meterse en el camino crítico del envío.
+   *
+   * Ojo con la carrera obvia: mientras el título viaja, Samu puede cambiar de
+   * chat. Por eso se recuerda a QUÉ chat pertenece (`chatId`) y al volver se
+   * escribe en el ref solo si ese chat sigue en foco; si no, se corrige la
+   * entrada guardada en `chatsRef`. Nunca se pisa un título ya existente: el
+   * nombre se calcula una sola vez por chat.
+   */
+  const nameChat = (chatId: string, firstMessage: string) => {
+    const key = chatStorageKey(projKey, chatId);
+    void fetchChatTitle(firstMessage).then((title) => {
+      if (!title) return;
+      if (activeChatIdRef.current === chatId) {
+        if (titleRef.current) return;
+        titleRef.current = title;
+      } else {
+        const saved = chatsRef.current.get(key);
+        if (!saved || saved.title) return;
+        chatsRef.current.set(key, { ...saved, title });
+      }
+      bumpChatsVersion();
+      schedulePersist();
+    });
+  };
+
+  /** Abre el input de renombrar con el título actual como punto de partida
+   *  (no en blanco: es más rápido editar dos palabras que escribirlas de
+   *  cero). El foco llega en el próximo frame porque el input recién se está
+   *  montando — pedirlo ahora mismo todavía apuntaría a nada. */
+  const startRename = () => {
+    setRenameDraft(topTitle);
+    setRenaming(true);
+    setTitleMenuOpen(false);
+    requestAnimationFrame(() => renameInputRef.current?.focus());
+  };
+
+  /** Confirma el renombrado. Vaciarlo a propósito VUELVE al título
+   *  automático (deriveTitle/haiku) — no lo deja pegado a "" — es la forma
+   *  de decir "no quiero uno propio" sin un botón "quitar" aparte. */
+  const commitRename = () => {
+    titleRef.current = renameDraft.trim();
+    setRenaming(false);
+    bumpChatsVersion();
+    schedulePersist();
+  };
+
+  /** Conectar/desconectar el reloj de ESTE chat. Al conectar con un turno ya
+   *  corriendo (o recién enviado) lo vincula DE UNA — no hay que esperar al
+   *  próximo mensaje para que el reloj tenga algo que seguir. Al desconectar
+   *  se avisa al servidor YA (`unlinkWatchTurn`), no alcanza con dejar de
+   *  renovarlo: si no, el reloj seguiría viendo el último turno vinculado. */
+  const toggleWatchLink = () => {
+    setTitleMenuOpen(false);
+    setWatchLinked((v) => {
+      const next = !v;
+      if (next && turnIdRef.current) {
+        void linkWatchTurn(turnIdRef.current, titleRef.current || topTitle || "Chat");
+      } else if (!next) {
+        void unlinkWatchTurn();
+      }
+      return next;
+    });
   };
 
   /** Todos los chats de un proyecto, activo incluido, para pintar la lista.
@@ -325,9 +647,9 @@ export default function Laboratorio() {
     if (pk === projKey) {
       out.push({
         id: activeChatIdRef.current,
-        title: deriveTitle(messagesRef.current),
+        title: titleRef.current || deriveTitle(messagesRef.current),
+        preview: derivePreview(messagesRef.current),
         updatedAt: Date.now(),
-        archived: false,
         running: busy || !!pendingTurnRef.current,
       });
     }
@@ -335,9 +657,9 @@ export default function Laboratorio() {
       if (!key.startsWith(`${pk}::`)) continue;
       out.push({
         id: t.id,
-        title: deriveTitle(t.messages),
+        title: t.title || deriveTitle(t.messages),
+        preview: derivePreview(t.messages),
         updatedAt: t.updatedAt,
-        archived: t.archived,
         running: !!t.pendingTurn,
       });
     }
@@ -346,12 +668,13 @@ export default function Laboratorio() {
 
   /** Reemplaza lo que hay en `messages`/`draft`/etc. por el chat `id` (o uno
    *  en blanco si `thread` es null). Asume que quien llama YA decidió qué
-   *  hacer con el chat que se estaba viendo (guardarlo, archivarlo, nada). */
+   *  hacer con el chat que se estaba viendo (guardarlo o nada). */
   const loadChatIntoState = (id: string, thread: LabThread | null) => {
     unfollowRef.current?.();
     unfollowRef.current = null;
     chatsRef.current.delete(chatStorageKey(projKey, id));
     activeChatIdRef.current = id;
+    titleRef.current = thread?.title ?? "";
     activeByProjectRef.current[projKey] = id;
     turnIdRef.current = null;
     setStopping(false);
@@ -363,16 +686,21 @@ export default function Laboratorio() {
     setDraft(thread?.draft ?? "");
     setModel(thread?.model ?? null);
     setBusy(false);
+    // El vínculo con el reloj es "lo que estoy mirando ahora", no algo del
+    // chat: cambiar de chat (o abrir uno nuevo) lo apaga siempre.
+    setWatchLinked(false);
+    setTitleMenuOpen(false);
+    setRenaming(false);
     // Si el chat que se abre tenía un turno vivo, intenta reengancharse.
     resumePendingRef.current();
   };
 
-  /** El primer chat no archivado del proyecto que encuentre en `chatsRef`, o
-   *  uno nuevo en blanco si no queda ninguno — para no dejar el Laboratorio
-   *  sin chat activo tras archivar/borrar el que se estaba viendo. */
+  /** El primer chat del proyecto que encuentre en `chatsRef`, o uno nuevo en
+   *  blanco si no queda ninguno — para no dejar el Laboratorio sin chat
+   *  activo tras borrar el que se estaba viendo. */
   const loadAnyOtherChat = () => {
     for (const [key, t] of chatsRef.current) {
-      if (key.startsWith(`${projKey}::`) && !t.archived) {
+      if (key.startsWith(`${projKey}::`)) {
         loadChatIntoState(t.id, t);
         return;
       }
@@ -397,29 +725,6 @@ export default function Laboratorio() {
     loadChatIntoState(uuid(), null);
     setShowChats(false);
     schedulePersist();
-  };
-
-  /** Swipe a la derecha en la lista: archivar. Si es el chat activo, hay que
-   *  dejar OTRO en foco (no se puede archivar y seguir viéndolo). */
-  const archiveChat = (id: string) => {
-    if (id === activeChatIdRef.current) {
-      saveActiveIntoMap({ archived: true });
-      loadAnyOtherChat();
-    } else {
-      const key = chatStorageKey(projKey, id);
-      const t = chatsRef.current.get(key);
-      if (t) chatsRef.current.set(key, { ...t, archived: true });
-    }
-    schedulePersist();
-    bumpChatsVersion();
-  };
-
-  const unarchiveChat = (id: string) => {
-    const key = chatStorageKey(projKey, id);
-    const t = chatsRef.current.get(key);
-    if (t) chatsRef.current.set(key, { ...t, archived: false, updatedAt: Date.now() });
-    schedulePersist();
-    bumpChatsVersion();
   };
 
   /** Swipe a la izquierda: eliminar. No cancela el turno en el servidor si
@@ -902,6 +1207,11 @@ export default function Laboratorio() {
     // leyendo arriba, mandar un mensaje es pedir explícitamente ver lo nuevo.
     userPinnedRef.current = false;
     blockCursorRef.current = { replyId: replyMsg.id, count: 0, lastKind: null };
+    // ¿Es el primer mensaje del chat? Entonces es el que lo bautiza. Se pide
+    // el nombre a haiku en paralelo al turno real — no se espera a nada.
+    if (text && !titleRef.current && !messagesRef.current.some((m) => m.role === "user")) {
+      nameChat(activeChatIdRef.current, text);
+    }
     setMessages((prev) => [...prev, userMsg, replyMsg]);
     setDraft("");
     // Se vacía el composer SIN revocar los object URLs: los hereda la burbuja,
@@ -927,6 +1237,9 @@ export default function Laboratorio() {
       });
       turnIdRef.current = turnId;
       lastSeqRef.current = 0;
+      if (watchLinked) {
+        void linkWatchTurn(turnId, titleRef.current || text.slice(0, 120) || "Chat");
+      }
       // Se guarda YA, antes de que llegue el primer evento: si la pestaña se
       // cierra en el primer segundo, `resumePending` igual sabe qué turno
       // reenganchar (igual que ChatPanel al arrancar un turno).
@@ -1083,9 +1396,9 @@ export default function Laboratorio() {
   }, []);
 
   // Cambio de proyecto en foco: guarda el chat activo bajo su clave vieja y
-  // restaura el que estaba activo en el proyecto nuevo (el más reciente sin
-  // archivar si nunca se guardó cuál era, o uno en blanco si el proyecto no
-  // tiene ninguno). El turno en vuelo pertenece al chat VIEJO — se suelta el
+  // restaura el que estaba activo en el proyecto nuevo (el más reciente si
+  // nunca se guardó cuál era, o uno en blanco si el proyecto no tiene
+  // ninguno). El turno en vuelo pertenece al chat VIEJO — se suelta el
   // stream, no se cancela el turno del servidor, y su `pendingTurn` viaja
   // guardado por si se vuelve a ese chat más tarde.
   useEffect(() => {
@@ -1095,21 +1408,21 @@ export default function Laboratorio() {
     prevProjRef.current = projKey;
 
     // Resolver cuál chat retoma el proyecto nuevo: el que recuerde
-    // `activeByProject` si sigue vivo y sin archivar, si no el más reciente
-    // sin archivar de ese proyecto, si no hay ninguno uno nuevo en blanco.
+    // `activeByProject` si sigue vivo, si no el más reciente de ese
+    // proyecto, si no hay ninguno uno nuevo en blanco.
     const savedId = activeByProjectRef.current[projKey];
     let nextId: string | null = null;
     let nextThread: LabThread | null = null;
     if (savedId) {
       const t = chatsRef.current.get(chatStorageKey(projKey, savedId));
-      if (t && !t.archived) {
+      if (t) {
         nextId = savedId;
         nextThread = t;
       }
     }
     if (!nextThread) {
       for (const [key, t] of chatsRef.current) {
-        if (!key.startsWith(`${projKey}::`) || t.archived) continue;
+        if (!key.startsWith(`${projKey}::`)) continue;
         if (!nextThread || t.updatedAt > nextThread.updatedAt) nextThread = t;
       }
       nextId = nextThread?.id ?? null;
@@ -1273,20 +1586,67 @@ export default function Laboratorio() {
     };
   }, []);
 
+  /**
+   * Lo que se lee en el CENTRO de la barra superior: el nombre del chat en
+   * foco. Prioridad: el título de haiku (`titleRef`, 2-3 palabras — ver
+   * `nameChat`), si no el recorte del primer mensaje, y si el chat está en
+   * blanco NADA (la cadena vacía) — ahí la pantalla ya dice "Hola Samu" y un
+   * "Chat nuevo" en la barra sería ruido repetido.
+   *
+   * No hace falta estado propio: `titleRef` se rellena desde `nameChat`, que
+   * termina llamando a `bumpChatsVersion()` (un setState), así que cuando el
+   * título llega la barra se repinta sola. Al cambiar de chat repinta por
+   * `setMessages`.
+   */
+  const hasUserMsg = messages.some((m) => m.role === "user");
+  const rawTopTitle = titleRef.current || (hasUserMsg ? deriveTitle(messages) : "");
+  // El fallback de `deriveTitle` llega hasta 42 caracteres — pensado para la
+  // card de la lista, que tiene el ancho entero. Aquí compite con dos botones
+  // de 34px, así que se recorta más corto antes de que el CSS lo puntee.
+  const topTitle =
+    rawTopTitle.length > 28 ? `${rawTopTitle.slice(0, 28).trimEnd()}…` : rawTopTitle;
+
+  /**
+   * La sugerencia del chat en blanco. El "contexto de lo último trabajado"
+   * sale de `chatsRef` sin gastar un solo token: el chat más reciente de este
+   * proyecto que YA tenga nombre de haiku se ofrece como "Seguir con …". Si
+   * no hay ninguno (proyecto recién estrenado), quedan solo las genéricas.
+   */
+  const lastNamed = hasUserMsg
+    ? null
+    : [...chatsRef.current.entries()]
+        .filter(([k, t]) => k.startsWith(`${projKey}::`) && t.title)
+        .sort((a, b) => b[1].updatedAt - a[1].updatedAt)[0]?.[1];
+  const hint = pickHint(
+    activeChatIdRef.current,
+    lastNamed?.title ? [`Seguir con ${lastNamed.title.toLowerCase()}`, ...HINTS] : HINTS,
+  );
+
   return (
     <main className="lab-paper">
       {/* Barra superior: antes tenía la flecha de "volver" (quitada el
           2026-08-29 para dejar la pantalla en blanco puro). Vuelve, con el
           icono cambiado por un menú hamburguesa que abre la lista de chats
           del proyecto en foco (varios chats en paralelo, swipe para
-          archivar/borrar — ver LabChatsScreen). */}
+          borrar — ver LabChatsScreen).
+
+          El "+" de nuevo chat vivía como botón ancho DENTRO de esa pantalla;
+          Samu lo quiso en el Navbar de siempre, esquina superior derecha —
+          el sitio de "crear" en cualquier app, y accesible sin tener que
+          abrir la lista primero. */}
       <div className="lab-topbar">
         <button
           type="button"
           className="lab-menu-btn"
-          aria-label="Ver chats abiertos"
+          aria-label={showChats ? "Cerrar la lista de chats" : "Ver chats abiertos"}
           title="Chats"
-          onClick={() => setShowChats(true)}
+          aria-expanded={showChats}
+          // TOGGLE, no `setShowChats(true)`: la barra sigue viva y encima de
+          // la lista (ver z-index en .lab-topbar), así que el mismo botón que
+          // la abrió tiene que poder cerrarla. Antes la única salida era la ✕
+          // que la propia pantalla dibujaba, y con la barra ya visible detrás
+          // eran dos controles para lo mismo en la misma esquina.
+          onClick={() => setShowChats((v) => !v)}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
@@ -1297,19 +1657,98 @@ export default function Laboratorio() {
             />
           </svg>
         </button>
+        {/* El nombre del chat, centrado. Va entre los dos botones y con
+            `flex:1`, así queda ópticamente al medio sin position:absolute:
+            los dos botones miden lo mismo (34px), de modo que el hueco que
+            sobra a cada lado es idéntico. Cuando la lista está abierta dice
+            "Chats" — la barra no se oculta, así que tiene que contar dónde
+            está uno parado.
+
+            Tocar el título ABRE UN MENÚ de dos opciones (renombrar / reloj)
+            en vez de un ícono aparte en la barra — Samu lo pidió así después
+            de que el ícono separado no le convenciera. `position:relative`
+            en el wrapper es lo que ancla el menú justo debajo. */}
+        <div className="lab-topbar-titlewrap">
+          {renaming ? (
+            <input
+              ref={renameInputRef}
+              className="lab-topbar-rename"
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                if (e.key === "Escape") {
+                  setRenaming(false);
+                }
+              }}
+              placeholder="Nombre del chat"
+              maxLength={80}
+            />
+          ) : (
+            <button
+              type="button"
+              className="lab-topbar-title"
+              disabled={showChats}
+              title={showChats ? undefined : topTitle || undefined}
+              onClick={() => setTitleMenuOpen((v) => !v)}
+            >
+              {watchLinked && (
+                <span className="lab-watch-icon" aria-label="Reloj vinculado" title="Reloj vinculado">
+                  <WatchGlyph size={13} />
+                </span>
+              )}
+              <span className="lab-topbar-title-text">{showChats ? "Chats" : topTitle}</span>
+            </button>
+          )}
+          {titleMenuOpen && (
+            <>
+              {/* Capa invisible para cerrar al tocar fuera — el menú mismo
+                  no tapa el resto de la pantalla, así que sin esto quedaría
+                  abierto hasta el próximo toque AL título. */}
+              <div className="lab-title-menu-backdrop" onClick={() => setTitleMenuOpen(false)} />
+              <div className="lab-title-menu" role="menu">
+                <button type="button" role="menuitem" onClick={startRename}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M4 20h4L18.5 9.5a2.121 2.121 0 0 0-3-3L5 17v3Z"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  <span>Renombrar</span>
+                </button>
+                <button type="button" role="menuitem" onClick={toggleWatchLink}>
+                  <WatchGlyph size={15} />
+                  <span>{watchLinked ? "Desconectar del reloj" : "Conectar al reloj"}</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        <button
+          type="button"
+          className="lab-menu-btn lab-menu-btn--new"
+          aria-label="Nuevo chat"
+          title="Nuevo chat"
+          onClick={createNewChat}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
       {showChats && (
         <LabChatsScreen
-          // `chatsVersion` fuerza a recalcular la lista tras crear/archivar/
-          // borrar (chatsRef es un ref: mutarlo no dispara un re-render solo).
+          // `chatsVersion` fuerza a recalcular la lista tras crear/borrar
+          // (chatsRef es un ref: mutarlo no dispara un re-render solo).
           key={chatsVersion}
           chats={listChatsForProject(projKey)}
           activeId={activeChatIdRef.current}
           onClose={() => setShowChats(false)}
           onOpen={switchToChat}
           onNew={createNewChat}
-          onArchive={archiveChat}
-          onUnarchive={unarchiveChat}
           onDelete={deleteChat}
         />
       )}
@@ -1320,36 +1759,44 @@ export default function Laboratorio() {
         onTouchMove={onUserScroll}
         onScroll={onListScrollForJump}
       >
+        {/* CHAT EN BLANCO: el orbe grande al centro, el saludo, y una idea
+            corta debajo. La idea es un botón: al tocarla cae en el composer
+            en vez de enviarse sola — una sugerencia propone, no decide. Todo
+            esto desaparece con el primer mensaje (no es un "mensaje del
+            sistema" en la lista: si viviera dentro de `messages` habría que
+            filtrarlo en cada sitio que cuenta mensajes, incluido el que
+            decide si un chat ya tiene nombre). */}
+        {messages.length === 0 && (
+          <div className="lab-hello">
+            <OrbeIA tam="132px" ojos ariaLabel="Hermes" />
+            <p className="lab-hello-title">Hola Samu</p>
+            <button
+              type="button"
+              className="lab-hello-hint"
+              onClick={() => {
+                setDraft(hint);
+                inputRef.current?.focus();
+              }}
+            >
+              {hint}
+            </button>
+          </div>
+        )}
         {messages.map((m, idx) => {
           if (m.role === "user") {
-            return (
-              <div
-                key={m.id}
-                className="lab-bubble"
-                // `data-anchor`: candidato a quedar pegado arriba. Lo llevan
-                // todos los mensajes y bloques; el que manda en cada momento
-                // es el que apunta anchorKeyRef (ver anchorTo).
-                data-anchor={`u${m.id}`}
-              >
-                {m.images && m.images.length > 0 && (
-                  <div className="lab-bubble-images">
-                    {m.images.map((img, i) => (
-                      // eslint-disable-next-line @next/next/no-img-element -- object URL local, no un asset de Next.
-                      <img key={i} src={img.url} alt={img.name} />
-                    ))}
-                  </div>
-                )}
-                {/* El texto va en un <span> (no como nodo de texto suelto) para que
-                    `.lab-bubble-images:not(:only-child)` en globals.css detecte que
-                    hay hermano: `:only-child` solo cuenta ELEMENTOS, no text nodes. */}
-                {m.content ? <span className="lab-bubble-text">{m.content}</span> : null}
-              </div>
-            );
+            return <UserBubble key={m.id} m={m} onCopied={flashCopyToast} />;
           }
           const blocks = m.blocks ?? [];
           // Solo el ÚLTIMO mensaje puede estar en curso: es donde escribe el
           // turno activo (busy es global porque solo corre un turno a la vez).
           const streaming = busy && idx === messages.length - 1;
+          // Texto plano de la respuesta (para el copy del long-press): junta
+          // solo los bloques de texto, en orden — los "steps" son un log de
+          // acciones, no algo que Samu quiera pegar en otro lado.
+          const answerText = blocks
+            .filter((b): b is Extract<LabBlock, { kind: "text" }> => b.kind === "text")
+            .map((b) => b.text)
+            .join("\n\n");
           return (
             <div key={m.id} className="lab-answer">
               {/* La respuesta se pinta EN ORDEN DE LLEGADA: cada bloque de
@@ -1362,13 +1809,18 @@ export default function Laboratorio() {
                 // se inserta puede ser el que sube al borde superior, y ni
                 // LabSteps ni Markdown reciben ref. Sin padding ni borde, así
                 // los márgenes de los hijos siguen colapsando igual que antes.
-                <div key={bi} data-anchor={`${m.id}:${bi}`}>
-                  {b.kind === "steps" ? (
-                    <LabSteps steps={b.steps} live={streaming && bi === blocks.length - 1} />
-                  ) : (
-                    <Markdown source={b.text} project={selectedProject ?? undefined} />
-                  )}
-                </div>
+                // Mantener presionado CUALQUIER bloque de texto copia toda la
+                // respuesta (no solo ese bloque): es lo que Samu espera pegar.
+                <AnswerBlock
+                  key={bi}
+                  anchor={`${m.id}:${bi}`}
+                  b={b}
+                  streaming={streaming}
+                  isLast={bi === blocks.length - 1}
+                  answerText={answerText}
+                  project={selectedProject ?? undefined}
+                  onCopied={flashCopyToast}
+                />
               ))}
               {streaming && blocks.length === 0 ? (
                 // "Pensando" solo hasta el primer bloque: a partir de ahí los
@@ -1390,6 +1842,14 @@ export default function Laboratorio() {
             respuesta aún no ocupa la pantalla, y se encoge según ella crece. */}
         <div ref={spacerRef} className="lab-spacer" aria-hidden="true" />
       </div>
+
+      {/* Feedback del long-press: "Copiado" flota abajo al centro y se apaga
+          solo (ver flashCopyToast). No bloquea toques por debajo. */}
+      {copyToast && (
+        <div className="lab-copy-toast" role="status" aria-live="polite">
+          Copiado
+        </div>
+      )}
 
       <div className="lab-inputbar">
         {showJumpDown && (

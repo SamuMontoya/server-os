@@ -54,6 +54,7 @@ import {
 } from "./conversations.js";
 import { listChatSessions, readChatSession, resolveChatCwd } from "./agent/chat-history.js";
 import { chatTurns, type TurnEvent } from "./agent/chat-turns.js";
+import { titleForChat } from "./agent/chat-title.js";
 import {
   chatAttachmentPath,
   resolveChatAttachments,
@@ -232,6 +233,8 @@ import { buscarImagen } from "./watch/imagen.js";
 import { capturarIdea, CENTINELA_IDEA } from "./watch/intenciones.js";
 import { limitesDelPlan } from "./limits.js";
 import * as relojTurnos from "./watch/turnos.js";
+import * as relojVinculo from "./watch/active-link.js";
+import { gistForAnswer } from "./agent/chat-gist.js";
 
 const app = new Hono();
 const startedAt = Date.now();
@@ -420,9 +423,14 @@ app.post("/v1/chat/completions", async (c) => {
     // Serializamos las escrituras para conservar el orden de los deltas.
     let queue: Promise<unknown> = Promise.resolve();
     const send = (data: unknown) => {
-      queue = queue.then(() =>
-        stream.writeSSE({ data: typeof data === "string" ? data : JSON.stringify(data) }),
-      );
+      // Mismo `.catch` que en /chat/turns/:id/stream: escribirle a un cliente
+      // que ya se fue no puede convertirse en un unhandled rejection que
+      // tumbe el proceso entero (y con él, los turnos de todos los demás).
+      queue = queue
+        .then(() =>
+          stream.writeSSE({ data: typeof data === "string" ? data : JSON.stringify(data) }),
+        )
+        .catch(() => {});
       return queue;
     };
     // El id del turno viaja primero: con él, un cliente que se cayó puede
@@ -805,6 +813,59 @@ app.post("/chat/turns", async (c) => {
   return c.json({ turn_id: turn.id, status: turn.status, seq: 0 });
 });
 
+/**
+ * Nombre corto (2-3 palabras) para un chat, a partir de su primer mensaje.
+ * Un pase de haiku, sin tools — ver agent/chat-title.ts. Devuelve `title: ""`
+ * si el modelo falla: el cliente cae a su heurística y no se rompe nada.
+ */
+app.post("/chat/title", async (c) => {
+  const b = await c.req.json<{ message?: string }>().catch(() => ({}) as Record<string, never>);
+  const message = (b.message ?? "").trim();
+  if (!message) return c.json({ error: "message requerido" }, 400);
+  return c.json({ title: await titleForChat(message) });
+});
+
+/**
+ * Frase de una línea para la pantalla del reloj, a partir de un texto largo
+ * (la respuesta ya terminada de un turno). Ver agent/chat-gist.ts.
+ */
+app.post("/chat/gist", async (c) => {
+  const b = await c.req.json<{ text?: string }>().catch(() => ({}) as Record<string, never>);
+  const text = (b.text ?? "").trim();
+  if (!text) return c.json({ error: "text requerido" }, 400);
+  return c.json({ gist: await gistForAnswer(text) });
+});
+
+/**
+ * "Chat vinculado al reloj" — ver watch/active-link.ts.
+ *
+ * POST lo llama quien está en un chat del Laboratorio (web o iPhone) y
+ * quiere que el reloj lo siga: manda el turno que arrancó y un título corto
+ * para la pantalla de "vincular". GET lo llama el reloj para saber a qué
+ * turno engancharse — sigue `/chat/turns/:id/stream` con el MISMO contrato
+ * que ya usan el dashboard y la app de iPhone, no hace falta nada nuevo ahí.
+ */
+app.post("/watch/link", async (c) => {
+  const b = await c.req
+    .json<{ turn_id?: string; title?: string }>()
+    .catch(() => ({}) as Record<string, never>);
+  const turnId = b.turn_id?.trim();
+  if (!turnId) return c.json({ error: "turn_id requerido" }, 400);
+  relojVinculo.vincular(turnId, b.title ?? "");
+  return c.json({ ok: true });
+});
+
+app.delete("/watch/link", (c) => {
+  relojVinculo.desvincular();
+  return c.json({ ok: true });
+});
+
+app.get("/watch/link", (c) => {
+  const v = relojVinculo.activo();
+  if (!v) return c.json({ linked: false });
+  return c.json({ linked: true, turn_id: v.turnId, title: v.title });
+});
+
 /** Estado + lo que falte desde `from`. Es lo que pide quien vuelve. */
 app.get("/chat/turns/:id", (c) => {
   const from = Number(c.req.query("from") ?? 0) || 0;
@@ -838,29 +899,48 @@ app.get("/chat/turns/:id/stream", (c) => {
   return streamSSE(c, async (stream) => {
     let queue: Promise<unknown> = Promise.resolve();
     const send = (event: string, data: unknown) => {
-      queue = queue.then(() => stream.writeSSE({ event, data: JSON.stringify(data) }));
+      // El `.catch` no es cosmética: si el cliente ya se fue (iPhone bloqueado,
+      // WiFi caído), `writeSSE` rechaza y sin esto quedaría un unhandled
+      // rejection que en Node tumba el PROCESO — o sea, un cliente que se va
+      // mataría los turnos de todos los demás. Escribir a un socket muerto no
+      // es un error del turno: el turno sigue, esta conexión no.
+      queue = queue
+        .then(() => stream.writeSSE({ event, data: JSON.stringify(data) }))
+        .catch(() => {});
       return queue;
     };
-    await pipeTurn(id, from, {
-      // `state` primero: el cliente sabe de una si el turno ya terminó
-      // mientras no estaba, y con `text` puede repintar sin depender del
-      // buffer de eventos (que sí se recorta).
-      onSnapshot: (snap) =>
-        void send("state", {
-          status: snap.status,
-          text: snap.text,
-          steps: snap.steps,
-          seq: snap.seq,
-          truncated: snap.truncated,
-          attempts: snap.attempts,
-          sdkSessionId: snap.sdkSessionId,
-          model: snap.model,
-          effort: snap.effort,
-          error: snap.error,
-        }),
-      onEvent: (e) => void send("turn", e),
-      signal: c.req.raw.signal,
-    });
+    // Latido cada 15 s. Sin él, un turno que pasa dos minutos dentro de una
+    // sola herramienta (un subagente, un build) no manda un solo byte, y ni el
+    // navegador ni ningún proxy de por medio pueden distinguir "trabajando" de
+    // "conexión muerta": iOS congela la pestaña, el socket queda medio abierto
+    // y el EventSource nunca dispara `onerror` — la respuesta parecía perdida
+    // aunque el servidor la estuviera escribiendo. Con el latido, el cliente
+    // sabe medir el silencio y reengancharse (ver STALE_MS en lib/chat-turns).
+    const beat = setInterval(() => void send("ping", { t: Date.now() }), 15_000);
+    try {
+      await pipeTurn(id, from, {
+        // `state` primero: el cliente sabe de una si el turno ya terminó
+        // mientras no estaba, y con `text` puede repintar sin depender del
+        // buffer de eventos (que sí se recorta).
+        onSnapshot: (snap) =>
+          void send("state", {
+            status: snap.status,
+            text: snap.text,
+            steps: snap.steps,
+            seq: snap.seq,
+            truncated: snap.truncated,
+            attempts: snap.attempts,
+            sdkSessionId: snap.sdkSessionId,
+            model: snap.model,
+            effort: snap.effort,
+            error: snap.error,
+          }),
+        onEvent: (e) => void send("turn", e),
+        signal: c.req.raw.signal,
+      });
+    } finally {
+      clearInterval(beat);
+    }
     const final = chatTurns.snapshot(id);
     await send("end", { status: final?.status ?? "done", seq: final?.seq ?? 0 });
     await queue;

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, type ReactNode, useContext } from "react";
+import { createContext, type ReactNode, useContext, useRef, useState } from "react";
 import { useDocViewer } from "./DocViewer";
 
 /**
@@ -36,6 +36,42 @@ function DocRef({ refName, label }: { refName: string; label: string }) {
     >
       {label}
     </button>
+  );
+}
+
+// Bloque de código ```: un clic lo copia entero al portapapeles. Pensado
+// sobre todo para el caso típico de Hermes — un comando único de una línea
+// en su propia valla — pero se aplica igual a cualquier bloque, largo o
+// corto: es la convención esperada (GitHub, VS Code, etc.) y no hay motivo
+// para que un bloque de varias líneas no la tenga también.
+function CodeBlock({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return (
+    <pre
+      className={`md-pre${copied ? " md-pre-copied" : ""}`}
+      role="button"
+      tabIndex={0}
+      title={copied ? "Copiado" : "Clic para copiar"}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(code);
+          setCopied(true);
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(() => setCopied(false), 1200);
+        } catch {
+          // Sin permiso de portapapeles: no hay mucho más que hacer acá.
+        }
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          (e.currentTarget as HTMLElement).click();
+        }
+      }}
+    >
+      <code>{code}</code>
+    </pre>
   );
 }
 
@@ -138,11 +174,7 @@ export function Markdown({ source, project }: { source: string; project?: string
       i++;
       while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
       i++; // cierra la valla
-      blocks.push(
-        <pre key={key++} className="md-pre">
-          <code>{buf.join("\n")}</code>
-        </pre>,
-      );
+      blocks.push(<CodeBlock key={key++} code={buf.join("\n")} />);
       continue;
     }
 
