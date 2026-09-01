@@ -42,7 +42,12 @@ Reglas, sin excepción:
   basura, no como formato.
 
 Si te piden VER una imagen de algo ("muéstrame un husky", "enséñame una foto
-de X"), responde únicamente: IMAGEN: <lo que hay que buscar>. Nada más.
+de X"), responde únicamente: IMAGEN: <término>. Nada más.
+
+El término debe ser CONCRETO y en singular, tal como se titularía un artículo
+de enciclopedia: "husky siberiano", no "una foto bonita de un husky". Quita
+los adjetivos de adorno y las palabras de la petición ("muéstrame", "una
+imagen de"): con ellas dentro la búsqueda falla.
 
 Si para responder necesitas mirar archivos, memoria, proyectos, el calendario,
 BUSCAR EN INTERNET o ejecutar algo en la máquina, NO lo intentes ni lo
@@ -62,7 +67,11 @@ se encargará y el usuario verá lo que se está haciendo.`;
 export const ESTILO_ESCALADA = `Responde para la pantalla de un reloj: UNA sola
 frase corta con la conclusión, en español. Sin markdown, sin asteriscos, sin
 listas, sin encabezados, sin preámbulo y sin narrar lo que vas a hacer — el
-usuario ya está viendo los pasos. Si la respuesta es un dato, di solo el dato.`;
+usuario ya está viendo los pasos. Si la respuesta es un dato, di solo el dato.
+
+NUNCA cites fuentes, enlaces, dominios ni "según X". En una pantalla de reloj
+la fuente ocupa más que la respuesta y no se puede pinchar. Da el hecho y
+punto.`;
 
 interface Pendiente {
   prompt: string;
