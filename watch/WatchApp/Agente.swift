@@ -117,8 +117,7 @@ enum Agente {
           guard let d = crudo.data(using: .utf8),
                 let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
           else { continue }
-          despachar(evento: evento, cuerpo: j, alRecibir: alRecibir)
-          if evento == "done" || evento == "error" || evento == "stopped" { return }
+          if despachar(evento: evento, cuerpo: j, alRecibir: alRecibir) { return }
         }
       }
       alRecibir(.fin)
@@ -127,23 +126,44 @@ enum Agente {
     }
   }
 
+  /// Devuelve `true` cuando el turno terminó y hay que soltar el stream.
+  ///
+  /// OJO con el contrato: el NOMBRE del evento SSE es siempre `turn` — el tipo
+  /// real viaja dentro, en `kind`. Mirar el nombre del evento (que es lo que
+  /// haría cualquiera viniendo de un SSE normal) descarta absolutamente todo y
+  /// el turno se ve como una pantalla en blanco.
+  @discardableResult
   private static func despachar(evento: String, cuerpo: [String: Any],
-                                alRecibir: @escaping (Evento) -> Void) {
-    switch evento {
+                                alRecibir: @escaping (Evento) -> Void) -> Bool {
+    // `state` es el snapshot inicial: al re-engancharse trae lo ya acumulado.
+    if evento == "state" {
+      if let t = cuerpo["text"] as? String, !t.isEmpty { alRecibir(.texto(t)) }
+      return false
+    }
+    if evento == "end" {
+      alRecibir(.fin)
+      return true
+    }
+
+    switch cuerpo["kind"] as? String {
     case "delta":
       if let t = cuerpo["text"] as? String, !t.isEmpty { alRecibir(.texto(t)) }
     case "tool":
-      let tool = cuerpo["tool"] as? [String: Any] ?? cuerpo
+      let tool = cuerpo["tool"] as? [String: Any] ?? [:]
       let nombre = tool["name"] as? String ?? ""
       if !nombre.isEmpty {
         alRecibir(.paso(nombre: nombre, objetivo: tool["target"] as? String ?? ""))
       }
     case "done", "stopped":
       alRecibir(.fin)
+      return true
     case "error":
       alRecibir(.fallo(cuerpo["text"] as? String ?? "Falló el turno"))
+      return true
     default:
+      // model, session, retry: no aportan en una pantalla así.
       break
     }
+    return false
   }
 }

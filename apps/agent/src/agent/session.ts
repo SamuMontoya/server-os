@@ -94,6 +94,8 @@ export interface RunTurnOptions {
    */
   attachments?: string[];
   resumeSessionId?: string;
+  /** Techo de nivel para ESTE turno. Lo usa el canal del reloj. */
+  maxTier?: Tier;
   /** Interno: marca el reintento del escalado para no reintentar en bucle. */
   _escalated?: boolean;
   taskId?: string;
@@ -191,7 +193,12 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // perfil BAJA el techo del turno. Solo restringe — nunca encarece un turno
   // que el router ya había clasificado como barato.
   const profile = _profile;
-  const tier = capTier(route.tier, profile.maxTier);
+  // Dos techos, y gana el más bajo: el del perfil (bajo consumo) y el que pide
+  // quien llama. El del reloj es este segundo: una pantalla de 40 mm con
+  // respuestas de una frase no gana nada con opus, y lo que sí pierde es lo
+  // único que ahí importa, que es el tiempo hasta la primera palabra.
+  const techoLlamante = opts.maxTier ? capTier(route.tier, opts.maxTier) : route.tier;
+  const tier = capTier(techoLlamante, profile.maxTier);
   const tierOpts = TIERS[tier];
   const effort = capEffort(tierOpts.effort, profile.maxEffort);
   const modelOpts = {

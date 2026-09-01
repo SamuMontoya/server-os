@@ -71,6 +71,12 @@ struct Respuesta: View {
             vistaPaso(paso)
           } else if corriendo {
             ProgressView().tint(Self.tinta)
+          } else {
+            // Terminó sin texto ni paso. Antes esto dejaba la pantalla en
+            // blanco, que no dice si falló o si simplemente no contestó.
+            Text("Sin respuesta")
+              .font(.system(size: 14))
+              .foregroundStyle(Self.tinta.opacity(0.45))
           }
         }
         .frame(maxWidth: .infinity)
