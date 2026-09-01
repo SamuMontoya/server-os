@@ -96,6 +96,8 @@ export interface RunTurnOptions {
   resumeSessionId?: string;
   /** Techo de nivel para ESTE turno. Lo usa el canal del reloj. */
   maxTier?: Tier;
+  /** Salta la precarga de contexto del prompt de sistema (canal del reloj). */
+  magro?: boolean;
   /** Interno: marca el reintento del escalado para no reintentar en bucle. */
   _escalated?: boolean;
   taskId?: string;
@@ -170,7 +172,12 @@ export interface RunTurnResult {
 export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
   // El perfil decide cuánto contexto se PRECARGA (ver budget.ts).
   const _profile = await currentProfile();
-  const systemPrompt = await buildSystemPrompt(opts.prompt, opts.project, _profile.retrieval);
+  const systemPrompt = await buildSystemPrompt(
+    opts.prompt,
+    opts.project,
+    _profile.retrieval,
+    opts.magro,
+  );
 
   // Enrutamiento del turno. La clasificación es local (cero tokens) y el nivel
   // queda FIJO por sesión: el caché de prompt es por modelo, así que cambiarlo
