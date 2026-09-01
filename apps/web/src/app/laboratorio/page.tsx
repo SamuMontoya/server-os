@@ -1692,10 +1692,28 @@ export default function Laboratorio() {
               <div className="lab-title-menu-backdrop" onClick={() => setTitleMenuOpen(false)} />
               <div className="lab-title-menu" role="menu">
                 <button type="button" role="menuitem" onClick={startRename}>
-                  Renombrar
+                  <span>Renombrar</span>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M4 20h4L18.5 9.5a2.121 2.121 0 0 0-3-3L5 17v3Z"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
                 </button>
                 <button type="button" role="menuitem" onClick={toggleWatchLink}>
-                  {watchLinked ? "Desconectar del reloj" : "Conectar al reloj"}
+                  <span>{watchLinked ? "Desconectar del reloj" : "Conectar al reloj"}</span>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="7" stroke="currentColor" strokeWidth="1.8" />
+                    <path
+                      d="M12 9v3.5l2.2 2.2"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                    />
+                    <path d="M9 3h6M9 21h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
                 </button>
               </div>
             </>
