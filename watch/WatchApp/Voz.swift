@@ -84,6 +84,15 @@ final class Voz: NSObject {
     // Un pelo por encima del ritmo por defecto: en un reloj la respuesta es
     // corta y el ritmo de serie se arrastra.
     u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.05
+    // Al máximo, siempre.
+    //
+    // OJO con lo que esto significa de verdad: `volume` es un MULTIPLICADOR
+    // sobre el volumen del sistema, no un valor absoluto. 1.0 es "no atenúes
+    // nada", que es lo máximo que una app puede pedir — el nivel final lo pone
+    // el volumen del reloj, y NO hay API para subirlo (solo el usuario, con el
+    // dial mientras suena). Poner esto explícito evita que un cambio futuro lo
+    // deje atenuado sin darse cuenta.
+    u.volume = 1.0
 
     sintetizador.speak(u)
   }
