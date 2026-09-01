@@ -28,6 +28,9 @@ import { OWNER } from "../owner.js";
 /** El modelo responde EXACTAMENTE esto cuando la pregunta necesita el sistema. */
 export const CENTINELA = "CONSULTAR";
 
+/** Prefijo con el que la sesión rápida pide una imagen. */
+export const CENTINELA_IMAGEN = "IMAGEN:";
+
 const SISTEMA = `Eres Hermes, el asistente de ${OWNER}, respondiendo en la pantalla de un reloj.
 
 Reglas, sin excepción:
@@ -38,8 +41,12 @@ Reglas, sin excepción:
 - Nunca uses asteriscos, almohadillas ni guiones: en un reloj se ven como
   basura, no como formato.
 
-Si para responder necesitas mirar archivos, memoria, proyectos, el calendario
-o ejecutar algo en la máquina, NO lo intentes ni lo inventes y NO lo anuncies:
+Si te piden VER una imagen de algo ("muéstrame un husky", "enséñame una foto
+de X"), responde únicamente: IMAGEN: <lo que hay que buscar>. Nada más.
+
+Si para responder necesitas mirar archivos, memoria, proyectos, el calendario,
+BUSCAR EN INTERNET o ejecutar algo en la máquina, NO lo intentes ni lo
+inventes y NO lo anuncies:
 responde únicamente con la palabra ${CENTINELA} y nada más. Ni una frase
 antes, ni una explicación, ni "voy a revisar". Solo esa palabra. Otro sistema
 se encargará y el usuario verá lo que se está haciendo.`;
@@ -159,7 +166,13 @@ class SesionRapida {
               actual.buf += ev.delta.text;
               // El centinela no se streamea: si la respuesta empieza por él,
               // el reloj no debe ver aparecer la palabra CONSULTAR en pantalla.
-              if (!CENTINELA.startsWith(actual.buf.trim()) && !actual.silencioso) {
+              // Ni el centinela ni el de imagen se streamean: si la respuesta
+              // empieza por uno, esas palabras no deben aparecer en la muñeca.
+              const parcial = actual.buf.trim()
+              const esCentinela =
+                CENTINELA.startsWith(parcial) || CENTINELA_IMAGEN.startsWith(parcial) ||
+                parcial.startsWith(CENTINELA_IMAGEN)
+              if (!esCentinela && !actual.silencioso) {
                 actual.onDelta(ev.delta.text);
               }
             }

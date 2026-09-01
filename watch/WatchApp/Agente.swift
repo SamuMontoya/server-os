@@ -34,6 +34,8 @@ enum Agente {
     case texto(String)
     /// La vía rápida no bastó: se pasa al turno completo, con pasos.
     case escala
+    /// Una imagen de internet para enseñar en pantalla.
+    case imagen(URL)
     case paso(nombre: String, objetivo: String)
     case fin
     case fallo(String)
@@ -95,6 +97,14 @@ enum Agente {
             if let n = j["name"] as? String, !n.isEmpty {
               alRecibir(.paso(nombre: n, objetivo: j["target"] as? String ?? ""))
             }
+          case "imagen":
+            if let u = j["url"] as? String, let url = URL(string: u) {
+              alRecibir(.imagen(url))
+            }
+          case "latido":
+            // Solo mantiene viva la conexión mientras el turno trabaja. No se
+            // pinta nada: el orbe dando mortales ya dice que sigue vivo.
+            break
           case "escala":
             // La pregunta necesitaba mirar el sistema: se limpia lo dicho por
             // la vía rápida y a partir de aquí se ven los pasos.

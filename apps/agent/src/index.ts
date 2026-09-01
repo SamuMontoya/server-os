@@ -221,7 +221,8 @@ import { homedir } from "node:os";
 import { join as joinPath } from "node:path";
 import { Readable } from "node:stream";
 import { OWNER } from "./owner.js";
-import { relojRapido, CENTINELA, ESTILO_ESCALADA } from "./watch/rapido.js";
+import { relojRapido, CENTINELA, CENTINELA_IMAGEN, ESTILO_ESCALADA } from "./watch/rapido.js";
+import { buscarImagen } from "./watch/imagen.js";
 
 const app = new Hono();
 const startedAt = Date.now();
@@ -554,7 +555,19 @@ app.post("/watch/ask", async (c) => {
       void enviar("delta", { text: t });
     });
 
-    if (rapida.trim().toUpperCase() !== CENTINELA) {
+    const limpia = rapida.trim();
+
+    // Petición de imagen: se resuelve aquí, sin gastar un turno completo.
+    if (limpia.toUpperCase().startsWith(CENTINELA_IMAGEN)) {
+      const q = limpia.slice(CENTINELA_IMAGEN.length).trim();
+      const url = await buscarImagen(q);
+      if (url) await enviar("imagen", { url, q });
+      else await enviar("delta", { text: `No encontré una imagen de ${q}.` });
+      await enviar("fin", { via: "imagen" });
+      return;
+    }
+
+    if (limpia.toUpperCase() !== CENTINELA) {
       await enviar("fin", { via: "rapido" });
       return;
     }
@@ -568,6 +581,10 @@ app.post("/watch/ask", async (c) => {
       magro: true,
       cwd: await resolveChatCwd(undefined),
     });
+    // Latido cada 3 s mientras trabaja. Una escalada puede pasar medio minuto
+    // sin emitir nada entre dos tools, y ahí un proxy o el propio iOS cortan
+    // la conexión por inactividad — el reloj se quedaría girando para siempre.
+    const latido = setInterval(() => void enviar("latido", {}), 3000);
     await pipeTurn(turno.id, 0, {
       signal: c.req.raw.signal,
       onEvent: (ev) => {
@@ -581,6 +598,7 @@ app.post("/watch/ask", async (c) => {
           void enviar("paso", { name: e.tool.name, target: e.tool.target ?? "" });
       },
     });
+    clearInterval(latido);
     await enviar("fin", { via: "completo" });
   });
 });

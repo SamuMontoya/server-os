@@ -44,12 +44,13 @@ struct ContentView: View {
   @State private var sacudidaDesde: Date?
   @State private var paso: Paso?
   @State private var respuesta = ""
+  @State private var imagen: URL?
   @State private var corriendo = false
   @State private var enRespuesta = false
 
   var body: some View {
     if enRespuesta {
-      Respuesta(paso: paso, texto: respuesta, corriendo: corriendo) {
+      Respuesta(paso: paso, texto: respuesta, imagen: imagen, corriendo: corriendo) {
         // UN solo toque: vuelve al orbe y abre el dictado de una. Antes hacían
         // falta dos (uno para volver, otro para dictar), que en la muñeca es
         // un toque de más para lo que siempre quieres hacer a continuación.
@@ -76,6 +77,7 @@ struct ContentView: View {
       guard let dicho else { return }
       paso = nil
       respuesta = ""
+      imagen = nil
       corriendo = true
       enRespuesta = true
       Task {
@@ -86,6 +88,7 @@ struct ContentView: View {
               // Al llegar texto el paso desaparece: la respuesta va sola.
               paso = nil
               respuesta += t
+            case .imagen(let u): imagen = u
             case .escala:
               // La vía rápida no bastó. Se limpia lo que hubiera dicho y a
               // partir de aquí se ven los pasos del turno completo.
