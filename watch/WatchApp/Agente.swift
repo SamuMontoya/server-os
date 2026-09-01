@@ -32,6 +32,8 @@ enum Agente {
   /// aportan y solo quitarían sitio.
   enum Evento {
     case texto(String)
+    /// La vía rápida no bastó: se pasa al turno completo, con pasos.
+    case escala
     case paso(nombre: String, objetivo: String)
     case fin
     case fallo(String)
@@ -43,14 +45,6 @@ enum Agente {
   /// nunca queda bloqueado detrás de una tarea larga abierta en el escritorio.
   static let canal = "reloj"
 
-  /// Se le pide brevedad en CADA turno y no solo al abrir sesión: el turno
-  /// puede reanudar una sesión vieja del servidor, donde esa instrucción ya
-  /// quedó sepultada bajo el historial.
-  private static let estilo = """
-    Estás respondiendo en la pantalla de un reloj. UNA sola frase, lo más \
-    corta posible. Sin markdown, sin listas, sin viñetas, sin preámbulo, sin \
-    repetir la pregunta. Si la respuesta es un dato, di solo el dato.
-    """
 
   static func preguntar(_ texto: String,
                         sesion: String = canal,
@@ -71,24 +65,49 @@ enum Agente {
   private static func intentar(_ servidor: String, texto: String, sesion: String,
                                alRecibir: @escaping (Evento) -> Void,
                                silencioso: Bool) async -> Bool {
-    guard let u = URL(string: "\(servidor)/chat/turns") else { return false }
+    guard let u = URL(string: "\(servidor)/watch/ask") else { return false }
     do {
       var p = URLRequest(url: u)
       p.httpMethod = "POST"
       p.setValue("application/json", forHTTPHeaderField: "Content-Type")
       p.setValue("Bearer \(clave)", forHTTPHeaderField: "Authorization")
-      p.httpBody = try JSONSerialization.data(withJSONObject: [
-        "message": "\(estilo)\n\n\(texto)",
-        "session_key": sesion,
-      ])
+      // El preámbulo de estilo ya NO viaja en el mensaje: vive en el prompt
+      // de sistema de la sesión persistente del servidor. Mandarlo aquí
+      // alargaba cada pregunta y encima confundía al clasificador.
+      p.httpBody = try JSONSerialization.data(withJSONObject: ["message": texto])
+      p.timeoutInterval = 300
 
-      let (datos, _) = try await URLSession.shared.data(for: p)
-      guard let j = try JSONSerialization.jsonObject(with: datos) as? [String: Any],
-            let id = j["turn_id"] as? String else {
-        if !silencioso { alRecibir(.fallo("Respuesta inesperada")) }
-        return false
+      // La respuesta ES el stream: /watch/ask contesta por SSE directamente,
+      // sin el paso previo de crear un turno. Un viaje menos antes de hablar.
+      let (bytes, _) = try await URLSession.shared.bytes(for: p)
+      var evento = ""
+      for try await linea in bytes.lines {
+        if linea.hasPrefix("event:") {
+          evento = String(linea.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+        } else if linea.hasPrefix("data:") {
+          let crudo = String(linea.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+          let j = (try? JSONSerialization.jsonObject(
+            with: Data(crudo.utf8))) as? [String: Any] ?? [:]
+          switch evento {
+          case "delta":
+            if let t = j["text"] as? String, !t.isEmpty { alRecibir(.texto(t)) }
+          case "paso":
+            if let n = j["name"] as? String, !n.isEmpty {
+              alRecibir(.paso(nombre: n, objetivo: j["target"] as? String ?? ""))
+            }
+          case "escala":
+            // La pregunta necesitaba mirar el sistema: se limpia lo dicho por
+            // la vía rápida y a partir de aquí se ven los pasos.
+            alRecibir(.escala)
+          case "fin":
+            alRecibir(.fin)
+            return true
+          default:
+            break
+          }
+        }
       }
-      await escuchar(servidor: servidor, turno: id, alRecibir: alRecibir)
+      alRecibir(.fin)
       return true
     } catch {
       if !silencioso { alRecibir(.fallo("No se pudo conectar")) }
@@ -96,43 +115,6 @@ enum Agente {
     }
   }
 
-  private static func escuchar(servidor: String, turno: String,
-                               alRecibir: @escaping (Evento) -> Void) async {
-    guard let u = URL(string: "\(servidor)/chat/turns/\(turno)/stream?from=0") else { return }
-    var r = URLRequest(url: u)
-    r.setValue("Bearer \(clave)", forHTTPHeaderField: "Authorization")
-    r.timeoutInterval = 300
-
-    do {
-      let (bytes, _) = try await URLSession.shared.bytes(for: r)
-      // SSE a mano: el cuerpo llega como líneas y solo interesan las `data:`.
-      // El nombre del evento viene en su propia línea `event:`, así que hay
-      // que recordarlo hasta que llegue su `data:`.
-      var evento = ""
-      for try await linea in bytes.lines {
-        if linea.hasPrefix("event:") {
-          evento = String(linea.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-        } else if linea.hasPrefix("data:") {
-          let crudo = String(linea.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-          guard let d = crudo.data(using: .utf8),
-                let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any]
-          else { continue }
-          if despachar(evento: evento, cuerpo: j, alRecibir: alRecibir) { return }
-        }
-      }
-      alRecibir(.fin)
-    } catch {
-      alRecibir(.fallo("Se cortó la conexión"))
-    }
-  }
-
-  /// Devuelve `true` cuando el turno terminó y hay que soltar el stream.
-  ///
-  /// OJO con el contrato: el NOMBRE del evento SSE es siempre `turn` — el tipo
-  /// real viaja dentro, en `kind`. Mirar el nombre del evento (que es lo que
-  /// haría cualquiera viniendo de un SSE normal) descarta absolutamente todo y
-  /// el turno se ve como una pantalla en blanco.
-  @discardableResult
   private static func despachar(evento: String, cuerpo: [String: Any],
                                 alRecibir: @escaping (Evento) -> Void) -> Bool {
     // `state` es el snapshot inicial: al re-engancharse trae lo ya acumulado.
