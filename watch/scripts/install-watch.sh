@@ -24,6 +24,15 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+# URL y clave del agente salen del .env del repo, que está gitignorado. Van
+# como build settings → Info.plist, para que la clave no viva en project.yml
+# (que sí va a git).
+ENV_REPO="../.env"
+HERMES_URL="${HERMES_URL:-$(grep -E "^WATCH_HERMES_URL=" "$ENV_REPO" 2>/dev/null | cut -d= -f2-)}"
+HERMES_API_KEY="${HERMES_API_KEY:-$(grep -E "^HERMES_API_KEY=" "$ENV_REPO" 2>/dev/null | cut -d= -f2-)}"
+HERMES_URL_ALT="${HERMES_URL_ALT:-$(grep -E "^WATCH_HERMES_URL_ALT=" "$ENV_REPO" 2>/dev/null | cut -d= -f2-)}"
+[ -z "$HERMES_URL" ] && echo "  ⚠ sin WATCH_HERMES_URL en .env — el reloj no podrá hablar con el agente"
+
 IPHONE="${HERMES_IPHONE_UDID:-00008110-0014158C36B8401E}"
 RELOJ="${HERMES_WATCH_UDID:-00008310-001D0D323A00E01E}"
 
@@ -31,14 +40,18 @@ echo
 echo "⌚ compilando contra el reloj (registra su UDID en el perfil)…"
 xcodebuild -project Hermes.xcodeproj -scheme HermesWatch -configuration Debug \
   -destination "platform=watchOS,id=$RELOJ" \
-  -derivedDataPath build/dw -allowProvisioningUpdates build \
+  -derivedDataPath build/dw -allowProvisioningUpdates \
+  HERMES_URL="$HERMES_URL" HERMES_URL_ALT="$HERMES_URL_ALT" \
+  HERMES_API_KEY="$HERMES_API_KEY" build \
   > build/watch-build.log 2>&1 \
   || { echo "  ✗ mira build/watch-build.log"; exit 1; }
 
 echo "📱 compilando la app del iPhone (lleva el reloj dentro)…"
 xcodebuild -project Hermes.xcodeproj -scheme Hermes -configuration Debug \
   -destination "generic/platform=iOS" -derivedDataPath build/dd \
-  -allowProvisioningUpdates build > build/ios-build.log 2>&1 \
+  -allowProvisioningUpdates HERMES_URL="$HERMES_URL" \
+  HERMES_URL_ALT="$HERMES_URL_ALT" HERMES_API_KEY="$HERMES_API_KEY" \
+  build > build/ios-build.log 2>&1 \
   || { echo "  ✗ mira build/ios-build.log"; exit 1; }
 
 APP="build/dd/Build/Products/Debug-iphoneos/Hermes.app"

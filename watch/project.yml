@@ -89,6 +89,15 @@ targets:
         # El dictado del sistema pide el micrófono; sin esta clave la app se
         # cierra al presentarlo, sin mensaje útil.
         NSMicrophoneUsageDescription: Hermes usa el micrófono para dictarle.
+        # Se rellenan al compilar desde el .env del repo (install-watch.sh).
+        # No se escriben aquí porque project.yml SÍ va a git y la clave no debe.
+        HermesURL: $(HERMES_URL)
+        HermesURLAlt: $(HERMES_URL_ALT)
+        HermesAPIKey: $(HERMES_API_KEY)
+        # El agente puede ir por http en la LAN; sin esto ATS bloquea la
+        # conexión y el fallo se ve como "no se pudo conectar".
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.samumontoya.hermes
 

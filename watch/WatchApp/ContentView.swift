@@ -61,8 +61,22 @@ struct ContentView: View {
   @Environment(\.isLuminanceReduced) private var atenuada
   @State private var saltoDesde: Date?
   @State private var sacudidaDesde: Date?
+  @State private var paso: Paso?
+  @State private var respuesta = ""
+  @State private var corriendo = false
+  @State private var enRespuesta = false
 
-  var body: some View { orbe }
+  var body: some View {
+    if enRespuesta {
+      Respuesta(paso: paso, texto: respuesta, corriendo: corriendo) {
+        // Un toque vuelve al orbe. Si el turno sigue vivo no se cancela: es
+        // un trabajo del servidor y seguirá su curso.
+        enRespuesta = false
+      }
+    } else {
+      orbe
+    }
+  }
 
   /// El toque abre el dictado EN EL ACTO y lanza el salto a la vez. El salto
   /// se deja disparado igual: al volver del dictado (o al cancelarlo) todavía
@@ -73,8 +87,34 @@ struct ContentView: View {
     // El texto dictado no se pinta: el "Listo" del dictado del sistema ya
     // cierra el gesto, y una pantalla más encima sobra. Aquí es donde irá el
     // envío al agente cuando el reloj hable con el servidor.
-    Dictado.pedir { _ in
+    Dictado.pedir { dicho in
       saltoDesde = nil
+      guard let dicho else { return }
+      paso = nil
+      respuesta = ""
+      corriendo = true
+      enRespuesta = true
+      Task {
+        await Agente.preguntar(dicho) { ev in
+          Task { @MainActor in
+            switch ev {
+            case .texto(let t):
+              // Al llegar texto el paso desaparece: la respuesta va sola.
+              paso = nil
+              respuesta += t
+            case .paso(let n, let o):
+              // Reemplaza, no acumula: solo interesa lo que está haciendo AHORA.
+              withAnimation(.easeInOut(duration: 0.18)) {
+                paso = Paso(nombre: n, objetivo: o)
+              }
+            case .fin: corriendo = false
+            case .fallo(let m):
+              corriendo = false
+              if respuesta.isEmpty { respuesta = m }
+            }
+          }
+        }
+      }
     }
   }
 
