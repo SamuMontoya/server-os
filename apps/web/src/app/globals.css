@@ -451,6 +451,7 @@ body::after {
   color: var(--violet);
 }
 .md-pre {
+  position: relative;
   margin: 0.7em 0;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -459,6 +460,27 @@ body::after {
   overflow-x: auto;
   font-size: 11.5px;
   line-height: 1.5;
+  /* Clic para copiar (ver components/Markdown.tsx → CodeBlock). */
+  cursor: pointer;
+}
+.md-pre:hover {
+  border-color: var(--violet);
+}
+/* Aviso breve tras copiar: una etiqueta arriba a la derecha del bloque,
+   se desvanece sola cuando `copied` vuelve a false (ver CodeBlock). */
+.md-pre-copied::before {
+  content: "Copiado ✓";
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--violet);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.6;
+  font-family: var(--font-sans, inherit);
+  pointer-events: none;
 }
 .md-code {
   padding: 1px 5px;
@@ -1797,6 +1819,28 @@ html.lab-route.lab-kb .lab-inputbar {
 .lab-answer .md-link,
 .lab-answer .md-ref {
   color: #2563eb;
+}
+/* Feedback del long-press-para-copiar (mensajes propios y respuestas, ver
+   useLongPressCopy en laboratorio/page.tsx). Flota abajo al centro, encima
+   del inputbar, y no roba toques de lo que está debajo. */
+.lab-copy-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 40;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.88);
+  color: #fff;
+  font-size: 12.5px;
+  font-family: var(--font-notion);
+  pointer-events: none;
+  animation: lab-copy-toast-in 160ms ease-out;
+}
+@keyframes lab-copy-toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 /* ── Pasos del turno (LabSteps) ──────────────────────────────────────────
    Un bloque de acciones seguidas. Mientras corre es UNA línea que se releva

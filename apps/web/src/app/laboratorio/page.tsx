@@ -7,7 +7,13 @@
 // empezar a vivir acá — el resto (persistencia entre recargas, reenganche
 // tras bloquear pantalla, multi-tab) llega en ajustes posteriores.
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { useWorkspace } from "@/state/WorkspaceContext";
@@ -110,9 +116,140 @@ function pickHint(seed: string, pool: string[]): string {
   return pool[h % pool.length];
 }
 
+// Mantener presionado un mensaje (mío o de Hermes) lo copia al portapapeles.
+// 500ms de umbral: suficiente para no dispararse con un tap normal (abrir,
+// hacer scroll) pero corto para no sentirse un gesto "escondido". Se cancela
+// si el dedo/mouse se mueve más de UMBRAL_PX (deja de ser un press quieto,
+// pasa a ser scroll o selección de texto) o si suelta antes de tiempo.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_PX = 10;
+
+function useLongPressCopy(getText: () => string, onCopied: () => void) {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const firedRef = useRef(false);
+
+  const clear = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    startRef.current = null;
+  };
+
+  const copy = async () => {
+    const text = getText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      onCopied();
+    } catch {
+      // Sin permiso de portapapeles o navegador viejo: no hay mucho más que
+      // hacer acá, se deja pasar en silencio.
+    }
+  };
+
+  return {
+    onPointerDown: (e: ReactPointerEvent) => {
+      // Solo dedo/mouse principal; un pinch o el botón derecho no cuentan.
+      if (e.button !== undefined && e.button !== 0) return;
+      firedRef.current = false;
+      startRef.current = { x: e.clientX, y: e.clientY };
+      timerRef.current = setTimeout(() => {
+        firedRef.current = true;
+        copy();
+      }, LONG_PRESS_MS);
+    },
+    onPointerMove: (e: ReactPointerEvent) => {
+      const start = startRef.current;
+      if (!start) return;
+      const dx = e.clientX - start.x;
+      const dy = e.clientY - start.y;
+      if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_PX) clear();
+    },
+    onPointerUp: clear,
+    onPointerLeave: clear,
+    onPointerCancel: clear,
+    // El long-press ya copió; evita que además dispare un click/selección rara.
+    onContextMenu: (e: ReactMouseEvent) => {
+      if (firedRef.current) e.preventDefault();
+    },
+  };
+}
+
+// Burbuja de un mensaje mío: mantenerla presionada copia el texto tal cual
+// se escribió (sin pasar por Markdown, no lo lleva).
+function UserBubble({ m, onCopied }: { m: LabMessage; onCopied: () => void }) {
+  const press = useLongPressCopy(() => m.content, onCopied);
+  return (
+    <div
+      className="lab-bubble"
+      // `data-anchor`: candidato a quedar pegado arriba. Lo llevan
+      // todos los mensajes y bloques; el que manda en cada momento
+      // es el que apunta anchorKeyRef (ver anchorTo).
+      data-anchor={`u${m.id}`}
+      {...press}
+    >
+      {m.images && m.images.length > 0 && (
+        <div className="lab-bubble-images">
+          {m.images.map((img, i) => (
+            // eslint-disable-next-line @next/next/no-img-element -- object URL local, no un asset de Next.
+            <img key={i} src={img.url} alt={img.name} />
+          ))}
+        </div>
+      )}
+      {/* El texto va en un <span> (no como nodo de texto suelto) para que
+          `.lab-bubble-images:not(:only-child)` en globals.css detecte que
+          hay hermano: `:only-child` solo cuenta ELEMENTOS, no text nodes. */}
+      {m.content ? <span className="lab-bubble-text">{m.content}</span> : null}
+    </div>
+  );
+}
+
+// Un bloque de la respuesta (texto o pasos). Mantenerlo presionado copia
+// SIEMPRE el texto completo de la respuesta (answerText), no solo ese
+// bloque — es lo que uno espera pegar en otro lado.
+function AnswerBlock({
+  anchor,
+  b,
+  streaming,
+  isLast,
+  answerText,
+  project,
+  onCopied,
+}: {
+  anchor: string;
+  b: LabBlock;
+  streaming: boolean;
+  isLast: boolean;
+  answerText: string;
+  project: string | undefined;
+  onCopied: () => void;
+}) {
+  const press = useLongPressCopy(() => answerText, onCopied);
+  return (
+    <div data-anchor={anchor} {...press}>
+      {b.kind === "steps" ? (
+        <LabSteps steps={b.steps} live={streaming && isLast} />
+      ) : (
+        <Markdown source={b.text} project={project} />
+      )}
+    </div>
+  );
+}
+
 export default function Laboratorio() {
   const { selectedProject } = useWorkspace();
   const projKey = selectedProject || "general";
+
+  // Toast mínimo para el feedback de "copiado" del long-press (no reusa
+  // <Toasts/> a propósito: ese componente está atado al feed SSE de eventos
+  // del orquestador, esto es un aviso local y efímero).
+  const [copyToast, setCopyToast] = useState(false);
+  const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashCopyToast = () => {
+    setCopyToast(true);
+    if (copyToastTimerRef.current) clearTimeout(copyToastTimerRef.current);
+    copyToastTimerRef.current = setTimeout(() => setCopyToast(false), 1400);
+  };
 
   // Hidratación: UNA lectura del navegador en el primer render. Sin esto,
   // cada remontaje —y iOS remonta cada vez que recupera la pestaña que mató
@@ -1507,34 +1644,19 @@ export default function Laboratorio() {
         )}
         {messages.map((m, idx) => {
           if (m.role === "user") {
-            return (
-              <div
-                key={m.id}
-                className="lab-bubble"
-                // `data-anchor`: candidato a quedar pegado arriba. Lo llevan
-                // todos los mensajes y bloques; el que manda en cada momento
-                // es el que apunta anchorKeyRef (ver anchorTo).
-                data-anchor={`u${m.id}`}
-              >
-                {m.images && m.images.length > 0 && (
-                  <div className="lab-bubble-images">
-                    {m.images.map((img, i) => (
-                      // eslint-disable-next-line @next/next/no-img-element -- object URL local, no un asset de Next.
-                      <img key={i} src={img.url} alt={img.name} />
-                    ))}
-                  </div>
-                )}
-                {/* El texto va en un <span> (no como nodo de texto suelto) para que
-                    `.lab-bubble-images:not(:only-child)` en globals.css detecte que
-                    hay hermano: `:only-child` solo cuenta ELEMENTOS, no text nodes. */}
-                {m.content ? <span className="lab-bubble-text">{m.content}</span> : null}
-              </div>
-            );
+            return <UserBubble key={m.id} m={m} onCopied={flashCopyToast} />;
           }
           const blocks = m.blocks ?? [];
           // Solo el ÚLTIMO mensaje puede estar en curso: es donde escribe el
           // turno activo (busy es global porque solo corre un turno a la vez).
           const streaming = busy && idx === messages.length - 1;
+          // Texto plano de la respuesta (para el copy del long-press): junta
+          // solo los bloques de texto, en orden — los "steps" son un log de
+          // acciones, no algo que Samu quiera pegar en otro lado.
+          const answerText = blocks
+            .filter((b): b is Extract<LabBlock, { kind: "text" }> => b.kind === "text")
+            .map((b) => b.text)
+            .join("\n\n");
           return (
             <div key={m.id} className="lab-answer">
               {/* La respuesta se pinta EN ORDEN DE LLEGADA: cada bloque de
@@ -1547,13 +1669,18 @@ export default function Laboratorio() {
                 // se inserta puede ser el que sube al borde superior, y ni
                 // LabSteps ni Markdown reciben ref. Sin padding ni borde, así
                 // los márgenes de los hijos siguen colapsando igual que antes.
-                <div key={bi} data-anchor={`${m.id}:${bi}`}>
-                  {b.kind === "steps" ? (
-                    <LabSteps steps={b.steps} live={streaming && bi === blocks.length - 1} />
-                  ) : (
-                    <Markdown source={b.text} project={selectedProject ?? undefined} />
-                  )}
-                </div>
+                // Mantener presionado CUALQUIER bloque de texto copia toda la
+                // respuesta (no solo ese bloque): es lo que Samu espera pegar.
+                <AnswerBlock
+                  key={bi}
+                  anchor={`${m.id}:${bi}`}
+                  b={b}
+                  streaming={streaming}
+                  isLast={bi === blocks.length - 1}
+                  answerText={answerText}
+                  project={selectedProject ?? undefined}
+                  onCopied={flashCopyToast}
+                />
               ))}
               {streaming && blocks.length === 0 ? (
                 // "Pensando" solo hasta el primer bloque: a partir de ahí los
@@ -1575,6 +1702,14 @@ export default function Laboratorio() {
             respuesta aún no ocupa la pantalla, y se encoge según ella crece. */}
         <div ref={spacerRef} className="lab-spacer" aria-hidden="true" />
       </div>
+
+      {/* Feedback del long-press: "Copiado" flota abajo al centro y se apaga
+          solo (ver flashCopyToast). No bloquea toques por debajo. */}
+      {copyToast && (
+        <div className="lab-copy-toast" role="status" aria-live="polite">
+          Copiado
+        </div>
+      )}
 
       <div className="lab-inputbar">
         {showJumpDown && (
