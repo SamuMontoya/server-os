@@ -164,11 +164,6 @@ struct ContentView: View {
       .onTapGesture(perform: tocar)
     }
     .ignoresSafeArea()
-    .onChange(of: atenuada) { _, ahoraAtenuada in
-      // Al despertar sacude la cabeza. Al dormirse no se hace nada: la
-      // pantalla ya se está apagando y nadie lo vería.
-      if !ahoraAtenuada { sacudidaDesde = Date() }
-    }
     // watchOS NO expone forma de ocultar la hora ni el indicador de Modo
     // enfoque: `.statusBarHidden()` no existe en esta plataforma. Con un
     // VideoPlayer en pantalla el sistema la esconde solo, así que se deja uno

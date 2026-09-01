@@ -31,6 +31,9 @@ export const CENTINELA = "CONSULTAR";
 /** Prefijo con el que la sesión rápida pide una imagen. */
 export const CENTINELA_IMAGEN = "IMAGEN:";
 
+/** "Esa no, otra": pide la siguiente imagen de la última búsqueda. */
+export const CENTINELA_OTRA = "OTRA";
+
 const SISTEMA = `Eres Hermes, el asistente de ${OWNER}, respondiendo en la pantalla de un reloj.
 
 Reglas, sin excepción:
@@ -53,6 +56,10 @@ El término debe ser CONCRETO y en singular, tal como se titularía un artículo
 de enciclopedia: "husky siberiano", no "una foto bonita de un husky". Quita
 los adjetivos de adorno y las palabras de la petición ("muéstrame", "una
 imagen de"): con ellas dentro la búsqueda falla.
+
+Si acabas de enseñar una imagen y el usuario dice que no era esa, que quiere
+otra, o pide "la siguiente", responde únicamente: OTRA. Nada más — el sistema
+recuerda qué se estaba buscando y trae la siguiente.
 
 Si para responder necesitas mirar archivos, memoria, proyectos, el calendario,
 BUSCAR EN INTERNET o ejecutar algo en la máquina, NO lo intentes ni lo
@@ -85,7 +92,7 @@ punto.`;
  * completa aquí: cuando se añadió IDEA: y no se apuntó en este filtro, la
  * palabra "IDEA:" salió impresa en el reloj.
  */
-const CENTINELAS = [CENTINELA, CENTINELA_IMAGEN, "IDEA:"];
+const CENTINELAS = [CENTINELA, CENTINELA_IMAGEN, "IDEA:", "OTRA"];
 
 interface Pendiente {
   prompt: string;

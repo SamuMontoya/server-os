@@ -30,11 +30,17 @@ final class Voz {
   }
 
   private init() {
-    // Sin sesión de audio activa el reloj no saca sonido por el altavoz y
-    // falla en silencio, que es de los fallos más difíciles de diagnosticar.
-    try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio,
-                                                     options: [.duckOthers])
-    try? AVAudioSession.sharedInstance().setActive(true)
+    // LA CLAVE de que sonara: con `usesApplicationAudioSession = true` (el
+    // valor por defecto) la app tiene que activar la sesión de audio ella
+    // misma, y en watchOS eso falla EN SILENCIO — no lanza, no avisa,
+    // simplemente no sale sonido por el altavoz. Delegándolo al sistema, él
+    // activa y desactiva la sesión, resuelve el enrutado al altavoz o a los
+    // auriculares, y gestiona las interrupciones.
+    //
+    // Y trae de regalo lo que se pedía: al ser audio del sistema, el DIAL
+    // controla el volumen con la barra nativa del reloj. No hace falta —ni
+    // conviene— pintar otra.
+    sintetizador.usesApplicationAudioSession = false
   }
 
   /// Habla por FRASES según van llegando, no al final.
@@ -71,6 +77,7 @@ final class Voz {
     // Un pelo por encima del ritmo por defecto: en un reloj la respuesta es
     // corta y el ritmo de serie se arrastra.
     u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.05
+
     sintetizador.speak(u)
   }
 }
