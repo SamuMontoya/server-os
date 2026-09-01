@@ -78,6 +78,7 @@ struct ContentView: View {
       paso = nil
       respuesta = ""
       imagen = nil
+      Voz.compartida.callar()   // una pregunta nueva calla la anterior
       corriendo = true
       enRespuesta = true
       Task {
@@ -88,6 +89,9 @@ struct ContentView: View {
               // Al llegar texto el paso desaparece: la respuesta va sola.
               paso = nil
               respuesta += t
+              // Se habla lo MISMO que se pinta, ya sin markdown: si no, la
+              // voz lee "asterisco asterisco" en cada énfasis que se escape.
+              Voz.compartida.alLlegar(sinMarcas(t))
             case .imagen(let u): imagen = u
             case .escala:
               // La vía rápida no bastó. Se limpia lo que hubiera dicho y a
@@ -98,7 +102,9 @@ struct ContentView: View {
               withAnimation(.easeInOut(duration: 0.18)) {
                 paso = Paso(nombre: n, objetivo: o)
               }
-            case .fin: corriendo = false
+            case .fin:
+              corriendo = false
+              Voz.compartida.cerrar()
             case .fallo(let m):
               corriendo = false
               if respuesta.isEmpty { respuesta = m }

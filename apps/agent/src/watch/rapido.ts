@@ -148,7 +148,10 @@ class SesionRapida {
       options: {
         cwd: env.VAULT_PATH || process.cwd(),
         systemPrompt: SISTEMA,
-        model: "haiku",
+        // Configurable para poder MEDIR el cambio, no suponerlo: con el
+        // proceso ya vivo el tiempo hasta la primera palabra es casi todo del
+        // modelo, así que aquí sí se nota cuál se use.
+        model: process.env.WATCH_MODEL || "haiku",
         includePartialMessages: true,
         // Aquí manda el tiempo hasta la primera palabra: el razonamiento
         // previo lo estropea y para una frase corta no aporta nada.
