@@ -550,8 +550,15 @@ app.post("/chat/turns", async (c) => {
   const project = b.project || c.req.header("X-Hermes-Project") || undefined;
   const resume =
     b.resume && UUID_RE.test(b.resume) ? b.resume : await getSdkSession(sessionKey);
+  // El canal del reloj va con techo `light` (haiku, sin effort). Ahí las
+  // respuestas son de UNA frase y lo único que se nota es el tiempo hasta la
+  // primera palabra; sonnet con effort medium tardaba tanto que el turno se
+  // veía colgado en la muñeca. Es un TECHO, no un modelo fijo: el perfil de
+  // bajo consumo puede seguir bajándolo, nunca subirlo.
+  const esReloj = sessionKey === "reloj";
   const turn = chatTurns.start({
     prompt: message || "¿Qué ves en esta imagen?",
+    ...(esReloj ? { maxTier: "light" as const } : {}),
     attachments,
     sessionKey,
     project,

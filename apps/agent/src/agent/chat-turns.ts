@@ -19,6 +19,7 @@
  * para poder testear reintentos, replay y cancelación sin SDK ni red.
  */
 import { randomUUID } from "node:crypto";
+import type { Tier } from "./router.js";
 import type { ChatToolStep } from "@hermes/shared";
 import { runAgentTurn, saveSdkSession } from "./session.js";
 import { appendTurn } from "../conversations.js";
@@ -157,6 +158,7 @@ export interface TurnRunnerArgs {
   attachments?: string[];
   project?: string;
   cwd?: string;
+  maxTier?: Tier;
   resumeSessionId?: string;
   abortController: AbortController;
   onDelta: (text: string) => void;
@@ -188,6 +190,8 @@ export interface StartTurnInput {
   sessionKey: string;
   project?: string;
   cwd?: string;
+  /** Techo de nivel del turno. El canal del reloj lo fija en `light`. */
+  maxTier?: Tier;
   resumeSessionId?: string;
 }
 
@@ -311,6 +315,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             project: input.project,
             cwd: input.cwd,
             resumeSessionId: resume,
+            maxTier: input.maxTier,
             abortController: abort,
             onSession: (sessionId) => {
               if (turn.sdkSessionId === sessionId) return;
