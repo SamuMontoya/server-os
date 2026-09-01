@@ -48,6 +48,11 @@ struct ContentView: View {
   @State private var imagen: URL?
   @State private var corriendo = false
   @State private var enRespuesta = false
+  /// Volumen de la voz, movido con el dial. Arranca del valor guardado para
+  /// que no se reinicie cada vez que se abre la app.
+  @State private var volumen = Double(Voz.compartida.volumen)
+  @State private var mostrarVolumen = false
+  @FocusState private var dialActivo: Bool
 
   var body: some View {
     if enRespuesta {
@@ -162,8 +167,30 @@ struct ContentView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .contentShape(Rectangle())
       .onTapGesture(perform: tocar)
+      .overlay(alignment: .trailing) {
+        if mostrarVolumen { indicadorVolumen }
+      }
     }
     .ignoresSafeArea()
+    // El dial va AQUÍ y no en la pantalla de respuesta: allí lo usa el
+    // ScrollView para desplazar el texto, y dos cosas peleando por el mismo
+    // mando se sienten rotas. En el orbe está libre.
+    .focusable(true)
+    .focused($dialActivo)
+    .digitalCrownRotation($volumen, from: 0, through: 1, by: 0.05,
+                          sensitivity: .medium, isContinuous: false,
+                          isHapticFeedbackEnabled: true)
+    .onAppear { dialActivo = true }
+    .onChange(of: volumen) { _, v in
+      Voz.compartida.volumen = Float(v)
+      mostrarVolumen = true
+      // Se esconde solo: un indicador permanente tapa el orbe, que es lo que
+      // se quiere ver.
+      Task {
+        try? await Task.sleep(for: .seconds(1.2))
+        mostrarVolumen = false
+      }
+    }
     .onChange(of: atenuada) { _, ahoraAtenuada in
       // Al despertar sacude la cabeza. Al dormirse no se hace nada: la
       // pantalla ya se está apagando y nadie lo vería.
@@ -181,6 +208,25 @@ struct ContentView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     )
+  }
+
+  /// Barra de volumen junto al dial, del lado en el que está la corona.
+  private var indicadorVolumen: some View {
+    VStack(spacing: 3) {
+      Image(systemName: volumen == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+        .font(.system(size: 11))
+      Capsule()
+        .fill(Color(white: 0.85))
+        .frame(width: 4, height: 54)
+        .overlay(alignment: .bottom) {
+          Capsule()
+            .fill(Color(white: 0.15))
+            .frame(width: 4, height: max(4, 54 * volumen))
+        }
+    }
+    .foregroundStyle(Color(white: 0.15))
+    .padding(.trailing, 4)
+    .transition(.opacity)
   }
 
   // ── Ojos ───────────────────────────────────────────────────────────────────
