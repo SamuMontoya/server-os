@@ -116,6 +116,18 @@ export async function linkWatchTurn(turnId: string, title: string): Promise<void
   }
 }
 
+/** Corta el vínculo con el reloj YA — no solo deja de renovarlo con el
+ *  próximo turno, borra el puntero del servidor de una. Mismo criterio de
+ *  "adorno, nunca revienta el chat" que linkWatchTurn. */
+export async function unlinkWatchTurn(): Promise<void> {
+  try {
+    await hermesFetch("/watch/link", { method: "DELETE" });
+  } catch {
+    // No hay mucho que hacer si el agente no respondió: el vínculo vence
+    // solo a las 2h del lado del servidor (ver watch/active-link.ts).
+  }
+}
+
 /** Estado del turno sin abrir stream. Para saber si vale la pena engancharse. */
 export async function fetchTurn(turnId: string, from = 0): Promise<TurnState | null> {
   const res = await hermesFetch(`/chat/turns/${turnId}?from=${from}`);

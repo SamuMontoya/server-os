@@ -1162,53 +1162,106 @@ html.lab-route body::after {
    geométrico y el óptico coinciden. `min-width:0` para que el puntito de
    ellipsis funcione dentro del flex en vez de desbordar la barra. */
 .lab-topbar-titlewrap {
+  position: relative; /* ancla el menú desplegable justo debajo */
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
 }
+/* El título ahora es un BOTÓN (antes era un <span> mudo): tocarlo abre el
+   menú de "Renombrar" / "Conectar al reloj". Se le quita todo lo que un
+   <button> trae de fábrica para que siga leyéndose como el texto de
+   siempre. */
 .lab-topbar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   min-width: 0;
+  max-width: 100%;
+  border: none;
+  background: none;
+  padding: 4px 2px;
+  font-family: inherit;
   text-align: center;
   font-size: 13.5px;
   font-weight: 600;
   color: #37352f;
+  cursor: pointer;
+}
+.lab-topbar-title:disabled {
+  cursor: default;
+}
+.lab-topbar-title-text {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Vincular al reloj (ver useLongPressCopy más abajo para el otro gesto de
-   este chat, esto es aparte). Circulito de 20px: a propósito más chico que
-   los botones de 34px del navbar — es un adorno del título, no una acción de
-   primer nivel. flex-shrink:0 para no desaparecer si el título es largo. */
-.lab-watch-btn {
+/* Punto verde: el mismo código de color que ya usa la lista de chats
+   (LabChatsScreen) para "hay un turno corriendo" — acá dice "el reloj sigue
+   este chat". flex-shrink:0 para no desaparecer con un título largo. */
+.lab-watch-dot {
   flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
+  background: #2f9e6e;
+}
+/* Input de renombrar: mismo lugar y tamaño que el título que reemplaza, para
+   que el cambio de modo no salte la barra. */
+.lab-topbar-rename {
+  width: 100%;
+  max-width: 220px;
+  border: none;
+  border-bottom: 1px solid #37352f;
+  background: none;
+  padding: 3px 2px;
+  font-family: inherit;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #37352f;
+}
+.lab-topbar-rename:focus {
+  outline: none;
+}
+/* Menú de dos opciones. Ancho fijo y centrado bajo el título — no bajo el
+   dedo, que en un toque desde cualquier punto del título se sentiría
+   errático. */
+.lab-title-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+.lab-title-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid #ededec;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.lab-title-menu button {
   border: none;
   background: none;
-  color: #9b9a97;
-  cursor: pointer;
-  transition:
-    color 0.15s,
-    background 0.15s;
-}
-.lab-watch-btn:hover {
+  padding: 9px 12px;
+  border-radius: 6px;
+  text-align: left;
+  font-family: var(--font-notion);
+  font-size: 13.5px;
   color: #37352f;
+  cursor: pointer;
+}
+.lab-title-menu button:hover {
   background: #f1f1ef;
-}
-.lab-watch-btn--on {
-  color: #2f9e6e;
-}
-.lab-watch-btn--on:hover {
-  color: #2f9e6e;
-  background: rgba(47, 158, 110, 0.12);
 }
 .lab-menu-btn {
   display: inline-flex;
