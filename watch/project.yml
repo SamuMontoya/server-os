@@ -62,6 +62,7 @@ targets:
         HermesURLAlt: $(HERMES_URL_ALT)
         HermesURLPub: $(HERMES_URL_PUB)
         HermesAPIKey: $(HERMES_API_KEY)
+        HermesOwner: $(HERMES_OWNER)
         # El agente puede ir por http en la LAN; sin esto ATS lo bloquea y el
         # fallo se ve como "sin conexión".
         NSAppTransportSecurity:

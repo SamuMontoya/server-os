@@ -32,6 +32,7 @@ HERMES_URL="${HERMES_URL:-$(grep -E "^WATCH_HERMES_URL=" "$ENV_REPO" 2>/dev/null
 HERMES_API_KEY="${HERMES_API_KEY:-$(grep -E "^HERMES_API_KEY=" "$ENV_REPO" 2>/dev/null | cut -d= -f2-)}"
 HERMES_URL_ALT="${HERMES_URL_ALT:-$(grep -E "^WATCH_HERMES_URL_ALT=" "$ENV_REPO" 2>/dev/null | cut -d= -f2-)}"
 HERMES_URL_PUB="${HERMES_URL_PUB:-$(grep -E "^WATCH_HERMES_URL_PUB=" "$ENV_REPO" 2>/dev/null | cut -d= -f2-)}"
+HERMES_OWNER="${HERMES_OWNER:-$(grep -E "^HERMES_OWNER_NAME=" "$ENV_REPO" 2>/dev/null | cut -d= -f2-)}"
 [ -z "$HERMES_URL" ] && echo "  ⚠ sin WATCH_HERMES_URL en .env — el reloj no podrá hablar con el agente"
 
 IPHONE="${HERMES_IPHONE_UDID:-00008110-0014158C36B8401E}"

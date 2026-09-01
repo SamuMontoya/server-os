@@ -1,5 +1,5 @@
 import SwiftUI
-import PhotosUI
+import PhotosUI  // adjuntar imágenes; el botón se quitó del composer
 
 /// El Laboratorio, nativo.
 ///
@@ -46,29 +46,27 @@ struct LabView: View {
 
   // ── Cabecera ──────────────────────────────────────────────────────────────
   private var cabecera: some View {
-    HStack(spacing: 10) {
+    HStack {
       Button { modelo.mostrarChats = true } label: {
         Image(systemName: "line.3.horizontal")
-          .font(.system(size: 16, weight: .medium))
-          .foregroundStyle(Self.glifo)
+          .font(.system(size: 19, weight: .regular))
+          .foregroundStyle(Self.tinta)
           .frame(width: 34, height: 34)
       }
-      Text(modelo.activo?.titulo ?? "Laboratorio")
-        .font(.system(size: 15, weight: .medium))
-        .foregroundStyle(Self.tinta)
-        .lineLimit(1)
-      Spacer(minLength: 0)
+      Spacer()
+      // El "+" va en un cuadrado gris redondeado, no suelto: es el único
+      // control con fondo de la pantalla y así se lee como el botón primario.
       Button { modelo.crearChat() } label: {
-        Image(systemName: "square.and.pencil")
-          .font(.system(size: 15))
-          .foregroundStyle(Self.glifo)
-          .frame(width: 34, height: 34)
+        Image(systemName: "plus")
+          .font(.system(size: 19, weight: .regular))
+          .foregroundStyle(Self.tinta)
+          .frame(width: 40, height: 40)
+          .background(Color(hex: 0xF1F1EF))
+          .clipShape(RoundedRectangle(cornerRadius: 11))
       }
     }
     .padding(.horizontal, 16)
-    .padding(.vertical, 10)
-    .background(Color.white)
-    .overlay(alignment: .bottom) { Divider().overlay(Self.tinta.opacity(0.08)) }
+    .padding(.top, 4)
   }
 
   // ── Hilo ──────────────────────────────────────────────────────────────────
@@ -126,63 +124,40 @@ struct LabView: View {
     })
   }
 
-  /// Chat nuevo: el orbe en el centro, el saludo, y sugerencias abajo.
+  /// Chat nuevo: orbe grande, saludo y UNA sugerencia.
   ///
-  /// El orbe va grande y centrado porque en un chat vacío ES el contenido: no
-  /// hay nada que leer todavía. Las sugerencias resuelven el problema real de
-  /// una pantalla en blanco — que no sabes qué se le puede pedir.
+  /// Una sola sugerencia y como TEXTO, no como botones: tres tarjetas llenan
+  /// la pantalla y la convierten en un menú. Aquí lo que manda es el orbe, y
+  /// la línea de abajo solo insinúa por dónde empezar. Se puede tocar.
   private var vacio: some View {
     VStack(spacing: 0) {
-      Spacer(minLength: 20)
-      Orbe(lado: 96)
-      Text(Self.saludo)
-        .font(.system(size: 19, weight: .semibold))
+      // Un solo Spacer arriba y otro abajo, iguales: antes había dos abajo y
+      // eso empujaba el conjunto hacia arriba en vez de centrarlo.
+      Spacer(minLength: 0)
+      Orbe(lado: 140)
+      Text("Hola \(Self.dueno)")
+        .font(.system(size: 30, weight: .bold))
         .foregroundStyle(Self.tinta)
-        .padding(.top, 14)
-      Text("¿En qué andamos?")
-        .font(.system(size: 15))
-        .foregroundStyle(Self.apagado)
-        .padding(.top, 3)
-      Spacer(minLength: 24)
-      VStack(spacing: 8) {
-        ForEach(Self.sugerencias, id: \.self) { s in
-          Button { modelo.borrador = s } label: {
-            HStack {
-              Text(s)
-                .font(.system(size: 14))
-                .foregroundStyle(Self.tinta)
-                .multilineTextAlignment(.leading)
-              Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(hex: 0xEFEEEA)))
-          }
-          .buttonStyle(.plain)
-        }
+        .padding(.top, 6)
+      Button { modelo.borrador = Self.sugerencia } label: {
+        Text(Self.sugerencia)
+          .font(.system(size: 16))
+          .foregroundStyle(Self.apagado)
+          .multilineTextAlignment(.center)
       }
-      Spacer(minLength: 8)
+      .buttonStyle(.plain)
+      .padding(.top, 14)
+      Spacer(minLength: 0)
     }
     .frame(maxWidth: .infinity)
-    .padding(.top, 10)
   }
 
-  /// Saludo según la hora. Un "Hola" fijo a las 2 de la mañana suena a robot.
-  private static var saludo: String {
-    switch Calendar.current.component(.hour, from: Date()) {
-    case 5..<12: "Buenos días"
-    case 12..<19: "Buenas tardes"
-    default: "Buenas noches"
-    }
-  }
+  /// El nombre sale de la configuración, no del código: el mismo repo corre en
+  /// la máquina de cualquiera con su propio .env.
+  private static let dueno =
+    (Bundle.main.object(forInfoDictionaryKey: "HermesOwner") as? String) ?? "Samu"
 
-  private static let sugerencias = [
-    "¿En qué quedamos ayer?",
-    "¿Qué tengo pendiente en los proyectos activos?",
-    "Apunta una idea",
-  ]
+  private static let sugerencia = "Resume en qué anda cada proyecto"
 
   private func burbujaMia(_ m: Mensaje) -> some View {
     HStack {
@@ -230,33 +205,34 @@ struct LabView: View {
   // ── Composer ──────────────────────────────────────────────────────────────
   private var composer: some View {
     VStack(spacing: 0) {
-      Divider().overlay(Self.tinta.opacity(0.08))
+      // Sin línea divisoria: el composer ya se separa por su propio borde, y
+      // la raya de más partía la pantalla en dos.
       if !modelo.adjuntos.isEmpty || modelo.subiendo {
         tiraAdjuntos
       }
-      HStack(alignment: .bottom, spacing: 10) {
-        PhotosPicker(selection: $elegirFoto, matching: .images) {
-          Image(systemName: "photo")
-            .font(.system(size: 17))
-            .foregroundStyle(Self.apagado)
-            .frame(width: 26, height: 30)
+      HStack(spacing: 10) {
+        // Micrófono: círculo OSCURO dentro de la caja, a la izquierda. Es el
+        // control con más peso visual del composer a propósito — dictar es lo
+        // que más se hace desde el teléfono.
+        Button { dictado.alternar($modelo.borrador) } label: {
+          ZStack {
+            Circle().fill(dictado.grabando ? Color(hex: 0xE35B4A) : Self.tinta)
+            if dictado.grabando {
+              BarrasMic(nivel: dictado.nivel).colorInvert()
+            } else {
+              Image(systemName: "mic.fill")
+                .font(.system(size: 15))
+                .foregroundStyle(.white)
+            }
+          }
+          .frame(width: 34, height: 34)
         }
+
         TextField("Escribe algo…", text: $modelo.borrador, axis: .vertical)
-          .font(.system(size: 15))
-          .lineLimit(1...5)          // max-height 120px del CSS
+          .font(.system(size: 17))
+          .lineLimit(1...5)
           .focused($escribiendo)
           .foregroundStyle(Self.tinta)
-
-        Button { dictado.alternar($modelo.borrador) } label: {
-          if dictado.grabando {
-            BarrasMic(nivel: dictado.nivel).frame(width: 26, height: 30)
-          } else {
-            Image(systemName: "mic")
-              .font(.system(size: 16))
-              .foregroundStyle(Self.apagado)
-              .frame(width: 26, height: 30)
-          }
-        }
 
         Button {
           if dictado.grabando { dictado.parar() }
@@ -264,22 +240,22 @@ struct LabView: View {
           else { modelo.enviar() }
         } label: {
           Image(systemName: modelo.trabajando ? "stop.fill" : "arrow.up")
-            .font(.system(size: 14, weight: .semibold))
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
-            .background(botonActivo ? Self.tinta : Self.apagado.opacity(0.5))
+            .frame(width: 34, height: 34)
+            .background(botonActivo ? Self.tinta : Color(hex: 0xD3D1CB))
             .clipShape(Circle())
         }
         .disabled(!botonActivo)
       }
       // La caja del composer: borde de 1px y radio 10, como .lab-composer.
-      .padding(.horizontal, 14)
-      .padding(.vertical, 12)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 8)
       .background(Color.white)
-      .clipShape(RoundedRectangle(cornerRadius: 10))
-      .overlay(RoundedRectangle(cornerRadius: 10).stroke(Self.borde))
-      .padding(.horizontal, 20)      // --lab-bar-x
-      .padding(.top, 14)             // --lab-bar-top
+      .clipShape(RoundedRectangle(cornerRadius: 26))
+      .overlay(RoundedRectangle(cornerRadius: 26).stroke(Self.borde))
+      .padding(.horizontal, 16)
+      .padding(.top, 6)
 
       if let e = dictado.error {
         Text(e)
@@ -288,12 +264,14 @@ struct LabView: View {
           .padding(.top, 6)
       }
       BarraEstado(modelo: modelo.modeloTurno)
-        .padding(.horizontal, 20)
+        // Alineado con el composer y un poco más adentro: el porcentaje y el
+        // tiempo tocaban el borde de la pantalla.
+        .padding(.horizontal, 30)
         .padding(.top, 8)
-      // 22 y no 10: el mismo padding inferior que se subió en la web, porque
-      // con el indicador de inicio del iPhone justo debajo, 10 px dejan el
-      // composer pegado al borde y se toca sin querer.
-      .padding(.bottom, 22)
+      // 8 y no 22: con el pie de estado debajo (porcentaje · modelo · tiempo)
+      // ya hay separación del indicador de inicio, así que el composer puede
+      // bajar. Con 22 quedaba flotando a media pantalla.
+      .padding(.bottom, 8)
     }
     .background(Color.white)
   }

@@ -15,6 +15,9 @@ enum Turnos {
       .compactMap { Bundle.main.object(forInfoDictionaryKey: $0) as? String }
       .filter { !$0.isEmpty }
   }
+  /// La clave, para quien la necesite fuera de aquí (la barra de estado).
+  static var claveParaLimites: String { clave }
+
   private static var clave: String {
     (Bundle.main.object(forInfoDictionaryKey: "HermesAPIKey") as? String) ?? ""
   }
