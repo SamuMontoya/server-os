@@ -1198,15 +1198,14 @@ html.lab-route body::after {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Punto verde: el mismo código de color que ya usa la lista de chats
-   (LabChatsScreen) para "hay un turno corriendo" — acá dice "el reloj sigue
-   este chat". flex-shrink:0 para no desaparecer con un título largo. */
-.lab-watch-dot {
+/* Silueta de Apple Watch (WatchGlyph) en el mismo verde #2f9e6e que ya usa
+   la lista de chats (LabChatsScreen) para "hay un turno corriendo" — acá
+   dice "el reloj sigue ESTE chat". A la IZQUIERDA del texto del título (ver
+   orden en el JSX) y flex-shrink:0 para no desaparecer con un título largo. */
+.lab-watch-icon {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #2f9e6e;
+  display: inline-flex;
+  color: #2f9e6e;
 }
 /* Input de renombrar: mismo lugar y tamaño que el título que reemplaza, para
    que el cambio de modo no salte la barra. */
@@ -1249,13 +1248,12 @@ html.lab-route body::after {
   background: #fff;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
-/* Texto a la izquierda, ícono a la derecha (Samu lo pidió así): `justify-
-   content:space-between` en vez de un `gap` fijo, para que el ícono quede
-   pegado al borde del menú sin importar cuánto mida cada opción. */
+/* Ícono a la IZQUIERDA del texto de cada opción (Samu lo cambió de opinión:
+   antes iba a la derecha con espacio repartido — ahora pegado al texto,
+   como un ítem de menú normal). */
 .lab-title-menu button {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   border: none;
   background: none;

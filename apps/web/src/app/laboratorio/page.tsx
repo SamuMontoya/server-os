@@ -177,6 +177,21 @@ function useLongPressCopy(getText: () => string, onCopied: () => void) {
   };
 }
 
+// Silueta de Apple Watch (caja + dos orejetas + corona), no un reloj
+// genérico de agujas — Samu lo pidió así para el indicador y el ícono del
+// menú de "conectar al reloj". Un solo glifo reusado en los dos sitios para
+// que no se lean como dos conceptos distintos.
+function WatchGlyph({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="9" y="2" width="6" height="3" rx="1.2" fill="currentColor" />
+      <rect x="9" y="19" width="6" height="3" rx="1.2" fill="currentColor" />
+      <rect x="7" y="5" width="10" height="14" rx="3.2" stroke="currentColor" strokeWidth="1.7" />
+      <rect x="17.1" y="10.2" width="2.3" height="3.6" rx="0.9" fill="currentColor" />
+    </svg>
+  );
+}
+
 // Burbuja de un mensaje mío: mantenerla presionada copia el texto tal cual
 // se escribió (sin pasar por Markdown, no lo lleva).
 function UserBubble({ m, onCopied }: { m: LabMessage; onCopied: () => void }) {
@@ -1678,10 +1693,12 @@ export default function Laboratorio() {
               title={showChats ? undefined : topTitle || undefined}
               onClick={() => setTitleMenuOpen((v) => !v)}
             >
-              <span className="lab-topbar-title-text">{showChats ? "Chats" : topTitle}</span>
               {watchLinked && (
-                <span className="lab-watch-dot" aria-label="Reloj vinculado" title="Reloj vinculado" />
+                <span className="lab-watch-icon" aria-label="Reloj vinculado" title="Reloj vinculado">
+                  <WatchGlyph size={13} />
+                </span>
               )}
+              <span className="lab-topbar-title-text">{showChats ? "Chats" : topTitle}</span>
             </button>
           )}
           {titleMenuOpen && (
@@ -1692,7 +1709,6 @@ export default function Laboratorio() {
               <div className="lab-title-menu-backdrop" onClick={() => setTitleMenuOpen(false)} />
               <div className="lab-title-menu" role="menu">
                 <button type="button" role="menuitem" onClick={startRename}>
-                  <span>Renombrar</span>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path
                       d="M4 20h4L18.5 9.5a2.121 2.121 0 0 0-3-3L5 17v3Z"
@@ -1701,19 +1717,11 @@ export default function Laboratorio() {
                       strokeLinejoin="round"
                     />
                   </svg>
+                  <span>Renombrar</span>
                 </button>
                 <button type="button" role="menuitem" onClick={toggleWatchLink}>
+                  <WatchGlyph size={15} />
                   <span>{watchLinked ? "Desconectar del reloj" : "Conectar al reloj"}</span>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <circle cx="12" cy="12" r="7" stroke="currentColor" strokeWidth="1.8" />
-                    <path
-                      d="M12 9v3.5l2.2 2.2"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                    />
-                    <path d="M9 3h6M9 21h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  </svg>
                 </button>
               </div>
             </>
