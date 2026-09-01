@@ -78,6 +78,15 @@ NUNCA cites fuentes, enlaces, dominios ni "según X". En una pantalla de reloj
 la fuente ocupa más que la respuesta y no se puede pinchar. Da el hecho y
 punto.`;
 
+/**
+ * TODOS los centinelas. Se usa para no streamear ninguno a la pantalla.
+ *
+ * `CENTINELA_IDEA` vive en intenciones.ts, pero la lista tiene que estar
+ * completa aquí: cuando se añadió IDEA: y no se apuntó en este filtro, la
+ * palabra "IDEA:" salió impresa en el reloj.
+ */
+const CENTINELAS = [CENTINELA, CENTINELA_IMAGEN, "IDEA:"];
+
 interface Pendiente {
   prompt: string;
   onDelta: (t: string) => void;
@@ -200,12 +209,14 @@ class SesionRapida {
               actual.buf += ev.delta.text;
               // El centinela no se streamea: si la respuesta empieza por él,
               // el reloj no debe ver aparecer la palabra CONSULTAR en pantalla.
-              // Ni el centinela ni el de imagen se streamean: si la respuesta
-              // empieza por uno, esas palabras no deben aparecer en la muñeca.
+              // NINGÚN centinela se streamea: si la respuesta empieza por uno,
+              // esas palabras no deben aparecer en la muñeca. La lista va en
+              // una constante porque olvidarse de añadir aquí un centinela
+              // nuevo lo filtra a la pantalla — ya pasó con IDEA:.
               const parcial = actual.buf.trim()
-              const esCentinela =
-                CENTINELA.startsWith(parcial) || CENTINELA_IMAGEN.startsWith(parcial) ||
-                parcial.startsWith(CENTINELA_IMAGEN)
+              const esCentinela = CENTINELAS.some(
+                (c) => c.startsWith(parcial) || parcial.startsWith(c),
+              )
               if (!esCentinela && !actual.silencioso) {
                 actual.onDelta(ev.delta.text);
               }
