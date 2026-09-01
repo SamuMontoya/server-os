@@ -11,7 +11,7 @@ import AVFoundation
 /// la exponga. Lo más cercano es elegir la mejor voz masculina en español que
 /// tenga el reloj instalada, prefiriendo `premium` sobre `enhanced` sobre la
 /// de serie. Si el usuario baja la voz premium en Ajustes, esto la usa sola.
-final class Voz {
+final class Voz: NSObject {
   static let compartida = Voz()
 
   private let sintetizador = AVSpeechSynthesizer()
@@ -26,10 +26,16 @@ final class Voz {
     for calidad in [AVSpeechSynthesisVoiceQuality.premium, .enhanced, .default] {
       if let v = es.first(where: { $0.quality == calidad && $0.gender == .male }) { return v }
     }
-    return es.first(where: { $0.gender == .male }) ?? es.first
+    // Respaldo explícito: si el reloj no lista ninguna voz en español,
+    // pedirla por idioma suele devolver la del sistema igualmente. Dejar
+    // `voice` en nil no siempre habla.
+    return es.first(where: { $0.gender == .male })
+      ?? es.first
+      ?? AVSpeechSynthesisVoice(language: "es-ES")
+      ?? AVSpeechSynthesisVoice(language: Locale.current.identifier)
   }
 
-  private init() {
+  private override init() {
     // LA CLAVE de que sonara: con `usesApplicationAudioSession = true` (el
     // valor por defecto) la app tiene que activar la sesión de audio ella
     // misma, y en watchOS eso falla EN SILENCIO — no lanza, no avisa,
@@ -41,6 +47,7 @@ final class Voz {
     // controla el volumen con la barra nativa del reloj. No hace falta —ni
     // conviene— pintar otra.
     sintetizador.usesApplicationAudioSession = false
+    super.init()
   }
 
   /// Habla por FRASES según van llegando, no al final.

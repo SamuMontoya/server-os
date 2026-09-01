@@ -1,4 +1,5 @@
 import SwiftUI
+import WatchKit
 
 /// Un paso del agente: qué hizo y sobre qué.
 struct Paso: Identifiable {
@@ -93,7 +94,11 @@ struct Respuesta: View {
             AsyncImage(url: imagen) { fase in
               switch fase {
               case .success(let img):
-                img.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 10))
+                img.resizable().scaledToFit()
+                  .clipShape(RoundedRectangle(cornerRadius: 10))
+                  // Vibra cuando la imagen YA está en pantalla, no cuando
+                  // llegó su dirección.
+                  .onAppear { WKInterfaceDevice.current().play(.notification) }
               case .failure:
                 Text("No cargó").font(.system(size: 13)).foregroundStyle(Self.tinta.opacity(0.5))
               default:

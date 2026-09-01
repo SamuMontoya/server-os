@@ -98,8 +98,10 @@ struct ContentView: View {
               // voz lee "asterisco asterisco" en cada énfasis que se escape.
               Voz.compartida.alLlegar(sinMarcas(t))
             case .imagen(let u):
+              // La vibración NO va aquí: aquí solo llega la URL, y la foto
+              // tarda todavía en descargarse. Vibrar ahora hace mirar una
+              // pantalla que aún está vacía. La dispara la vista al pintarla.
               imagen = u
-              WKInterfaceDevice.current().play(.notification)
             case .escala:
               // La vía rápida no bastó. Se limpia lo que hubiera dicho y a
               // partir de aquí se ven los pasos del turno completo.
