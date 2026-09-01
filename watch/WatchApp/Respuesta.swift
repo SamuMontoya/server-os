@@ -77,6 +77,7 @@ func sinMarcas(_ t: String) -> String {
 struct Respuesta: View {
   let paso: Paso?
   let texto: String
+  let imagen: URL?
   let corriendo: Bool
   let alTocar: () -> Void
 
@@ -86,7 +87,20 @@ struct Respuesta: View {
     GeometryReader { geo in
       ScrollView {
         VStack(spacing: 6) {
-          if !texto.isEmpty {
+          if let imagen {
+            // A pantalla casi completa: en un reloj una imagen pequeña no se
+            // ve, y aquí la imagen ES la respuesta.
+            AsyncImage(url: imagen) { fase in
+              switch fase {
+              case .success(let img):
+                img.resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 10))
+              case .failure:
+                Text("No cargó").font(.system(size: 13)).foregroundStyle(Self.tinta.opacity(0.5))
+              default:
+                OrbeCargando()
+              }
+            }
+          } else if !texto.isEmpty {
             Text(sinMarcas(texto))
               .font(.system(size: 16))
               .lineSpacing(4)
