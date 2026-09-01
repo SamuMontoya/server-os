@@ -222,7 +222,7 @@ import { homedir } from "node:os";
 import { join as joinPath } from "node:path";
 import { Readable } from "node:stream";
 import { OWNER } from "./owner.js";
-import { relojRapido, CENTINELA } from "./watch/rapido.js";
+import { relojRapido, CENTINELA, ESTILO_ESCALADA } from "./watch/rapido.js";
 
 const app = new Hono();
 const startedAt = Date.now();
@@ -568,7 +568,7 @@ app.post("/watch/ask", async (c) => {
     // Escalada: la pregunta necesita mirar el sistema.
     await enviar("escala", {});
     const turno = chatTurns.start({
-      prompt: message,
+      prompt: `${ESTILO_ESCALADA}\n\n${message}`,
       sessionKey: "reloj",
       maxTier: "light",
       magro: true,

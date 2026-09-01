@@ -35,9 +35,27 @@ Reglas, sin excepción:
 - Si la respuesta es un dato, di solo el dato.
 - Responde siempre en español.
 
+- Nunca uses asteriscos, almohadillas ni guiones: en un reloj se ven como
+  basura, no como formato.
+
 Si para responder necesitas mirar archivos, memoria, proyectos, el calendario
-o ejecutar algo en la máquina, NO lo intentes ni lo inventes: responde
-únicamente con la palabra ${CENTINELA} y nada más. Otro sistema se encargará.`;
+o ejecutar algo en la máquina, NO lo intentes ni lo inventes y NO lo anuncies:
+responde únicamente con la palabra ${CENTINELA} y nada más. Ni una frase
+antes, ni una explicación, ni "voy a revisar". Solo esa palabra. Otro sistema
+se encargará y el usuario verá lo que se está haciendo.`;
+
+/**
+ * Lo que se le añade al turno COMPLETO cuando la vía rápida escala.
+ *
+ * Sin esto el turno completo responde con el estilo normal del agente —
+ * párrafos, listas y markdown— porque el prompt de brevedad vive en la sesión
+ * rápida y la escalada no lo hereda. Ese era el motivo de que justo las
+ * respuestas escaladas salieran largas.
+ */
+export const ESTILO_ESCALADA = `Responde para la pantalla de un reloj: UNA sola
+frase corta con la conclusión, en español. Sin markdown, sin asteriscos, sin
+listas, sin encabezados, sin preámbulo y sin narrar lo que vas a hacer — el
+usuario ya está viendo los pasos. Si la respuesta es un dato, di solo el dato.`;
 
 interface Pendiente {
   prompt: string;
