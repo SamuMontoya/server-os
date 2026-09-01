@@ -557,7 +557,7 @@ app.post("/chat/turns", async (c) => {
   const esReloj = sessionKey === "reloj";
   const turn = chatTurns.start({
     prompt: message || "¿Qué ves en esta imagen?",
-    ...(esReloj ? { maxTier: "light" as const } : {}),
+    ...(esReloj ? { maxTier: "light" as const, magro: true } : {}),
     attachments,
     sessionKey,
     project,

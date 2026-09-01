@@ -159,6 +159,7 @@ export interface TurnRunnerArgs {
   project?: string;
   cwd?: string;
   maxTier?: Tier;
+  magro?: boolean;
   resumeSessionId?: string;
   abortController: AbortController;
   onDelta: (text: string) => void;
@@ -192,6 +193,8 @@ export interface StartTurnInput {
   cwd?: string;
   /** Techo de nivel del turno. El canal del reloj lo fija en `light`. */
   maxTier?: Tier;
+  /** Salta la precarga de contexto del prompt (canal del reloj). */
+  magro?: boolean;
   resumeSessionId?: string;
 }
 
@@ -316,6 +319,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             cwd: input.cwd,
             resumeSessionId: resume,
             maxTier: input.maxTier,
+            magro: input.magro,
             abortController: abort,
             onSession: (sessionId) => {
               if (turn.sdkSessionId === sessionId) return;
@@ -480,6 +484,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
       // opción arriba sin añadirla AQUÍ la deja perdiéndose en silencio en el
       // último salto — que es exactamente lo que pasó con maxTier.
       maxTier: args.maxTier,
+      magro: args.magro,
       resumeSessionId: args.resumeSessionId,
       abortController: args.abortController,
       onDelta: args.onDelta,

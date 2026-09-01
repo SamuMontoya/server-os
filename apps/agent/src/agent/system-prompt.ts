@@ -74,8 +74,31 @@ export async function buildSystemPrompt(
     relevant: 8,
     chars: 300,
   },
+  /** Salta toda la precarga de contexto. Lo usa el canal del reloj. */
+  magro = false,
 ): Promise<string> {
   const parts: string[] = [];
+
+  // Las cinco fuentes lentas se piden A LA VEZ. Encadenadas costaban la suma
+  // de sus latencias, y desde este servidor cada ida a Supabase son ~1,3 s
+  // (la búsqueda semántica, hasta 6): eso era el grueso de los ~9 s que
+  // tardaba un turno en arrancar, no el modelo. En paralelo cuesta la más
+  // lenta, no la suma.
+  //
+  // `magro` las salta TODAS: es lo que usa el canal del reloj. No pierde
+  // capacidades — las tools siguen registradas y el agente puede pedir lo que
+  // necesite con search_knowledge; lo que se quita es la precarga
+  // especulativa, que para "¿cuánto espacio libre hay?" no aporta nada y se
+  // paga entera antes de la primera palabra.
+  const [perfilTxt, projects, prefs, recent, relevant] = await Promise.all([
+    readFile(join(env.VAULT_PATH, "10 Notas", "Perfil.md"), "utf8").catch(() => ""),
+    magro ? Promise.resolve([]) : readProjects(),
+    magro ? Promise.resolve({}) : listPreferences(),
+    magro ? Promise.resolve([]) : recentMemories(retrieval.recent),
+    magro || !firstUserMessage
+      ? Promise.resolve([])
+      : searchKnowledge(firstUserMessage, { limit: retrieval.relevant }),
+  ]);
 
   parts.push(`# Hermes — AI OS personal de ${OWNER}
 
@@ -121,15 +144,9 @@ Reglas:
   if (soul) parts.push(soul);
 
   // Perfil del usuario (si existe)
-  try {
-    const perfil = await readFile(join(env.VAULT_PATH, "10 Notas", "Perfil.md"), "utf8");
-    parts.push(`# Perfil de ${OWNER}\n${perfil.slice(0, 4000)}`);
-  } catch {
-    /* sin perfil */
-  }
+  if (perfilTxt) parts.push(`# Perfil de ${OWNER}\n${perfilTxt.slice(0, 4000)}`);
 
   // Proyectos activos (resumen corto)
-  const projects = await readProjects();
 
   // Scope "vida" (chat de la página /vida): modo asesor financiero con
   // datos frescos al frente del prompt. No es un proyecto del vault.
@@ -173,7 +190,6 @@ Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en
   }
 
   // Preferencias
-  const prefs = await listPreferences();
   const prefKeys = Object.entries(prefs);
   if (prefKeys.length) {
     parts.push(
@@ -185,10 +201,6 @@ Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en
   // Memorias recientes + conocimiento relevante al primer mensaje.
   // El retrieval es UNIFICADO (match_knowledge): memorias, reuniones,
   // ejecuciones, conversaciones pasadas (texto/voz) y notas del vault.
-  const recent = await recentMemories(retrieval.recent);
-  const relevant = firstUserMessage
-    ? await searchKnowledge(firstUserMessage, { limit: retrieval.relevant })
-    : [];
   const seenMemories = new Set<string>(recent.map((m) => m.id));
   const lines = recent.map(
     (m) =>
