@@ -224,6 +224,7 @@ import { Readable } from "node:stream";
 import { OWNER } from "./owner.js";
 import { relojRapido, CENTINELA, CENTINELA_IMAGEN, ESTILO_ESCALADA } from "./watch/rapido.js";
 import { buscarImagen } from "./watch/imagen.js";
+import { capturarIdea, CENTINELA_IDEA } from "./watch/intenciones.js";
 
 const app = new Hono();
 const startedAt = Date.now();
@@ -563,6 +564,18 @@ app.post("/watch/ask", async (c) => {
 
     const limpia = rapida.trim();
 
+    // Capturar una idea es UNA escritura: escalar costaría ~28 s por algo
+    // que aquí tarda lo que tarde la base de datos.
+    if (limpia.toUpperCase().startsWith(CENTINELA_IDEA)) {
+      const idea = limpia.slice(CENTINELA_IDEA.length).trim();
+      const ok = await capturarIdea(idea);
+      const dicho = ok ? "Apuntado." : "No pude guardarlo.";
+      await enviar("delta", { text: dicho });
+      if (ok) relojRapido.anotar(`Se apuntó esta idea del usuario: ${idea}`);
+      await enviar("fin", { via: "idea" });
+      return;
+    }
+
     // Petición de imagen: se resuelve aquí, sin gastar un turno completo.
     if (limpia.toUpperCase().startsWith(CENTINELA_IMAGEN)) {
       const q = limpia.slice(CENTINELA_IMAGEN.length).trim();
@@ -605,6 +618,12 @@ app.post("/watch/ask", async (c) => {
       },
     });
     clearInterval(latido);
+    const cerrado = chatTurns.snapshot(turno.id, 0);
+    if (cerrado?.text) {
+      relojRapido.anotar(
+        `El usuario preguntó "${message}" y se le respondió: ${cerrado.text.slice(0, 400)}`,
+      );
+    }
     await enviar("fin", { via: "completo" });
   });
 });

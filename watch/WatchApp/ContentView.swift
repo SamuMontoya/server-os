@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import AVFoundation   // AVKit trae VideoPlayer; AVPlayer vive aquí
+import WatchKit
 
 /// El Orbe IA en el reloj.
 ///
@@ -78,6 +79,7 @@ struct ContentView: View {
       paso = nil
       respuesta = ""
       imagen = nil
+      Voz.compartida.callar()   // una pregunta nueva calla la anterior
       corriendo = true
       enRespuesta = true
       Task {
@@ -85,10 +87,19 @@ struct ContentView: View {
           Task { @MainActor in
             switch ev {
             case .texto(let t):
+              // Vibra en la PRIMERA palabra, no al terminar: en un reloj lo
+              // valioso es poder bajar el brazo y que te avise cuando ya hay
+              // algo que leer. Solo la primera, o cada delta vibraría.
+              if respuesta.isEmpty { WKInterfaceDevice.current().play(.notification) }
               // Al llegar texto el paso desaparece: la respuesta va sola.
               paso = nil
               respuesta += t
-            case .imagen(let u): imagen = u
+              // Se habla lo MISMO que se pinta, ya sin markdown: si no, la
+              // voz lee "asterisco asterisco" en cada énfasis que se escape.
+              Voz.compartida.alLlegar(sinMarcas(t))
+            case .imagen(let u):
+              imagen = u
+              WKInterfaceDevice.current().play(.notification)
             case .escala:
               // La vía rápida no bastó. Se limpia lo que hubiera dicho y a
               // partir de aquí se ven los pasos del turno completo.
@@ -98,9 +109,12 @@ struct ContentView: View {
               withAnimation(.easeInOut(duration: 0.18)) {
                 paso = Paso(nombre: n, objetivo: o)
               }
-            case .fin: corriendo = false
+            case .fin:
+              corriendo = false
+              Voz.compartida.cerrar()
             case .fallo(let m):
               corriendo = false
+              WKInterfaceDevice.current().play(.failure)
               if respuesta.isEmpty { respuesta = m }
             }
           }
