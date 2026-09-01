@@ -49,6 +49,31 @@ struct Paso: Identifiable {
 /// llega la respuesta, solo el texto. En una pantalla de reloj apilar el
 /// historial de pasos lo vuelve ilegible, y los pasos ya cumplidos no le
 /// sirven a nadie una vez hay respuesta.
+/// Quita el markdown del texto.
+///
+/// El prompt ya le pide al modelo que no lo use, pero pedirlo no basta: se le
+/// escapa un `**` cada tantas respuestas y en un reloj eso se lee como basura,
+/// no como énfasis. Limpiarlo aquí es la única garantía, y es barato.
+///
+/// No se convierte a texto con formato a propósito: en una pantalla de 40 mm
+/// la negrita no aporta jerarquía, solo ruido.
+func sinMarcas(_ t: String) -> String {
+  var r = t
+  for m in ["**", "__", "`", "*", "_", "#"] {
+    r = r.replacingOccurrences(of: m, with: "")
+  }
+  // Viñetas al principio de línea: el modelo las cuela aunque se le pida una
+  // sola frase, y dejan el texto empezando por un guion suelto.
+  r = r.split(separator: "\n")
+    .map { linea -> String in
+      var l = linea.trimmingCharacters(in: .whitespaces)
+      while l.hasPrefix("- ") || l.hasPrefix("• ") { l = String(l.dropFirst(2)) }
+      return l
+    }
+    .joined(separator: " ")
+  return r.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
 struct Respuesta: View {
   let paso: Paso?
   let texto: String
@@ -62,7 +87,7 @@ struct Respuesta: View {
       ScrollView {
         VStack(spacing: 6) {
           if !texto.isEmpty {
-            Text(texto)
+            Text(sinMarcas(texto))
               .font(.system(size: 16))
               .lineSpacing(4)
               .foregroundStyle(Self.tinta)
@@ -120,33 +145,108 @@ struct Respuesta: View {
 }
 
 
-/// El orbe girando: es el "cargando".
+/// El "cargando": el orbe dando mortales hacia atrás.
 ///
-/// Un spinner del sistema en esta pantalla se lee como "el aparato está
-/// esperando". El orbe girando se lee como "está pensando", que es lo que de
-/// verdad ocurre — y de paso mantiene en pantalla al mismo personaje en vez de
-/// cambiarlo por un widget genérico.
+/// Un ProgressView del sistema se lee como "el aparato está esperando". Esto
+/// se lee como "está pensando", y mantiene en pantalla al mismo personaje en
+/// vez de cambiarlo por un widget genérico a mitad de la interacción.
+///
+/// No es una animación inventada: usa el MISMO salto medido del vídeo que
+/// dispara el toque (`Salto`), con su impulso, su estirado en el aire y su
+/// achatamiento al caer. Lo único que se añade es la vuelta. Por eso se
+/// mueve como el orbe y no como un icono girando.
 struct OrbeCargando: View {
-  /// Una vuelta cada 0,7 s. Más lento parece que se ha colgado; más rápido
-  /// deja de leerse como un giro y se convierte en parpadeo.
-  private static let vuelta = 0.7
+  /// Pausa entre saltos: el tiempo de tomar impulso otra vez. Sin ella el
+  /// orbe gira sin parar y deja de leerse como saltos encadenados.
+  private static let pausa = 0.18
+  private static var ciclo: Double { Salto.duracion + pausa }
+
+  private static let lado: CGFloat = 64
+  /// El lienzo horneado mide 1,2 diámetros, así que el radio del orbe dentro
+  /// de la imagen es la mitad de eso entre 1,2.
+  private static let radio: CGFloat = lado / 2 / 1.2
+
+  /// Grados de vuelta según la fracción de salto recorrida. La rotación va
+  /// SOLO mientras está en el aire y completa los 360º justo al aterrizar:
+  /// girar con el orbe en el suelo se vería como un patinazo.
+  private static func giro(en p: Double) -> Double {
+    if p <= Salto.aire.inicio { return 0 }
+    if p >= Salto.aire.fin { return 360 }
+    let u = (p - Salto.aire.inicio) / (Salto.aire.fin - Salto.aire.inicio)
+    // Suavizado a la entrada y la salida: una rampa lineal arranca y frena de
+    // golpe, y eso rompe la sensación de peso.
+    return u * u * (3 - 2 * u) * 360
+  }
 
   var body: some View {
     TimelineView(.animation) { t in
       let s = t.date.timeIntervalSinceReferenceDate
+      let dt = s.truncatingRemainder(dividingBy: Self.ciclo)
+      let m = Salto.en(dt)
+      let giro = Self.giro(en: dt / Salto.duracion)
       let i = Int(s * 30) % 211
-      let giro = (s.truncatingRemainder(dividingBy: Self.vuelta) / Self.vuelta) * 360
-      // El bote va al DOBLE del giro: toca suelo en cada media vuelta, que es
-      // cuando el orbe se ve de perfil. Sincronizados se lee como un salto;
-      // desfasados parecen dos animaciones distintas peleándose.
-      let bote = -abs(sin(s * .pi / (Self.vuelta / 2))) * 7
 
-      Image(String(format: "orbe-%03d", i))
-        .resizable()
-        .scaledToFit()
-        .frame(width: 64, height: 64)
-        .rotation3DEffect(.degrees(giro), axis: (x: 0, y: 1, z: 0))
-        .offset(y: bote)
+      ZStack {
+        Image(String(format: "orbe-%03d", i))
+          .resizable()
+          .scaledToFit()
+          .frame(width: Self.lado, height: Self.lado)
+          // Negativo = hacia ATRÁS. En positivo la mortal sale hacia adelante,
+          // que se lee como voltereta de caída y no como impulso.
+          .rotation3DEffect(.degrees(-giro), axis: (x: 1, y: 0, z: 0))
+
+        Self.ojos(giro: giro)
+      }
+      .scaleEffect(x: m.sx, y: m.sy)
+      .offset(y: (m.dy / 1.031496) * 32)
+    }
+  }
+
+  /// Dónde cae un punto de la superficie tras girar la esfera `th` radianes
+  /// sobre el eje horizontal. Va aparte porque en línea el compilador de
+  /// SwiftUI no termina de inferir tipos en un tiempo razonable.
+  private static func puntoEnEsfera(x0: CGFloat, y0: CGFloat, r: CGFloat,
+                                    th: Double) -> (y: CGFloat, escorzo: CGFloat, visible: Bool) {
+    // Profundidad en reposo: el ojo está en la SUPERFICIE, no en el centro.
+    let dentro = r * r - x0 * x0 - y0 * y0
+    let z0: CGFloat = dentro > 0 ? dentro.squareRoot() : 0
+    let c = CGFloat(cos(th))
+    let sn = CGFloat(sin(th))
+    let yp = y0 * c + z0 * sn
+    let zp = -y0 * sn + z0 * c
+    return (y: -yp, escorzo: max(zp / r, 0.001), visible: zp > 0)
+  }
+
+  /// Los ojos van sobre la SUPERFICIE de la esfera, no pegados a la imagen.
+  ///
+  /// Rotar el sprite con los ojos dentro los aplanaría contra el disco y la
+  /// mortal se vería como una carta girando. Aquí cada ojo es un punto en la
+  /// esfera que se rota de verdad: sube, se achata al acercarse al canto,
+  /// desaparece cuando pasa a la cara de atrás (z < 0) y vuelve por abajo. Ese
+  /// ir y venir es lo que hace que se lea como un volumen.
+  @ViewBuilder
+  private static func ojos(giro: Double) -> some View {
+    let r = radio
+    let th = -giro * .pi / 180          // el mismo sentido que el cuerpo
+    // Posición en reposo, tomada del CSS del orbe web.
+    let y0 = 0.2 * r                    // hacia arriba
+    let x0 = 0.185 * r
+    let ancho = 0.092 * r
+    let alto = 0.185 * r
+
+    let p = puntoEnEsfera(x0: x0, y0: y0, r: r, th: th)
+
+    ForEach([-1.0, 1.0], id: \.self) { signo in
+      Capsule()
+        .fill(Color(white: Double(0x14) / 255))
+        .frame(width: ancho, height: alto)
+        // Escorzo: de frente se ve entero, de canto se aplasta a nada.
+        .scaleEffect(y: p.escorzo)
+        .offset(x: signo * x0, y: p.y)
+        // Detrás de la esfera no se ve. Sin este corte los ojos seguirían
+        // pintándose sobre el cuerpo cuando deberían estar ocultos, y la
+        // mortal perdería justo el efecto que la hace parecer 3D.
+        .opacity(p.visible ? 1 : 0)
     }
   }
 }
