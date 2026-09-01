@@ -54,6 +54,7 @@ import {
 } from "./conversations.js";
 import { listChatSessions, readChatSession, resolveChatCwd } from "./agent/chat-history.js";
 import { chatTurns, type TurnEvent } from "./agent/chat-turns.js";
+import { titleForChat } from "./agent/chat-title.js";
 import {
   chatAttachmentPath,
   resolveChatAttachments,
@@ -558,6 +559,18 @@ app.post("/chat/turns", async (c) => {
     resumeSessionId: resume,
   });
   return c.json({ turn_id: turn.id, status: turn.status, seq: 0 });
+});
+
+/**
+ * Nombre corto (2-3 palabras) para un chat, a partir de su primer mensaje.
+ * Un pase de haiku, sin tools — ver agent/chat-title.ts. Devuelve `title: ""`
+ * si el modelo falla: el cliente cae a su heurística y no se rompe nada.
+ */
+app.post("/chat/title", async (c) => {
+  const b = await c.req.json<{ message?: string }>().catch(() => ({}) as Record<string, never>);
+  const message = (b.message ?? "").trim();
+  if (!message) return c.json({ error: "message requerido" }, 400);
+  return c.json({ title: await titleForChat(message) });
 });
 
 /** Estado + lo que falte desde `from`. Es lo que pide quien vuelve. */

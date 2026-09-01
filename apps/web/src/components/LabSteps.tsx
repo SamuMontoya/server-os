@@ -41,8 +41,13 @@ function StepRow({
   return (
     <>
       {orbe ? (
+        // 22px, no 14px: el lienzo del orbe mide 1,20 diámetros (ver MARGEN en
+        // OrbeIA.tsx), así que a 14px el orbe VISIBLE eran ~11,6px — más chico
+        // que el propio texto de la fila y se leía como una mota. A 22px el
+        // cuerpo queda en ~18px: se reconoce la mascota sin pasar a ser el
+        // protagonista de la línea.
         <span className="lab-step-glyph lab-step-glyph--orbe" aria-hidden>
-          <OrbeIA tam="14px" ojos ariaLabel="" />
+          <OrbeIA tam="22px" ojos ariaLabel="" />
         </span>
       ) : (
         <span className="lab-step-glyph" aria-hidden>

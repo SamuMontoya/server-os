@@ -11,7 +11,14 @@ import { useEffect, useRef, useState } from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { useWorkspace } from "@/state/WorkspaceContext";
-import { startTurn, attachTurn, fetchTurn, fetchTurnResilient, stopTurn } from "@/lib/chat-turns";
+import {
+  startTurn,
+  attachTurn,
+  fetchTurn,
+  fetchTurnResilient,
+  stopTurn,
+  fetchChatTitle,
+} from "@/lib/chat-turns";
 import { Markdown } from "@/components/Markdown";
 import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
@@ -75,6 +82,33 @@ type LabAttachment = {
   url: string;
   error?: string;
 };
+
+/**
+ * Sugerencias del chat en blanco. Son FIJAS a propósito: Samu pidió que la
+ * idea de abajo pudiera venir del contexto "o puede ser mensajes genéricos
+ * para no quemar todo esto". Una llamada al modelo cada vez que se abre un
+ * chat vacío es gasto puro por un renglón que muchas veces ni se lee — así
+ * que el contexto se aprovecha GRATIS (ver `hint`: si hay un chat reciente
+ * con nombre, la primera sugerencia es retomarlo) y el resto sale de aquí.
+ */
+const HINTS = [
+  "¿Qué quedó a medias ayer?",
+  "Revisa el último deploy y dime si algo se rompió",
+  "Explícame una parte del código que no entienda",
+  "Resume en qué anda cada proyecto",
+  "Busca en el vault lo último que anoté",
+  "Ayúdame a decidir qué hacer primero hoy",
+];
+
+/** Elige una sugerencia de forma ESTABLE para un chat dado. Nada de
+ *  Math.random(): cambiaría en cada render (y en la hidratación), y la frase
+ *  bailaría bajo el cursor mientras se escribe. El id del chat es la semilla,
+ *  así que un chat nuevo trae frase nueva y el mismo chat siempre la misma. */
+function pickHint(seed: string, pool: string[]): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return pool[h % pool.length];
+}
 
 export default function Laboratorio() {
   const { selectedProject } = useWorkspace();
@@ -260,9 +294,15 @@ export default function Laboratorio() {
   const modelRef = useRef(model);
   modelRef.current = model;
 
+  /** Título del chat EN FOCO (2-3 palabras, generado por haiku con el primer
+   *  mensaje — ver `nameChat`). Ref y no estado: solo lo lee la lista, que se
+   *  repinta con `chatsVersion`. */
+  const titleRef = useRef<string>(init.thread?.title ?? "");
+
   /** Snapshot del chat activo, tal como debe guardarse ahora mismo. */
   const buildThread = (overrides?: Partial<LabThread>): LabThread => ({
     id: activeChatIdRef.current,
+    ...(titleRef.current ? { title: titleRef.current } : {}),
     archived: false,
     updatedAt: Date.now(),
     sdkSessionId: sdkSessionIdRef.current,
@@ -309,13 +349,61 @@ export default function Laboratorio() {
   // quedó trabajando, `resumePending` lo reengancha y se pone al día de una,
   // no palabra por palabra. Ver DECISIONES.md si algún día hace falta más.
 
-  /** Primeras palabras del primer mensaje del usuario — lo que se ve en la
-   *  card de la lista cuando el chat no tiene título propio. */
+  /** Fallback del nombre de un chat: primeras palabras del primer mensaje.
+   *  Solo se usa mientras el título de haiku no ha llegado (o si falló) —
+   *  ver `nameChat` y el campo `title` de LabThread. */
   const deriveTitle = (msgs: LabMessage[]): string => {
     const first = msgs.find((m) => m.role === "user" && m.content.trim());
     if (!first) return "Chat nuevo";
     const flat = first.content.trim().replace(/\s+/g, " ");
-    return flat.length > 48 ? `${flat.slice(0, 48)}…` : flat;
+    return flat.length > 42 ? `${flat.slice(0, 42)}…` : flat;
+  };
+
+  /** Segunda línea de la card: por dónde va la conversación. Se prefiere lo
+   *  último que dijo el asistente (más informativo que repetir la pregunta);
+   *  si aún no respondió, el último mensaje del usuario. */
+  const derivePreview = (msgs: LabMessage[]): string => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      const text =
+        m.role === "assistant"
+          ? (m.blocks ?? [])
+              .filter((b): b is { kind: "text"; text: string } => b.kind === "text")
+              .map((b) => b.text)
+              .join(" ")
+          : m.content;
+      const flat = text.trim().replace(/\s+/g, " ");
+      if (flat) return flat.length > 90 ? `${flat.slice(0, 90)}…` : flat;
+    }
+    return "";
+  };
+
+  /**
+   * Pide a haiku el nombre del chat (2-3 palabras) con su PRIMER mensaje y lo
+   * guarda en el hilo. Se dispara sin await desde `handleSend`: es un adorno
+   * de la lista, no puede meterse en el camino crítico del envío.
+   *
+   * Ojo con la carrera obvia: mientras el título viaja, Samu puede cambiar de
+   * chat. Por eso se recuerda a QUÉ chat pertenece (`chatId`) y al volver se
+   * escribe en el ref solo si ese chat sigue en foco; si no, se corrige la
+   * entrada guardada en `chatsRef`. Nunca se pisa un título ya existente: el
+   * nombre se calcula una sola vez por chat.
+   */
+  const nameChat = (chatId: string, firstMessage: string) => {
+    const key = chatStorageKey(projKey, chatId);
+    void fetchChatTitle(firstMessage).then((title) => {
+      if (!title) return;
+      if (activeChatIdRef.current === chatId) {
+        if (titleRef.current) return;
+        titleRef.current = title;
+      } else {
+        const saved = chatsRef.current.get(key);
+        if (!saved || saved.title) return;
+        chatsRef.current.set(key, { ...saved, title });
+      }
+      bumpChatsVersion();
+      schedulePersist();
+    });
   };
 
   /** Todos los chats de un proyecto, activo incluido, para pintar la lista.
@@ -325,7 +413,8 @@ export default function Laboratorio() {
     if (pk === projKey) {
       out.push({
         id: activeChatIdRef.current,
-        title: deriveTitle(messagesRef.current),
+        title: titleRef.current || deriveTitle(messagesRef.current),
+        preview: derivePreview(messagesRef.current),
         updatedAt: Date.now(),
         archived: false,
         running: busy || !!pendingTurnRef.current,
@@ -335,7 +424,8 @@ export default function Laboratorio() {
       if (!key.startsWith(`${pk}::`)) continue;
       out.push({
         id: t.id,
-        title: deriveTitle(t.messages),
+        title: t.title || deriveTitle(t.messages),
+        preview: derivePreview(t.messages),
         updatedAt: t.updatedAt,
         archived: t.archived,
         running: !!t.pendingTurn,
@@ -352,6 +442,7 @@ export default function Laboratorio() {
     unfollowRef.current = null;
     chatsRef.current.delete(chatStorageKey(projKey, id));
     activeChatIdRef.current = id;
+    titleRef.current = thread?.title ?? "";
     activeByProjectRef.current[projKey] = id;
     turnIdRef.current = null;
     setStopping(false);
@@ -902,6 +993,11 @@ export default function Laboratorio() {
     // leyendo arriba, mandar un mensaje es pedir explícitamente ver lo nuevo.
     userPinnedRef.current = false;
     blockCursorRef.current = { replyId: replyMsg.id, count: 0, lastKind: null };
+    // ¿Es el primer mensaje del chat? Entonces es el que lo bautiza. Se pide
+    // el nombre a haiku en paralelo al turno real — no se espera a nada.
+    if (text && !titleRef.current && !messagesRef.current.some((m) => m.role === "user")) {
+      nameChat(activeChatIdRef.current, text);
+    }
     setMessages((prev) => [...prev, userMsg, replyMsg]);
     setDraft("");
     // Se vacía el composer SIN revocar los object URLs: los hereda la burbuja,
@@ -1273,20 +1369,67 @@ export default function Laboratorio() {
     };
   }, []);
 
+  /**
+   * Lo que se lee en el CENTRO de la barra superior: el nombre del chat en
+   * foco. Prioridad: el título de haiku (`titleRef`, 2-3 palabras — ver
+   * `nameChat`), si no el recorte del primer mensaje, y si el chat está en
+   * blanco NADA (la cadena vacía) — ahí la pantalla ya dice "Hola Samu" y un
+   * "Chat nuevo" en la barra sería ruido repetido.
+   *
+   * No hace falta estado propio: `titleRef` se rellena desde `nameChat`, que
+   * termina llamando a `bumpChatsVersion()` (un setState), así que cuando el
+   * título llega la barra se repinta sola. Al cambiar de chat repinta por
+   * `setMessages`.
+   */
+  const hasUserMsg = messages.some((m) => m.role === "user");
+  const rawTopTitle = titleRef.current || (hasUserMsg ? deriveTitle(messages) : "");
+  // El fallback de `deriveTitle` llega hasta 42 caracteres — pensado para la
+  // card de la lista, que tiene el ancho entero. Aquí compite con dos botones
+  // de 34px, así que se recorta más corto antes de que el CSS lo puntee.
+  const topTitle =
+    rawTopTitle.length > 28 ? `${rawTopTitle.slice(0, 28).trimEnd()}…` : rawTopTitle;
+
+  /**
+   * La sugerencia del chat en blanco. El "contexto de lo último trabajado"
+   * sale de `chatsRef` sin gastar un solo token: el chat más reciente de este
+   * proyecto que YA tenga nombre de haiku se ofrece como "Seguir con …". Si
+   * no hay ninguno (proyecto recién estrenado), quedan solo las genéricas.
+   */
+  const lastNamed = hasUserMsg
+    ? null
+    : [...chatsRef.current.entries()]
+        .filter(([k, t]) => k.startsWith(`${projKey}::`) && !t.archived && t.title)
+        .sort((a, b) => b[1].updatedAt - a[1].updatedAt)[0]?.[1];
+  const hint = pickHint(
+    activeChatIdRef.current,
+    lastNamed?.title ? [`Seguir con ${lastNamed.title.toLowerCase()}`, ...HINTS] : HINTS,
+  );
+
   return (
     <main className="lab-paper">
       {/* Barra superior: antes tenía la flecha de "volver" (quitada el
           2026-08-29 para dejar la pantalla en blanco puro). Vuelve, con el
           icono cambiado por un menú hamburguesa que abre la lista de chats
           del proyecto en foco (varios chats en paralelo, swipe para
-          archivar/borrar — ver LabChatsScreen). */}
+          archivar/borrar — ver LabChatsScreen).
+
+          El "+" de nuevo chat vivía como botón ancho DENTRO de esa pantalla;
+          Samu lo quiso en el Navbar de siempre, esquina superior derecha —
+          el sitio de "crear" en cualquier app, y accesible sin tener que
+          abrir la lista primero. */}
       <div className="lab-topbar">
         <button
           type="button"
           className="lab-menu-btn"
-          aria-label="Ver chats abiertos"
+          aria-label={showChats ? "Cerrar la lista de chats" : "Ver chats abiertos"}
           title="Chats"
-          onClick={() => setShowChats(true)}
+          aria-expanded={showChats}
+          // TOGGLE, no `setShowChats(true)`: la barra sigue viva y encima de
+          // la lista (ver z-index en .lab-topbar), así que el mismo botón que
+          // la abrió tiene que poder cerrarla. Antes la única salida era la ✕
+          // que la propia pantalla dibujaba, y con la barra ya visible detrás
+          // eran dos controles para lo mismo en la misma esquina.
+          onClick={() => setShowChats((v) => !v)}
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
@@ -1295,6 +1438,26 @@ export default function Laboratorio() {
               strokeWidth="2"
               strokeLinecap="round"
             />
+          </svg>
+        </button>
+        {/* El nombre del chat, centrado. Va entre los dos botones y con
+            `flex:1`, así queda ópticamente al medio sin position:absolute:
+            los dos botones miden lo mismo (34px), de modo que el hueco que
+            sobra a cada lado es idéntico. Cuando la lista está abierta dice
+            "Chats" — la barra no se oculta, así que tiene que contar dónde
+            está uno parado. */}
+        <span className="lab-topbar-title" title={showChats ? undefined : topTitle || undefined}>
+          {showChats ? "Chats" : topTitle}
+        </span>
+        <button
+          type="button"
+          className="lab-menu-btn lab-menu-btn--new"
+          aria-label="Nuevo chat"
+          title="Nuevo chat"
+          onClick={createNewChat}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
         </button>
       </div>
@@ -1320,6 +1483,29 @@ export default function Laboratorio() {
         onTouchMove={onUserScroll}
         onScroll={onListScrollForJump}
       >
+        {/* CHAT EN BLANCO: el orbe grande al centro, el saludo, y una idea
+            corta debajo. La idea es un botón: al tocarla cae en el composer
+            en vez de enviarse sola — una sugerencia propone, no decide. Todo
+            esto desaparece con el primer mensaje (no es un "mensaje del
+            sistema" en la lista: si viviera dentro de `messages` habría que
+            filtrarlo en cada sitio que cuenta mensajes, incluido el que
+            decide si un chat ya tiene nombre). */}
+        {messages.length === 0 && (
+          <div className="lab-hello">
+            <OrbeIA tam="132px" ojos ariaLabel="Hermes" />
+            <p className="lab-hello-title">Hola Samu</p>
+            <button
+              type="button"
+              className="lab-hello-hint"
+              onClick={() => {
+                setDraft(hint);
+                inputRef.current?.focus();
+              }}
+            >
+              {hint}
+            </button>
+          </div>
+        )}
         {messages.map((m, idx) => {
           if (m.role === "user") {
             return (

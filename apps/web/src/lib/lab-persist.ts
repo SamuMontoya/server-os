@@ -54,6 +54,11 @@ export interface PendingLabTurn {
 export interface LabThread {
   /** Id propio del chat (uuid), estable mientras exista. */
   id: string;
+  /** Nombre corto (2-3 palabras) generado por haiku con el PRIMER mensaje —
+   *  ver agent/chat-title.ts. Ausente = todavía no llegó (o falló): la lista
+   *  cae al recorte del primer mensaje. Se calcula UNA vez por chat: el
+   *  título no debe bailar mientras la conversación avanza. */
+  title?: string;
   /** true = archivado (swipe a la derecha en la lista): sigue existiendo,
    *  solo se saca de la lista principal y no cuenta como "el activo" de un
    *  proyecto al hidratar. */
@@ -212,6 +217,7 @@ export function parseLab(raw: string | null, now: number): HydratedLab | null {
       if (!Array.isArray(t.messages) || !t.messages.every(isMessage)) continue;
       byChat[k] = {
         id: t.id,
+        ...(typeof t.title === "string" && t.title.trim() ? { title: t.title } : {}),
         archived: t.archived === true,
         updatedAt: typeof t.updatedAt === "number" ? t.updatedAt : now,
         sdkSessionId: typeof t.sdkSessionId === "string" ? t.sdkSessionId : null,

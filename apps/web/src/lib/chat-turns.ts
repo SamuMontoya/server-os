@@ -77,6 +77,27 @@ export async function startTurn(input: {
   return data.turn_id;
 }
 
+/**
+ * Nombre corto (2-3 palabras) para el chat, a partir de su primer mensaje.
+ * Lo genera haiku en el servidor (agent/chat-title.ts). Devuelve "" ante
+ * cualquier problema: es un adorno, jamás debe romper ni demorar un envío —
+ * por eso quien llama lo dispara sin await y pinta el título cuando llegue.
+ */
+export async function fetchChatTitle(message: string): Promise<string> {
+  try {
+    const res = await hermesFetch("/chat/title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) return "";
+    const data = (await res.json()) as { title?: string };
+    return (data.title ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
 /** Estado del turno sin abrir stream. Para saber si vale la pena engancharse. */
 export async function fetchTurn(turnId: string, from = 0): Promise<TurnState | null> {
   const res = await hermesFetch(`/chat/turns/${turnId}?from=${from}`);

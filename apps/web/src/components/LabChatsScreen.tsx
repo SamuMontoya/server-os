@@ -4,10 +4,17 @@
  * Pantalla de "chats abiertos" del Laboratorio — se abre con el botón de
  * menú hamburguesa de la barra superior (ver laboratorio/page.tsx).
  *
- * Samu pidió: el orbe arriba (la misma mascota de todo Hermes), debajo las
- * cards de los chats del proyecto en foco, deslizables — izquierda para
- * eliminar, derecha para archivar —, un botón para crear uno nuevo, y abajo
- * del todo una sección "Archivados".
+ * Forma (pedida por Samu, iteración del 2026-08-31):
+ *   · barra superior: cerrar a la izquierda, "nuevo chat" (+) en la esquina
+ *     superior DERECHA — el sitio donde ya vive el "crear" en cualquier app,
+ *     en vez del botón ancho que antes partía la pantalla en dos;
+ *   · el orbe grande y centrado debajo, como retrato de la pantalla;
+ *   · las cards de los chats, deslizables (izquierda = eliminar, derecha =
+ *     archivar), ahora con título + una línea de "por dónde va";
+ *   · "Archivados" ANCLADO ABAJO, sin acordeón ni contador: es una palabra
+ *     que lleva a su propia pantalla, donde se restauran. Un toggle que
+ *     empujaba la lista dejaba lo archivado (que casi nunca se toca) tan a
+ *     mano como lo vivo, y eso está al revés.
  *
  * Los datos (crear/archivar/borrar/cambiar) viven en laboratorio/page.tsx —
  * este componente es sordo a la persistencia y al motor de turnos, solo
@@ -15,13 +22,15 @@
  * de mentira si hace falta, y page.tsx no tiene que saber nada de gestos.
  */
 
-import { useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { OrbeIA } from "@/components/orbe/OrbeIA";
 
 export interface LabChatSummary {
   id: string;
-  /** Primeras palabras del primer mensaje, o "Chat nuevo" si está vacío. */
+  /** Nombre corto del chat (lo genera haiku; si no, el recorte del 1er mensaje). */
   title: string;
+  /** Última cosa dicha en el chat, recortada: la segunda línea de la card. */
+  preview?: string;
   updatedAt: number;
   archived: boolean;
   /** true = tenía (o tiene) un turno corriendo la última vez que se supo. */
@@ -43,11 +52,40 @@ interface Props {
  *  no como un tap que se movió un poco por error de dedo. */
 const SWIPE_COMMIT_PX = 88;
 
+/**
+ * "hace 5 min", "hace 3 h", "ayer", "hace 4 d"… — la línea que Samu quería
+ * leer de un vistazo. Es DISTINTA de la fecha: una hora suelta ("23:41") no
+ * dice si fue hoy o el mes pasado, y una fecha ("28 ago") obliga a restar
+ * mentalmente. Se muestran las dos (ver `formatDate`), esta primero porque es
+ * la que casi siempre responde la pregunta.
+ *
+ * Sin librería: son seis casos y `Intl.RelativeTimeFormat` en español produce
+ * "hace 1 días" en algunos tramos si no se le redondea antes igual.
+ */
 function formatWhen(ts: number): string {
+  const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (secs < 60) return "ahora";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `hace ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `hace ${hrs} h`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return "ayer";
+  if (days < 30) return `hace ${days} d`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `hace ${months} mes${months === 1 ? "" : "es"}`;
+  return `hace ${Math.floor(months / 12)} a`;
+}
+
+/** La fecha exacta, debajo de la relativa: hoy es la hora ("23:41"), otro día
+ *  es día+mes ("28 ago"). Es el dato que ancla, no el que se lee primero. */
+function formatDate(ts: number): string {
   const d = new Date(ts);
   const hoy = new Date();
   const mismoDia =
-    d.getFullYear() === hoy.getFullYear() && d.getMonth() === hoy.getMonth() && d.getDate() === hoy.getDate();
+    d.getFullYear() === hoy.getFullYear() &&
+    d.getMonth() === hoy.getMonth() &&
+    d.getDate() === hoy.getDate();
   if (mismoDia) return d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
   return d.toLocaleDateString("es", { day: "2-digit", month: "short" });
 }
@@ -64,6 +102,7 @@ function SwipeableCard({
   onSwipeRight,
   rightLabel,
   rightGlyph,
+  action,
 }: {
   chat: LabChatSummary;
   active: boolean;
@@ -72,6 +111,10 @@ function SwipeableCard({
   onSwipeRight: () => void;
   rightLabel: string;
   rightGlyph: string;
+  /** Botón explícito al borde derecho de la card (lo usa la pantalla de
+   *  archivados: "Restaurar" tiene que estar a la vista, no escondido en un
+   *  gesto que ahí nadie va a adivinar). */
+  action?: { label: string; onClick: () => void };
 }) {
   const [dragX, setDragX] = useState(0);
   const draggingRef = useRef(false);
@@ -79,8 +122,6 @@ function SwipeableCard({
   const movedRef = useRef(false);
 
   const onPointerDown = (e: PointerEvent) => {
-    // Los botones de acción (si alguna vez se agregan) no deben arrastrar la
-    // card entera; por ahora la card completa es el asa.
     draggingRef.current = true;
     movedRef.current = false;
     startRef.current = { x: e.clientX, y: e.clientY };
@@ -126,7 +167,9 @@ function SwipeableCard({
         <span>✕ Eliminar</span>
       </div>
       <div className="lab-chatcard-bg lab-chatcard-bg--archive" style={{ opacity: rightReveal }}>
-        <span>{rightGlyph} {rightLabel}</span>
+        <span>
+          {rightGlyph} {rightLabel}
+        </span>
       </div>
       <div
         className={`lab-chatcard ${active ? "lab-chatcard--active" : ""}`}
@@ -146,12 +189,46 @@ function SwipeableCard({
         }}
       >
         <div className="lab-chatcard-main">
-          <span className="lab-chatcard-title">{chat.title}</span>
-          <span className="lab-chatcard-when">{formatWhen(chat.updatedAt)}</span>
+          <div className="lab-chatcard-top">
+            {chat.running && (
+              <span className="lab-chatcard-dot" aria-label="Corriendo" title="Corriendo" />
+            )}
+            <span className="lab-chatcard-title">{chat.title}</span>
+          </div>
+          {chat.running ? (
+            // TRABAJANDO: en vez del último texto (que está congelado en lo
+            // que se dijo antes de irse, y por tanto miente) van dos barras de
+            // esqueleto con el brillo corriendo de izquierda a derecha. Es la
+            // forma de decir "aquí abajo está pasando algo que todavía no se
+            // puede mostrar" sin inventar un texto. Al abrir el chat se ve la
+            // conversación real, no esto.
+            <span className="lab-skel" role="status" aria-label="Trabajando">
+              <span className="lab-skel-bar" />
+              <span className="lab-skel-bar lab-skel-bar--short" />
+            </span>
+          ) : chat.preview ? (
+            <span className="lab-chatcard-preview">{chat.preview}</span>
+          ) : null}
         </div>
-        {chat.running && (
-          <span className="lab-chatcard-dot" aria-label="Corriendo" title="Corriendo" />
-        )}
+        <div className="lab-chatcard-side">
+          <span className="lab-chatcard-when">{formatWhen(chat.updatedAt)}</span>
+          <span className="lab-chatcard-date">{formatDate(chat.updatedAt)}</span>
+          {action && (
+            <button
+              type="button"
+              className="lab-chatcard-action"
+              // El click no debe además ABRIR el chat: la card entera es un
+              // botón y el evento burbujearía hasta ella.
+              onClick={(e) => {
+                e.stopPropagation();
+                action.onClick();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              {action.label}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -162,35 +239,83 @@ export function LabChatsScreen({
   activeId,
   onClose,
   onOpen,
-  onNew,
   onArchive,
   onUnarchive,
   onDelete,
 }: Props) {
-  const [archivedOpen, setArchivedOpen] = useState(false);
+  /** Dos pantallas, no un acordeón: la lista viva y la de archivados. */
+  const [view, setView] = useState<"chats" | "archived">("chats");
   const activos = chats.filter((c) => !c.archived);
   const archivados = chats.filter((c) => c.archived);
 
+  // Escape para salir. La ✕ propia de esta pantalla ya no existe (la
+  // hamburguesa del Navbar hace de toggle), pero con teclado Escape sigue
+  // siendo lo que uno espera de un role="dialog". Retrocede un nivel: de
+  // Archivados vuelve a la lista, de la lista cierra.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (view === "archived") setView("chats");
+      else onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, onClose]);
+
+  if (view === "archived") {
+    return (
+      <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats archivados">
+        <div className="lab-chats-head">
+          <button
+            type="button"
+            className="lab-chats-iconbtn"
+            onClick={() => setView("chats")}
+            aria-label="Volver"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <span className="lab-chats-headtitle">Archivados</span>
+          {/* Hueco simétrico al botón de volver: mantiene el título centrado
+              sin position:absolute ni cálculos. */}
+          <span className="lab-chats-iconbtn lab-chats-iconbtn--ghost" aria-hidden="true" />
+        </div>
+
+        <div className="lab-chats-list">
+          {archivados.length === 0 ? (
+            <p className="lab-chats-empty">Nada archivado.</p>
+          ) : (
+            archivados.map((c) => (
+              <SwipeableCard
+                key={c.id}
+                chat={c}
+                active={false}
+                onOpen={() => onOpen(c.id)}
+                onSwipeLeft={() => onDelete(c.id)}
+                onSwipeRight={() => onUnarchive(c.id)}
+                rightLabel="Restaurar"
+                rightGlyph="⤒"
+                action={{ label: "Restaurar", onClick: () => onUnarchive(c.id) }}
+              />
+            ))
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats del Laboratorio">
-      <div className="lab-chats-head">
-        <button type="button" className="lab-chats-close" onClick={onClose} aria-label="Cerrar">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-        </button>
-      </div>
-
+      {/* SIN barra propia: el Navbar del Laboratorio queda por encima de esta
+          capa (z-index:3 vs 2) y sigue activo, así que la hamburguesa ya
+          cierra la lista y el "+" ya crea un chat. Dibujar aquí otra ✕ y otro
+          "+" era duplicar los mismos dos controles en las mismas dos
+          esquinas. El hueco de la barra lo reserva el padding-top de
+          .lab-chats-screen. */}
       <div className="lab-chats-orbe">
-        <OrbeIA tam="72px" ojos ariaLabel="Hermes" />
+        <OrbeIA tam="110px" ojos ariaLabel="Hermes" />
       </div>
-
-      <button type="button" className="lab-chats-new" onClick={onNew}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-        Nuevo chat
-      </button>
 
       <div className="lab-chats-list">
         {activos.length === 0 ? (
@@ -209,44 +334,13 @@ export function LabChatsScreen({
             />
           ))
         )}
-
-        <button
-          type="button"
-          className="lab-chats-archived-toggle"
-          onClick={() => setArchivedOpen((o) => !o)}
-          aria-expanded={archivedOpen}
-        >
-          Archivados {archivados.length > 0 ? `(${archivados.length})` : ""}
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden="true"
-            style={{ transform: archivedOpen ? "rotate(180deg)" : undefined }}
-          >
-            <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-
-        {archivedOpen &&
-          (archivados.length === 0 ? (
-            <p className="lab-chats-empty">Nada archivado.</p>
-          ) : (
-            archivados.map((c) => (
-              <SwipeableCard
-                key={c.id}
-                chat={c}
-                active={false}
-                onOpen={() => onOpen(c.id)}
-                onSwipeLeft={() => onDelete(c.id)}
-                onSwipeRight={() => onUnarchive(c.id)}
-                rightLabel="Desarchivar"
-                rightGlyph="⤒"
-              />
-            ))
-          ))}
       </div>
+
+      {/* Anclado al pie (margin-top:auto en el CSS): la palabra sola, sin
+          contador ni flecha. Lleva a la pantalla de archivados. */}
+      <button type="button" className="lab-chats-archived-link" onClick={() => setView("archived")}>
+        Archivados
+      </button>
     </div>
   );
 }
