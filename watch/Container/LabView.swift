@@ -11,8 +11,14 @@ struct LabView: View {
   @FocusState private var escribiendo: Bool
   @State private var elegirFoto: PhotosPickerItem?
 
-  private static let tinta = Color(red: 0x37 / 255, green: 0x35 / 255, blue: 0x2f / 255)
-  private static let suave = Color(red: 0xF7 / 255, green: 0xF6 / 255, blue: 0xF3 / 255)
+  // Colores tomados uno a uno de globals.css. No son aproximaciones: un gris
+  // "parecido" al lado del dashboard real se nota en cuanto se ven juntos.
+  static let tinta = Color(hex: 0x37352F)        // cuerpo
+  static let apagado = Color(hex: 0x9B9A97)      // secundario y placeholder
+  static let glifo = Color(hex: 0x787774)        // iconos de barra
+  static let burbuja = Color(hex: 0xECECEA)      // fondo del mensaje propio
+  static let borde = Color(hex: 0xE9E9E7)        // borde del composer
+  static let suave = Color(hex: 0xF7F6F3)
 
   var body: some View {
     VStack(spacing: 0) {
@@ -40,7 +46,8 @@ struct LabView: View {
       Button { modelo.mostrarChats = true } label: {
         Image(systemName: "line.3.horizontal")
           .font(.system(size: 16, weight: .medium))
-          .foregroundStyle(Self.tinta.opacity(0.7))
+          .foregroundStyle(Self.glifo)
+          .frame(width: 34, height: 34)
       }
       Text(modelo.activo?.titulo ?? "Laboratorio")
         .font(.system(size: 15, weight: .medium))
@@ -50,7 +57,8 @@ struct LabView: View {
       Button { modelo.crearChat() } label: {
         Image(systemName: "square.and.pencil")
           .font(.system(size: 15))
-          .foregroundStyle(Self.tinta.opacity(0.7))
+          .foregroundStyle(Self.glifo)
+          .frame(width: 34, height: 34)
       }
     }
     .padding(.horizontal, 16)
@@ -130,15 +138,22 @@ struct LabView: View {
 
   private func burbujaMia(_ m: Mensaje) -> some View {
     HStack {
-      Spacer(minLength: 40)
+      Spacer(minLength: 0)
       Text(m.texto)
-        .font(.system(size: 16))
-        .lineSpacing(4)
+        .font(.system(size: 15))
+        .lineSpacing(3)
         .foregroundStyle(Self.tinta)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Self.suave)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .background(Self.burbuja)
+        // 16/16/3/16, no un radio uniforme: la esquina de abajo a la derecha
+        // casi recta es lo que da el pico del bocadillo. Con las cuatro
+        // iguales deja de leerse como algo dicho por ti.
+        .clipShape(.rect(topLeadingRadius: 16, bottomLeadingRadius: 16,
+                         bottomTrailingRadius: 3, topTrailingRadius: 16))
+        // 78% como en el CSS: a ancho completo un mensaje corto se confunde
+        // con la respuesta.
+        .frame(maxWidth: UIScreen.main.bounds.width * 0.78, alignment: .trailing)
     }
   }
 
@@ -149,8 +164,11 @@ struct LabView: View {
         switch b {
         case .texto(_, let c):
           Text(c)
-            .font(.system(size: 16))
-            .lineSpacing(6)          // 1,7 de interlineado, como la web
+            .font(.system(size: 15))
+            // 1,6 de interlineado del CSS: SwiftUI mide lineSpacing como el
+            // hueco EXTRA, así que a 15px (interlineado propio ~18) hay que
+            // sumar 6 para llegar a los 24 de 1,6 — no 24.
+            .lineSpacing(6)
             .foregroundStyle(Self.tinta)
             .textSelection(.enabled)
         case .pasos(_, let lista):
@@ -158,7 +176,7 @@ struct LabView: View {
         }
       }
       if m.bloques.isEmpty && modelo.trabajando && esUltimo(m) {
-        OrbePensando()
+        Orbe(lado: 56)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -177,34 +195,36 @@ struct LabView: View {
         PhotosPicker(selection: $elegirFoto, matching: .images) {
           Image(systemName: "photo")
             .font(.system(size: 17))
-            .foregroundStyle(Self.tinta.opacity(0.55))
-            .frame(width: 32, height: 36)
+            .foregroundStyle(Self.apagado)
+            .frame(width: 26, height: 30)
         }
-        TextField("Escribe…", text: $modelo.borrador, axis: .vertical)
-          .font(.system(size: 16))
-          .lineLimit(1...6)
+        TextField("Escribe algo…", text: $modelo.borrador, axis: .vertical)
+          .font(.system(size: 15))
+          .lineLimit(1...5)          // max-height 120px del CSS
           .focused($escribiendo)
           .foregroundStyle(Self.tinta)
-          .padding(.horizontal, 14)
-          .padding(.vertical, 10)
-          .background(Self.suave)
-          .clipShape(RoundedRectangle(cornerRadius: 20))
 
         Button {
           if modelo.trabajando { Task { await modelo.detener() } }
           else { modelo.enviar() }
         } label: {
           Image(systemName: modelo.trabajando ? "stop.fill" : "arrow.up")
-            .font(.system(size: 15, weight: .semibold))
+            .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: 36, height: 36)
-            .background(botonActivo ? Self.tinta : Self.tinta.opacity(0.25))
+            .frame(width: 30, height: 30)
+            .background(botonActivo ? Self.tinta : Self.apagado.opacity(0.5))
             .clipShape(Circle())
         }
         .disabled(!botonActivo)
       }
-      .padding(.horizontal, 16)
-      .padding(.top, 10)
+      // La caja del composer: borde de 1px y radio 10, como .lab-composer.
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+      .background(Color.white)
+      .clipShape(RoundedRectangle(cornerRadius: 10))
+      .overlay(RoundedRectangle(cornerRadius: 10).stroke(Self.borde))
+      .padding(.horizontal, 20)      // --lab-bar-x
+      .padding(.top, 14)             // --lab-bar-top
       // 22 y no 10: el mismo padding inferior que se subió en la web, porque
       // con el indicador de inicio del iPhone justo debajo, 10 px dejan el
       // composer pegado al borde y se toca sin querer.
@@ -243,7 +263,7 @@ struct LabView: View {
           RoundedRectangle(cornerRadius: 8)
             .fill(Self.suave)
             .frame(width: 54, height: 54)
-            .overlay { OrbePensando(lado: 22) }
+            .overlay { Orbe(lado: 22) }
         }
       }
       .padding(.horizontal, 16)
@@ -253,69 +273,81 @@ struct LabView: View {
   }
 }
 
-/// Bloque de pasos, plegable. Calcado de `LabSteps.tsx`.
+/// Bloque de pasos, plegable. Calcado de `LabSteps.tsx` y su CSS.
+///
+/// SIN tarjeta ni borde: en la web es texto suelto en el flujo de la
+/// respuesta, no una caja. Encajonarlo lo convierte en un widget y rompe la
+/// lectura de "acciones → texto → acciones".
 struct BloquePasos: View {
   let pasos: [Paso]
   let vivo: Bool
   @State private var abierto = false
 
-  private static let tinta = Color(red: 0x37 / 255, green: 0x35 / 255, blue: 0x2f / 255)
-
   var body: some View {
     // TODO el bloque es zona de toque, no un triángulo de 9 px: en móvil el
     // objetivo táctil de un caret es imposible de acertar. Misma decisión que
     // en la web, y por el mismo motivo.
-    VStack(alignment: .leading, spacing: 6) {
+    VStack(alignment: .leading, spacing: 3) {
       if vivo && !abierto, let actual = pasos.last {
         fila(actual, conOrbe: true)
           .id(pasos.count)     // relevo: fuerza la animación de entrada
           .transition(.opacity)
       } else {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
           Image(systemName: abierto ? "chevron.down" : "chevron.right")
-            .font(.system(size: 9, weight: .semibold))
+            .font(.system(size: 8, weight: .semibold))
           Text("\(pasos.count) paso\(pasos.count == 1 ? "" : "s")")
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 11))
         }
-        .foregroundStyle(Self.tinta.opacity(0.5))
+        .foregroundStyle(LabView.apagado)
       }
       if abierto {
         ForEach(pasos) { fila($0, conOrbe: false) }
       }
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 10)
+    .padding(.vertical, 2)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color(red: 0xFA / 255, green: 0xF9 / 255, blue: 0xF7 / 255))
-    .clipShape(RoundedRectangle(cornerRadius: 12))
-    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Self.tinta.opacity(0.07)))
     .contentShape(Rectangle())
     .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { abierto.toggle() } }
   }
 
   @ViewBuilder
   private func fila(_ p: Paso, conOrbe: Bool) -> some View {
-    HStack(spacing: 8) {
-      // Mientras el paso está EN EJECUCIÓN el glifo se reemplaza por el orbe:
-      // es la única señal de "esto lo está haciendo Hermes ahora mismo".
-      if conOrbe { OrbePensando(lado: 15) }
-      else {
+    HStack(spacing: 6) {
+      // Mientras el paso está EN EJECUCIÓN el glifo se reemplaza por el orbe
+      // de 14px CON ojos: es la única señal de "esto lo está haciendo Hermes
+      // ahora mismo". Al plegarse vuelve el glifo.
+      if conOrbe {
+        Orbe(lado: 14).frame(width: 17, height: 17)
+      } else {
         Image(systemName: p.simbolo)
-          .font(.system(size: 12))
-          .foregroundStyle(Self.tinta.opacity(0.55))
-          .frame(width: 15)
+          // #eb5757: el glifo de herramienta es rojo en el CSS. Llama la
+          // atención justo lo suficiente sin competir con el texto.
+          .foregroundStyle(Color(hex: 0xEB5757))
+          .font(.system(size: 11))
+          .frame(width: 17)
       }
       Text(p.verbo)
-        .font(.system(size: 13, weight: conOrbe ? .medium : .regular))
-        .foregroundStyle(Self.tinta.opacity(conOrbe ? 0.9 : 0.65))
+        .font(.system(size: 12.5))
+        .foregroundStyle(Color(hex: 0x6B6A67))
       if !p.objetivo.isEmpty {
         Text(p.objetivo)
           .font(.system(size: 12))
-          .foregroundStyle(Self.tinta.opacity(0.4))
+          .foregroundStyle(LabView.apagado)
           .lineLimit(1)
           .truncationMode(.middle)
       }
       Spacer(minLength: 0)
     }
+  }
+}
+
+/// Color desde un hex, para poder copiar los valores del CSS tal cual.
+extension Color {
+  init(hex: UInt32) {
+    self.init(.sRGB,
+              red: Double((hex >> 16) & 0xFF) / 255,
+              green: Double((hex >> 8) & 0xFF) / 255,
+              blue: Double(hex & 0xFF) / 255)
   }
 }
