@@ -1198,58 +1198,8 @@ html.lab-route body::after {
      ninguna puede medir a la otra; si cambia el tamaño del botón hay que
      tocar los dos sitios — de ahí este comentario. */
   padding: calc(max(16px, calc(env(safe-area-inset-top) + 10px)) + 34px + 6px) 20px 0 20px;
-  /* La pantalla misma NO scrollea: solo `.lab-chats-list` (abajo) lo hace.
-     Así "Archivados" queda FIJO al pie, siempre a la vista, sin importar
-     cuántos chats haya arriba — es lo que Samu pidió ("anclado abajo"), no
-     un pie que hay que scrollear para alcanzar. */
+  /* La pantalla misma NO scrollea: solo `.lab-chats-list` (abajo) lo hace. */
   overflow: hidden;
-}
-/* Barra superior de la pantalla: cerrar/volver a la izquierda, título al
-   medio, "+" (nuevo chat) en la esquina superior derecha — el sitio canónico
-   de "crear". Antes el nuevo chat era un botón ancho debajo del orbe y
-   competía en peso con la lista misma. */
-.lab-chats-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.lab-chats-headtitle {
-  flex: 1;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: #37352f;
-}
-.lab-chats-iconbtn {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  border: none;
-  background: none;
-  color: #787774;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-}
-.lab-chats-iconbtn:hover {
-  color: #37352f;
-  background: #f1f1ef;
-}
-/* El "+" pesa un poco más que el resto: es la acción principal de la pantalla. */
-.lab-chats-iconbtn--new {
-  color: #37352f;
-}
-.lab-chats-iconbtn--new:hover {
-  background: #efeeea;
-}
-/* Placeholder invisible que equilibra la barra (ver comentario en el TSX). */
-.lab-chats-iconbtn--ghost {
-  pointer-events: none;
 }
 .lab-chats-orbe {
   display: flex;
@@ -1260,9 +1210,7 @@ html.lab-route body::after {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  /* Única zona que scrollea dentro de la pantalla (ver `.lab-chats-screen`):
-     así el pie ("Archivados", o nada en la pantalla de archivados) queda
-     fijo, no hay que llegar hasta el fondo del scroll para verlo. */
+  /* Única zona que scrollea dentro de la pantalla (ver `.lab-chats-screen`). */
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -1274,10 +1222,10 @@ html.lab-route body::after {
   padding: 8px 2px;
 }
 
-/* Cada card es un asa arrastrable (SwipeableCard) sobre dos fondos de acción
-   que SIEMPRE están en el DOM (izquierda = eliminar, derecha = archivar) —
-   el arrastre solo cambia su opacidad, nunca los monta/desmonta, así no hay
-   parpadeo ni salto de layout durante el gesto. */
+/* Cada card es un asa arrastrable (SwipeableCard) sobre un fondo de acción
+   que SIEMPRE está en el DOM (izquierda = eliminar) — el arrastre solo
+   cambia su opacidad, nunca lo monta/desmonta, así no hay parpadeo ni salto
+   de layout durante el gesto. */
 .lab-chatcard-wrap {
   position: relative;
   border-radius: 10px;
@@ -1297,10 +1245,6 @@ html.lab-route body::after {
 .lab-chatcard-bg--delete {
   background: #e35b4a;
   justify-content: flex-end;
-}
-.lab-chatcard-bg--archive {
-  background: #9b9a97;
-  justify-content: flex-start;
 }
 .lab-chatcard {
   position: relative;
@@ -1444,44 +1388,6 @@ html.lab-route body::after {
   border-radius: 50%;
   background: #2f9e6e;
 }
-/* Solo aparece en la pantalla de Archivados: "Restaurar" tiene que estar a la
-   vista (ahí nadie va a adivinar el swipe), un botón chico y discreto. */
-.lab-chatcard-action {
-  border: 1px solid #e7e6e2;
-  border-radius: 6px;
-  background: #fff;
-  color: #37352f;
-  font-size: 11.5px;
-  font-weight: 600;
-  padding: 3px 8px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.lab-chatcard-action:hover {
-  background: #f7f6f3;
-  border-color: #d3d1cb;
-}
-/* "Archivados": ANCLADO abajo del todo (margin-top:auto empuja el resto de la
-   lista arriba), solo la palabra — sin tol/contador/flecha. Lleva a su propia
-   pantalla (ver el estado `view` en LabChatsScreen), donde sí se restaura. */
-.lab-chats-archived-link {
-  flex-shrink: 0;
-  margin-top: auto;
-  padding: 14px 2px max(6px, env(safe-area-inset-bottom));
-  border: none;
-  background: none;
-  color: #9b9a97;
-  font-size: 12.5px;
-  font-weight: 600;
-  text-align: center;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-}
-.lab-chats-archived-link:hover {
-  color: #37352f;
-}
-
 /* Barra de input al pie del Laboratorio. Ya NO es `fixed` con un `bottom`
    calculado a mano: es el último hijo del papel con `margin-top: auto`, así
    que se pega al borde inferior de lo que el papel mida en cada momento.

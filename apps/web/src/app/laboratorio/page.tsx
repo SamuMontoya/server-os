@@ -125,11 +125,11 @@ export default function Laboratorio() {
 
   // Con VARIOS chats por proyecto (antes uno solo) hay que decidir, al
   // arrancar, cuál de los del proyecto en foco es "el activo": el que
-  // `activeByProject` recuerda si sigue vivo y sin archivar, o si no el más
-  // reciente sin archivar de ese proyecto, o si no hay ninguno, uno nuevo en
-  // blanco. Se resuelve UNA vez (mismo truco de ref-lazy-init que ya usa
-  // `sessionKeyRef` más abajo) para que el resto del componente pueda seguir
-  // tratando "el chat activo" como si fuera el único, igual que antes.
+  // `activeByProject` recuerda si sigue vivo, o si no el más reciente de ese
+  // proyecto, o si no hay ninguno, uno nuevo en blanco. Se resuelve UNA vez
+  // (mismo truco de ref-lazy-init que ya usa `sessionKeyRef` más abajo) para
+  // que el resto del componente pueda seguir tratando "el chat activo" como
+  // si fuera el único, igual que antes.
   const initRef = useRef<{ activeChatId: string; thread: LabThread | null } | undefined>(undefined);
   if (initRef.current === undefined) {
     const byChat = hydratedRef.current?.byChat ?? {};
@@ -138,14 +138,14 @@ export default function Laboratorio() {
     let chosenThread: LabThread | null = null;
     if (savedId) {
       const t = byChat[chatStorageKey(projKey, savedId)];
-      if (t && !t.archived) {
+      if (t) {
         chosenId = savedId;
         chosenThread = t;
       }
     }
     if (!chosenThread) {
       for (const [key, t] of Object.entries(byChat)) {
-        if (!key.startsWith(`${projKey}::`) || t.archived) continue;
+        if (!key.startsWith(`${projKey}::`)) continue;
         if (!chosenThread || t.updatedAt > chosenThread.updatedAt) chosenThread = t;
       }
       chosenId = chosenThread?.id ?? null;
@@ -277,7 +277,7 @@ export default function Laboratorio() {
   });
   const prevProjRef = useRef(projKey);
   /** Sube cada vez que `chatsRef`/`activeChatIdRef` cambian por fuera de un
-   *  render (crear/archivar/borrar/cambiar de chat): es lo único que hace
+   *  render (crear/borrar/cambiar de chat): es lo único que hace
    *  falta para que la pantalla de chats (que lee esos refs directamente)
    *  se vuelva a pintar. */
   const [chatsVersion, setChatsVersion] = useState(0);
@@ -303,7 +303,6 @@ export default function Laboratorio() {
   const buildThread = (overrides?: Partial<LabThread>): LabThread => ({
     id: activeChatIdRef.current,
     ...(titleRef.current ? { title: titleRef.current } : {}),
-    archived: false,
     updatedAt: Date.now(),
     sdkSessionId: sdkSessionIdRef.current,
     sessionKey: sessionKeyRef.current ?? "",
@@ -314,9 +313,9 @@ export default function Laboratorio() {
     ...overrides,
   });
 
-  /** Vuelca el chat activo dentro de `chatsRef` (con sus overrides, p. ej.
-   *  `{archived: true}`), SIN cambiar cuál es el chat en foco. Primer paso de
-   *  cualquier cambio de chat: guardar antes de reemplazar lo que se ve. */
+  /** Vuelca el chat activo dentro de `chatsRef` (con sus overrides), SIN
+   *  cambiar cuál es el chat en foco. Primer paso de cualquier cambio de
+   *  chat: guardar antes de reemplazar lo que se ve. */
   const saveActiveIntoMap = (overrides?: Partial<LabThread>) => {
     chatsRef.current.set(chatStorageKey(projKey, activeChatIdRef.current), buildThread(overrides));
   };
@@ -416,7 +415,6 @@ export default function Laboratorio() {
         title: titleRef.current || deriveTitle(messagesRef.current),
         preview: derivePreview(messagesRef.current),
         updatedAt: Date.now(),
-        archived: false,
         running: busy || !!pendingTurnRef.current,
       });
     }
@@ -427,7 +425,6 @@ export default function Laboratorio() {
         title: t.title || deriveTitle(t.messages),
         preview: derivePreview(t.messages),
         updatedAt: t.updatedAt,
-        archived: t.archived,
         running: !!t.pendingTurn,
       });
     }
@@ -436,7 +433,7 @@ export default function Laboratorio() {
 
   /** Reemplaza lo que hay en `messages`/`draft`/etc. por el chat `id` (o uno
    *  en blanco si `thread` es null). Asume que quien llama YA decidió qué
-   *  hacer con el chat que se estaba viendo (guardarlo, archivarlo, nada). */
+   *  hacer con el chat que se estaba viendo (guardarlo o nada). */
   const loadChatIntoState = (id: string, thread: LabThread | null) => {
     unfollowRef.current?.();
     unfollowRef.current = null;
@@ -458,12 +455,12 @@ export default function Laboratorio() {
     resumePendingRef.current();
   };
 
-  /** El primer chat no archivado del proyecto que encuentre en `chatsRef`, o
-   *  uno nuevo en blanco si no queda ninguno — para no dejar el Laboratorio
-   *  sin chat activo tras archivar/borrar el que se estaba viendo. */
+  /** El primer chat del proyecto que encuentre en `chatsRef`, o uno nuevo en
+   *  blanco si no queda ninguno — para no dejar el Laboratorio sin chat
+   *  activo tras borrar el que se estaba viendo. */
   const loadAnyOtherChat = () => {
     for (const [key, t] of chatsRef.current) {
-      if (key.startsWith(`${projKey}::`) && !t.archived) {
+      if (key.startsWith(`${projKey}::`)) {
         loadChatIntoState(t.id, t);
         return;
       }
@@ -488,29 +485,6 @@ export default function Laboratorio() {
     loadChatIntoState(uuid(), null);
     setShowChats(false);
     schedulePersist();
-  };
-
-  /** Swipe a la derecha en la lista: archivar. Si es el chat activo, hay que
-   *  dejar OTRO en foco (no se puede archivar y seguir viéndolo). */
-  const archiveChat = (id: string) => {
-    if (id === activeChatIdRef.current) {
-      saveActiveIntoMap({ archived: true });
-      loadAnyOtherChat();
-    } else {
-      const key = chatStorageKey(projKey, id);
-      const t = chatsRef.current.get(key);
-      if (t) chatsRef.current.set(key, { ...t, archived: true });
-    }
-    schedulePersist();
-    bumpChatsVersion();
-  };
-
-  const unarchiveChat = (id: string) => {
-    const key = chatStorageKey(projKey, id);
-    const t = chatsRef.current.get(key);
-    if (t) chatsRef.current.set(key, { ...t, archived: false, updatedAt: Date.now() });
-    schedulePersist();
-    bumpChatsVersion();
   };
 
   /** Swipe a la izquierda: eliminar. No cancela el turno en el servidor si
@@ -1179,9 +1153,9 @@ export default function Laboratorio() {
   }, []);
 
   // Cambio de proyecto en foco: guarda el chat activo bajo su clave vieja y
-  // restaura el que estaba activo en el proyecto nuevo (el más reciente sin
-  // archivar si nunca se guardó cuál era, o uno en blanco si el proyecto no
-  // tiene ninguno). El turno en vuelo pertenece al chat VIEJO — se suelta el
+  // restaura el que estaba activo en el proyecto nuevo (el más reciente si
+  // nunca se guardó cuál era, o uno en blanco si el proyecto no tiene
+  // ninguno). El turno en vuelo pertenece al chat VIEJO — se suelta el
   // stream, no se cancela el turno del servidor, y su `pendingTurn` viaja
   // guardado por si se vuelve a ese chat más tarde.
   useEffect(() => {
@@ -1191,21 +1165,21 @@ export default function Laboratorio() {
     prevProjRef.current = projKey;
 
     // Resolver cuál chat retoma el proyecto nuevo: el que recuerde
-    // `activeByProject` si sigue vivo y sin archivar, si no el más reciente
-    // sin archivar de ese proyecto, si no hay ninguno uno nuevo en blanco.
+    // `activeByProject` si sigue vivo, si no el más reciente de ese
+    // proyecto, si no hay ninguno uno nuevo en blanco.
     const savedId = activeByProjectRef.current[projKey];
     let nextId: string | null = null;
     let nextThread: LabThread | null = null;
     if (savedId) {
       const t = chatsRef.current.get(chatStorageKey(projKey, savedId));
-      if (t && !t.archived) {
+      if (t) {
         nextId = savedId;
         nextThread = t;
       }
     }
     if (!nextThread) {
       for (const [key, t] of chatsRef.current) {
-        if (!key.startsWith(`${projKey}::`) || t.archived) continue;
+        if (!key.startsWith(`${projKey}::`)) continue;
         if (!nextThread || t.updatedAt > nextThread.updatedAt) nextThread = t;
       }
       nextId = nextThread?.id ?? null;
@@ -1398,7 +1372,7 @@ export default function Laboratorio() {
   const lastNamed = hasUserMsg
     ? null
     : [...chatsRef.current.entries()]
-        .filter(([k, t]) => k.startsWith(`${projKey}::`) && !t.archived && t.title)
+        .filter(([k, t]) => k.startsWith(`${projKey}::`) && t.title)
         .sort((a, b) => b[1].updatedAt - a[1].updatedAt)[0]?.[1];
   const hint = pickHint(
     activeChatIdRef.current,
@@ -1411,7 +1385,7 @@ export default function Laboratorio() {
           2026-08-29 para dejar la pantalla en blanco puro). Vuelve, con el
           icono cambiado por un menú hamburguesa que abre la lista de chats
           del proyecto en foco (varios chats en paralelo, swipe para
-          archivar/borrar — ver LabChatsScreen).
+          borrar — ver LabChatsScreen).
 
           El "+" de nuevo chat vivía como botón ancho DENTRO de esa pantalla;
           Samu lo quiso en el Navbar de siempre, esquina superior derecha —
@@ -1463,16 +1437,14 @@ export default function Laboratorio() {
       </div>
       {showChats && (
         <LabChatsScreen
-          // `chatsVersion` fuerza a recalcular la lista tras crear/archivar/
-          // borrar (chatsRef es un ref: mutarlo no dispara un re-render solo).
+          // `chatsVersion` fuerza a recalcular la lista tras crear/borrar
+          // (chatsRef es un ref: mutarlo no dispara un re-render solo).
           key={chatsVersion}
           chats={listChatsForProject(projKey)}
           activeId={activeChatIdRef.current}
           onClose={() => setShowChats(false)}
           onOpen={switchToChat}
           onNew={createNewChat}
-          onArchive={archiveChat}
-          onUnarchive={unarchiveChat}
           onDelete={deleteChat}
         />
       )}

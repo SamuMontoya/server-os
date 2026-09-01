@@ -9,17 +9,13 @@
  *     superior DERECHA — el sitio donde ya vive el "crear" en cualquier app,
  *     en vez del botón ancho que antes partía la pantalla en dos;
  *   · el orbe grande y centrado debajo, como retrato de la pantalla;
- *   · las cards de los chats, deslizables (izquierda = eliminar, derecha =
- *     archivar), ahora con título + una línea de "por dónde va";
- *   · "Archivados" ANCLADO ABAJO, sin acordeón ni contador: es una palabra
- *     que lleva a su propia pantalla, donde se restauran. Un toggle que
- *     empujaba la lista dejaba lo archivado (que casi nunca se toca) tan a
- *     mano como lo vivo, y eso está al revés.
+ *   · las cards de los chats, deslizables a la izquierda para eliminar,
+ *     ahora con título + una línea de "por dónde va".
  *
- * Los datos (crear/archivar/borrar/cambiar) viven en laboratorio/page.tsx —
- * este componente es sordo a la persistencia y al motor de turnos, solo
- * pinta `chats` y dispara los callbacks. Así puede probarse solo con datos
- * de mentira si hace falta, y page.tsx no tiene que saber nada de gestos.
+ * Los datos (crear/borrar/cambiar) viven en laboratorio/page.tsx — este
+ * componente es sordo a la persistencia y al motor de turnos, solo pinta
+ * `chats` y dispara los callbacks. Así puede probarse solo con datos de
+ * mentira si hace falta, y page.tsx no tiene que saber nada de gestos.
  */
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
@@ -32,7 +28,6 @@ export interface LabChatSummary {
   /** Última cosa dicha en el chat, recortada: la segunda línea de la card. */
   preview?: string;
   updatedAt: number;
-  archived: boolean;
   /** true = tenía (o tiene) un turno corriendo la última vez que se supo. */
   running: boolean;
 }
@@ -43,8 +38,6 @@ interface Props {
   onClose: () => void;
   onOpen: (id: string) => void;
   onNew: () => void;
-  onArchive: (id: string) => void;
-  onUnarchive: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
@@ -90,31 +83,19 @@ function formatDate(ts: number): string {
   return d.toLocaleDateString("es", { day: "2-digit", month: "short" });
 }
 
-/** Una card deslizable. Izquierda = `onSwipeLeft` (eliminar), derecha =
- *  `onSwipeRight` (archivar/desarchivar). Debajo de la card, siempre
- *  presentes, van los dos fondos de acción — el arrastre solo revela cuál
- *  se ve, nunca se dibuja nada de más por JS. */
+/** Una card deslizable: izquierda = `onSwipeLeft` (eliminar). Debajo de la
+ *  card, siempre presente, va el fondo de acción — el arrastre solo revela
+ *  cuánto se ve, nunca se dibuja nada de más por JS. */
 function SwipeableCard({
   chat,
   active,
   onOpen,
   onSwipeLeft,
-  onSwipeRight,
-  rightLabel,
-  rightGlyph,
-  action,
 }: {
   chat: LabChatSummary;
   active: boolean;
   onOpen: () => void;
   onSwipeLeft: () => void;
-  onSwipeRight: () => void;
-  rightLabel: string;
-  rightGlyph: string;
-  /** Botón explícito al borde derecho de la card (lo usa la pantalla de
-   *  archivados: "Restaurar" tiene que estar a la vista, no escondido en un
-   *  gesto que ahí nadie va a adivinar). */
-  action?: { label: string; onClick: () => void };
 }) {
   const [dragX, setDragX] = useState(0);
   const draggingRef = useRef(false);
@@ -140,14 +121,15 @@ function SwipeableCard({
       return;
     }
     if (Math.abs(dx) > 4) movedRef.current = true;
-    setDragX(dx);
+    // Solo interesa el arrastre hacia la izquierda (eliminar): hacia la
+    // derecha no hay acción, así que no se deja "estirar" la card de más.
+    setDragX(Math.min(0, dx));
   };
 
   const finish = () => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
     if (dragX <= -SWIPE_COMMIT_PX) onSwipeLeft();
-    else if (dragX >= SWIPE_COMMIT_PX) onSwipeRight();
     setDragX(0);
   };
 
@@ -156,20 +138,13 @@ function SwipeableCard({
     onOpen();
   };
 
-  // El fondo que se revela depende de hacia dónde se arrastra; el otro
-  // permanece invisible detrás de la card (opacity por proximidad al umbral).
+  // El fondo de "eliminar" se revela según cuánto se arrastra a la izquierda.
   const leftReveal = Math.max(0, Math.min(1, -dragX / SWIPE_COMMIT_PX));
-  const rightReveal = Math.max(0, Math.min(1, dragX / SWIPE_COMMIT_PX));
 
   return (
     <div className="lab-chatcard-wrap">
       <div className="lab-chatcard-bg lab-chatcard-bg--delete" style={{ opacity: leftReveal }}>
         <span>✕ Eliminar</span>
-      </div>
-      <div className="lab-chatcard-bg lab-chatcard-bg--archive" style={{ opacity: rightReveal }}>
-        <span>
-          {rightGlyph} {rightLabel}
-        </span>
       </div>
       <div
         className={`lab-chatcard ${active ? "lab-chatcard--active" : ""}`}
@@ -213,97 +188,23 @@ function SwipeableCard({
         <div className="lab-chatcard-side">
           <span className="lab-chatcard-when">{formatWhen(chat.updatedAt)}</span>
           <span className="lab-chatcard-date">{formatDate(chat.updatedAt)}</span>
-          {action && (
-            <button
-              type="button"
-              className="lab-chatcard-action"
-              // El click no debe además ABRIR el chat: la card entera es un
-              // botón y el evento burbujearía hasta ella.
-              onClick={(e) => {
-                e.stopPropagation();
-                action.onClick();
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-            >
-              {action.label}
-            </button>
-          )}
         </div>
       </div>
     </div>
   );
 }
 
-export function LabChatsScreen({
-  chats,
-  activeId,
-  onClose,
-  onOpen,
-  onArchive,
-  onUnarchive,
-  onDelete,
-}: Props) {
-  /** Dos pantallas, no un acordeón: la lista viva y la de archivados. */
-  const [view, setView] = useState<"chats" | "archived">("chats");
-  const activos = chats.filter((c) => !c.archived);
-  const archivados = chats.filter((c) => c.archived);
-
+export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: Props) {
   // Escape para salir. La ✕ propia de esta pantalla ya no existe (la
   // hamburguesa del Navbar hace de toggle), pero con teclado Escape sigue
-  // siendo lo que uno espera de un role="dialog". Retrocede un nivel: de
-  // Archivados vuelve a la lista, de la lista cierra.
+  // siendo lo que uno espera de un role="dialog".
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (view === "archived") setView("chats");
-      else onClose();
+      if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, onClose]);
-
-  if (view === "archived") {
-    return (
-      <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats archivados">
-        <div className="lab-chats-head">
-          <button
-            type="button"
-            className="lab-chats-iconbtn"
-            onClick={() => setView("chats")}
-            aria-label="Volver"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-          <span className="lab-chats-headtitle">Archivados</span>
-          {/* Hueco simétrico al botón de volver: mantiene el título centrado
-              sin position:absolute ni cálculos. */}
-          <span className="lab-chats-iconbtn lab-chats-iconbtn--ghost" aria-hidden="true" />
-        </div>
-
-        <div className="lab-chats-list">
-          {archivados.length === 0 ? (
-            <p className="lab-chats-empty">Nada archivado.</p>
-          ) : (
-            archivados.map((c) => (
-              <SwipeableCard
-                key={c.id}
-                chat={c}
-                active={false}
-                onOpen={() => onOpen(c.id)}
-                onSwipeLeft={() => onDelete(c.id)}
-                onSwipeRight={() => onUnarchive(c.id)}
-                rightLabel="Restaurar"
-                rightGlyph="⤒"
-                action={{ label: "Restaurar", onClick: () => onUnarchive(c.id) }}
-              />
-            ))
-          )}
-        </div>
-      </div>
-    );
-  }
+  }, [onClose]);
 
   return (
     <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats del Laboratorio">
@@ -318,29 +219,20 @@ export function LabChatsScreen({
       </div>
 
       <div className="lab-chats-list">
-        {activos.length === 0 ? (
+        {chats.length === 0 ? (
           <p className="lab-chats-empty">Sin chats todavía en este proyecto.</p>
         ) : (
-          activos.map((c) => (
+          chats.map((c) => (
             <SwipeableCard
               key={c.id}
               chat={c}
               active={c.id === activeId}
               onOpen={() => onOpen(c.id)}
               onSwipeLeft={() => onDelete(c.id)}
-              onSwipeRight={() => onArchive(c.id)}
-              rightLabel="Archivar"
-              rightGlyph="⤓"
             />
           ))
         )}
       </div>
-
-      {/* Anclado al pie (margin-top:auto en el CSS): la palabra sola, sin
-          contador ni flecha. Lleva a la pantalla de archivados. */}
-      <button type="button" className="lab-chats-archived-link" onClick={() => setView("archived")}>
-        Archivados
-      </button>
     </div>
   );
 }

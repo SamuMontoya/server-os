@@ -19,11 +19,11 @@
  * v2: antes había UN hilo por proyecto (`byProject: Record<projKey, LabThread>`).
  * Samu pidió poder tener VARIOS chats abiertos a la vez por proyecto, cada uno
  * con su turno corriendo en paralelo (igual que los tabs de ChatPanel), más
- * poder archivarlos o borrarlos desde una pantalla de lista con swipe. Eso
- * exige un id propio por hilo — ya no basta la clave del proyecto — así que
- * el mapa pasa a `byChat: Record<chatStorageKey, LabThread>` (clave
- * `"${project}::${chatId}"`) más `activeByProject` para recordar cuál de los
- * chats de cada proyecto es el que se retoma al volver.
+ * poder borrarlos desde una pantalla de lista con swipe. Eso exige un id
+ * propio por hilo — ya no basta la clave del proyecto — así que el mapa pasa
+ * a `byChat: Record<chatStorageKey, LabThread>` (clave `"${project}::${chatId}"`)
+ * más `activeByProject` para recordar cuál de los chats de cada proyecto es
+ * el que se retoma al volver.
  */
 import type { ChatToolStep } from "@hermes/shared";
 
@@ -59,10 +59,6 @@ export interface LabThread {
    *  cae al recorte del primer mensaje. Se calcula UNA vez por chat: el
    *  título no debe bailar mientras la conversación avanza. */
   title?: string;
-  /** true = archivado (swipe a la derecha en la lista): sigue existiendo,
-   *  solo se saca de la lista principal y no cuenta como "el activo" de un
-   *  proyecto al hidratar. */
-  archived: boolean;
   /** Última vez que este chat recibió actividad — ordena la lista y decide
    *  qué se recorta primero cuando hay que liberar cuota. */
   updatedAt: number;
@@ -96,7 +92,7 @@ export interface HydratedLab {
 
 export const STORAGE_KEY = "hermes_os_lab_chat";
 /** Subir esto invalida lo guardado (cambio de forma incompatible). */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export function chatStorageKey(project: string, chatId: string): string {
   return `${project}::${chatId}`;
@@ -218,7 +214,6 @@ export function parseLab(raw: string | null, now: number): HydratedLab | null {
       byChat[k] = {
         id: t.id,
         ...(typeof t.title === "string" && t.title.trim() ? { title: t.title } : {}),
-        archived: t.archived === true,
         updatedAt: typeof t.updatedAt === "number" ? t.updatedAt : now,
         sdkSessionId: typeof t.sdkSessionId === "string" ? t.sdkSessionId : null,
         sessionKey: typeof t.sessionKey === "string" ? t.sessionKey : "",
