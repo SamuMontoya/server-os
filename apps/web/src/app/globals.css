@@ -1209,7 +1209,10 @@ html.lab-route body::after {
 .lab-chats-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  /* gap 0: las filas ya no son cards flotando (que pedían aire entre ellas)
+     sino renglones separados por su propio borde inferior — con hueco, cada
+     línea se leería como el subrayado de la fila de arriba, no como divisor. */
+  gap: 0;
   /* Única zona que scrollea dentro de la pantalla (ver `.lab-chats-screen`). */
   flex: 1;
   min-height: 0;
@@ -1228,7 +1231,9 @@ html.lab-route body::after {
    de layout durante el gesto. */
 .lab-chatcard-wrap {
   position: relative;
-  border-radius: 10px;
+  /* Sin `border-radius`: ya no hay caja que redondear (ver .lab-chatcard).
+     El `overflow:hidden` se queda porque es lo que recorta el fondo rojo de
+     "Eliminar" mientras la fila se arrastra. */
   overflow: hidden;
 }
 .lab-chatcard-bg {
@@ -1250,19 +1255,20 @@ html.lab-route body::after {
   position: relative;
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 12px;
-  padding: 13px 14px;
-  border-radius: 12px;
-  /* SIN borde dibujado: Samu pidió que la card no fuera "la del borde negro"
-     sino papel con sombra. La separación del fondo la da la sombra en dos
-     capas — una de 1px muy cerrada que hace de filo, y otra de 6px muy
-     abierta que despega la card — no una línea. */
+  /* Padding horizontal 0: al no haber caja, el texto tiene que arrancar en el
+     margen de la lista, no 14px adentro (si no, la fila se lee "indentada"
+     respecto al resto de la pantalla). */
+  padding: 12px 0;
+  /* NI caja NI papel: Samu pidió que cada chat sea solo una FILA separada por
+     una línea. Se mantiene la estructura (título + subtítulo + tiempo) y se
+     quitan radio, fondo y sombras; lo único que divide es el filo inferior.
+     Se usa `border-bottom` y no un `::after` porque el borde ya participa de
+     la caja y no puede desalinearse al arrastrar la fila. */
   border: none;
-  background: linear-gradient(180deg, #fff 0%, #fdfdfc 100%);
-  box-shadow:
-    0 1px 2px rgba(15, 15, 15, 0.05),
-    0 6px 16px -6px rgba(15, 15, 15, 0.1);
+  border-bottom: 1px solid rgba(55, 53, 47, 0.09);
+  border-radius: 0;
+  background: #fff;
   cursor: pointer;
   user-select: none;
   touch-action: pan-y;
@@ -1272,22 +1278,29 @@ html.lab-route body::after {
      renderizar con dragX:0 UN frame después de terminar el gesto. */
   transition:
     transform 0.18s ease-out,
-    box-shadow 0.18s ease-out;
+    background-color 0.18s ease-out;
 }
+/* Sin caja no hay sombra que levantar: el "esto es pulsable" lo dice un lavado
+   de fondo. Va sangrado a los lados con `box-shadow` de color plano (no
+   `padding`, que movería el texto al pasar el ratón) para que el resaltado
+   respire un poco más allá del texto. */
 .lab-chatcard:hover {
+  background: #faf9f8;
   box-shadow:
-    0 1px 2px rgba(15, 15, 15, 0.06),
-    0 10px 24px -8px rgba(15, 15, 15, 0.16);
+    -8px 0 0 0 #faf9f8,
+    8px 0 0 0 #faf9f8;
 }
-/* El chat que se está viendo: se levanta MÁS y se le pone un filo interior
-   con `inset` (no un `border`, que cambiaría la caja y movería el contenido
-   1px al activarse). Antes era `border-color:#37352f` — el borde negro. */
+/* El chat que se está viendo: mismo lavado pero permanente y algo más marcado,
+   más el título en negro pleno (ver abajo). Nada de bordes ni sombras que
+   vuelvan a dibujar la caja que Samu quitó. */
 .lab-chatcard--active {
-  background: #fff;
+  background: #f4f3f1;
   box-shadow:
-    inset 0 0 0 1px rgba(55, 53, 47, 0.14),
-    0 2px 4px rgba(15, 15, 15, 0.06),
-    0 12px 28px -10px rgba(15, 15, 15, 0.2);
+    -8px 0 0 0 #f4f3f1,
+    8px 0 0 0 #f4f3f1;
+}
+.lab-chatcard--active .lab-chatcard-title {
+  color: #1f1e1b;
 }
 .lab-chatcard-main {
   display: flex;
@@ -1296,11 +1309,16 @@ html.lab-route body::after {
   min-width: 0;
   flex: 1;
 }
-/* Fila superior de la card: el punto verde (si corre) pegado al título, no
-   suelto al otro extremo — así "está corriendo" se lee junto al nombre. */
+/* Fila superior: punto verde (si corre) + título + tiempo al extremo derecho.
+   El punto va pegado al título, no suelto al otro extremo — así "está
+   corriendo" se lee junto al nombre.
+   `align-items: baseline` (no `center`): el tiempo es más pequeño que el
+   título, y centrarlos por caja los dejaría con las letras a distinta altura,
+   que es exactamente el desalineado que Samu señaló. Con baseline las dos
+   palabras se apoyan en la MISMA línea. */
 .lab-chatcard-top {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   min-width: 0;
 }
@@ -1312,8 +1330,20 @@ html.lab-route body::after {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Segunda línea: por dónde va la conversación (último texto), la card ahora
-   dice algo más que un nombre y una hora. */
+/* El tiempo cede su espacio al título (`min-width:0` + ellipsis arriba) y se
+   va al fondo con `margin-left:auto`; `flex-shrink:0` evita que un título
+   largo lo estruje hasta partir "Hace 10 min" en dos. */
+.lab-chatcard-when {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: #908f8b;
+  white-space: nowrap;
+}
+/* Segunda línea, a modo de subtítulo: la primera frase de lo último hablado
+   (ver `derivePreview` en laboratorio/page.tsx). Empieza EXACTAMENTE donde
+   empieza el título — misma columna de texto, sin sangría propia — porque es
+   su subtítulo, no un dato aparte. */
 .lab-chatcard-preview {
   font-size: 12.5px;
   line-height: 1.4;
@@ -1321,26 +1351,6 @@ html.lab-route body::after {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.lab-chatcard-side {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-}
-/* Columna derecha, dos líneas: arriba "hace 5 min" (la que se lee), abajo la
-   fecha exacta, más chica y más clara para que quede como pie de dato y no
-   compita. Ver formatWhen/formatDate en LabChatsScreen.tsx. */
-.lab-chatcard-when {
-  font-size: 11.5px;
-  color: #787774;
-  white-space: nowrap;
-}
-.lab-chatcard-date {
-  font-size: 10.5px;
-  color: #b8b7b4;
-  white-space: nowrap;
 }
 /* ── Indicador de un chat TRABAJANDO en la lista ──────────────────────────
    Reemplaza las barras de esqueleto de antes: el pulso de actividad es el

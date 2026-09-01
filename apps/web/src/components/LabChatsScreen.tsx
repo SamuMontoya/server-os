@@ -9,8 +9,10 @@
  *     superior DERECHA — el sitio donde ya vive el "crear" en cualquier app,
  *     en vez del botón ancho que antes partía la pantalla en dos;
  *   · el orbe grande y centrado debajo, como retrato de la pantalla;
- *   · las cards de los chats, deslizables a la izquierda para eliminar,
- *     ahora con título + una línea de "por dónde va".
+ *   · las filas de los chats, deslizables a la izquierda para eliminar. Ya no
+ *     son cards: Samu pidió (2026-09-01) quitar la caja y dejar solo el borde
+ *     inferior, con la misma estructura — título, un subtítulo con la primera
+ *     frase de lo último hablado, y el tiempo relativo en la línea del título.
  *
  * Los datos (crear/borrar/cambiar) viven en laboratorio/page.tsx — este
  * componente es sordo a la persistencia y al motor de turnos, solo pinta
@@ -46,41 +48,32 @@ interface Props {
 const SWIPE_COMMIT_PX = 88;
 
 /**
- * "hace 5 min", "hace 3 h", "ayer", "hace 4 d"… — la línea que Samu quería
- * leer de un vistazo. Es DISTINTA de la fecha: una hora suelta ("23:41") no
- * dice si fue hoy o el mes pasado, y una fecha ("28 ago") obliga a restar
- * mentalmente. Se muestran las dos (ver `formatDate`), esta primero porque es
- * la que casi siempre responde la pregunta.
+ * "Ahora", "Hace 10 min", "Ayer", "Hace 4 d"… — el único dato de tiempo de la
+ * fila. Antes iba acompañado de la fecha exacta ("23:41" / "28 ago") en una
+ * segunda línea; Samu pidió quitarla y dejar SOLO el relativo, alineado con el
+ * título: una hora suelta no dice si fue hoy o el mes pasado, y una fecha
+ * obliga a restar mentalmente, así que la relativa es la que responde la
+ * pregunta y la otra solo hacía ruido.
+ *
+ * Empieza en MAYÚSCULA porque es un rótulo propio (no continúa ninguna frase),
+ * igual que el título de al lado.
  *
  * Sin librería: son seis casos y `Intl.RelativeTimeFormat` en español produce
  * "hace 1 días" en algunos tramos si no se le redondea antes igual.
  */
 function formatWhen(ts: number): string {
   const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (secs < 60) return "ahora";
+  if (secs < 60) return "Ahora";
   const mins = Math.floor(secs / 60);
-  if (mins < 60) return `hace ${mins} min`;
+  if (mins < 60) return `Hace ${mins} min`;
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `hace ${hrs} h`;
+  if (hrs < 24) return `Hace ${hrs} h`;
   const days = Math.floor(hrs / 24);
-  if (days === 1) return "ayer";
-  if (days < 30) return `hace ${days} d`;
+  if (days === 1) return "Ayer";
+  if (days < 30) return `Hace ${days} d`;
   const months = Math.floor(days / 30);
-  if (months < 12) return `hace ${months} mes${months === 1 ? "" : "es"}`;
-  return `hace ${Math.floor(months / 12)} a`;
-}
-
-/** La fecha exacta, debajo de la relativa: hoy es la hora ("23:41"), otro día
- *  es día+mes ("28 ago"). Es el dato que ancla, no el que se lee primero. */
-function formatDate(ts: number): string {
-  const d = new Date(ts);
-  const hoy = new Date();
-  const mismoDia =
-    d.getFullYear() === hoy.getFullYear() &&
-    d.getMonth() === hoy.getMonth() &&
-    d.getDate() === hoy.getDate();
-  if (mismoDia) return d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
-  return d.toLocaleDateString("es", { day: "2-digit", month: "short" });
+  if (months < 12) return `Hace ${months} mes${months === 1 ? "" : "es"}`;
+  return `Hace ${Math.floor(months / 12)} a`;
 }
 
 /** Una card deslizable: izquierda = `onSwipeLeft` (eliminar). Debajo de la
@@ -164,11 +157,17 @@ function SwipeableCard({
         }}
       >
         <div className="lab-chatcard-main">
+          {/* Título y "Hace 10 min" van en la MISMA fila (no en una columna
+              lateral aparte) porque Samu pidió que el tiempo quede alineado
+              con el título. Al compartir fila comparten línea base sin
+              cuadrar márgenes a ojo: el `margin-left:auto` del CSS lo manda
+              al extremo derecho y el título se queda con el resto. */}
           <div className="lab-chatcard-top">
             {chat.running && (
               <span className="lab-chatcard-dot" aria-label="Corriendo" title="Corriendo" />
             )}
             <span className="lab-chatcard-title">{chat.title}</span>
+            <span className="lab-chatcard-when">{formatWhen(chat.updatedAt)}</span>
           </div>
           {chat.running ? (
             // TRABAJANDO: en vez del último texto (que está congelado en lo
@@ -185,10 +184,6 @@ function SwipeableCard({
           ) : chat.preview ? (
             <span className="lab-chatcard-preview">{chat.preview}</span>
           ) : null}
-        </div>
-        <div className="lab-chatcard-side">
-          <span className="lab-chatcard-when">{formatWhen(chat.updatedAt)}</span>
-          <span className="lab-chatcard-date">{formatDate(chat.updatedAt)}</span>
         </div>
       </div>
     </div>

@@ -358,10 +358,21 @@ export default function Laboratorio() {
     return flat.length > 42 ? `${flat.slice(0, 42)}…` : flat;
   };
 
-  /** Segunda línea de la card: por dónde va la conversación. Se prefiere lo
-   *  último que dijo el asistente (más informativo que repetir la pregunta);
-   *  si aún no respondió, el último mensaje del usuario. */
+  /** Segunda línea de la card, a modo de SUBTÍTULO: la primera frase de lo
+   *  último hablado, no un recorte ciego a N caracteres. Se prefiere lo último
+   *  que dijo el asistente (más informativo que repetir la pregunta); si aún
+   *  no respondió, el último mensaje del usuario.
+   *
+   *  Dos detalles que Samu pidió y que explican la forma:
+   *   · "la primera frase … y tres puntos": se corta en el primer punto/?/!
+   *     o salto de línea, y SIEMPRE se cierra con "…" si quedaba más texto
+   *     detrás — el "…" es la señal de "sigue", no un adorno;
+   *   · el texto del asistente viene en markdown. Sin limpiarlo, el subtítulo
+   *     empezaría con "## " o "**" y se leería como basura, así que se
+   *     desmaquilla lo mínimo (encabezados, viñetas, negritas, backticks).
+   */
   const derivePreview = (msgs: LabMessage[]): string => {
+    const MAX = 80;
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
       const text =
@@ -369,10 +380,26 @@ export default function Laboratorio() {
           ? (m.blocks ?? [])
               .filter((b): b is { kind: "text"; text: string } => b.kind === "text")
               .map((b) => b.text)
-              .join(" ")
+              .join("\n")
           : m.content;
-      const flat = text.trim().replace(/\s+/g, " ");
-      if (flat) return flat.length > 90 ? `${flat.slice(0, 90)}…` : flat;
+      const clean = text
+        .replace(/```[\s\S]*?```/g, " ") // bloques de código: no resumen nada
+        .replace(/^\s*#{1,6}\s+/gm, "") // encabezados
+        .replace(/^\s*[-*+]\s+/gm, "") // viñetas
+        .replace(/^\s*\d+[.)]\s+/gm, "") // listas numeradas
+        .replace(/[*_`>]/g, "")
+        .trim();
+      if (!clean) continue;
+      // Primera frase: hasta el primer cierre de oración o salto de línea.
+      const cut = clean.search(/[.!?\n]/);
+      let frase = (cut === -1 ? clean : clean.slice(0, cut)).replace(/\s+/g, " ").trim();
+      // Quedaba texto detrás (más frases, o la frase misma no cabía) → "…".
+      let hayMas = cut !== -1 && clean.slice(cut).replace(/[.!?\s]/g, "").length > 0;
+      if (frase.length > MAX) {
+        frase = frase.slice(0, MAX).replace(/\s+\S*$/, ""); // no partir palabras
+        hayMas = true;
+      }
+      if (frase) return hayMas ? `${frase}…` : frase;
     }
     return "";
   };
