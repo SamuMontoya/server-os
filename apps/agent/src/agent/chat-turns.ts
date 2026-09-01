@@ -476,6 +476,10 @@ export const chatTurns: TurnEngine = createTurnEngine({
       attachments: args.attachments,
       project: args.project,
       cwd: args.cwd,
+      // OJO: este adaptador copia campo a campo, no hace spread. Añadir una
+      // opción arriba sin añadirla AQUÍ la deja perdiéndose en silencio en el
+      // último salto — que es exactamente lo que pasó con maxTier.
+      maxTier: args.maxTier,
       resumeSessionId: args.resumeSessionId,
       abortController: args.abortController,
       onDelta: args.onDelta,
