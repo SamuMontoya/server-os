@@ -1256,10 +1256,11 @@ html.lab-route body::after {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  /* Padding horizontal 0: al no haber caja, el texto tiene que arrancar en el
-     margen de la lista, no 14px adentro (si no, la fila se lee "indentada"
-     respecto al resto de la pantalla). */
-  padding: 12px 0;
+  /* Un poco de aire a los lados (Samu pidió "pad x para que se vea bien": sin
+     él el texto tocaba el borde de la pantalla y el borde inferior se sentía
+     pegado, no como el filo de una fila). Sigue siendo mucho menos que el
+     padding de card de antes (14px) — esto es respiro, no caja. */
+  padding: 12px 6px;
   /* NI caja NI papel: Samu pidió que cada chat sea solo una FILA separada por
      una línea. Se mantiene la estructura (título + subtítulo + tiempo) y se
      quitan radio, fondo y sombras; lo único que divide es el filo inferior.
@@ -1268,7 +1269,11 @@ html.lab-route body::after {
   border: none;
   border-bottom: 1px solid rgba(55, 53, 47, 0.09);
   border-radius: 0;
-  background: #fff;
+  /* SIN fondo propio (Samu pidió quitarlo): la fila es transparente y muestra
+     el blanco de `.lab-chats-screen` detrás. Es seguro porque el fondo rojo
+     de "Eliminar" (`.lab-chatcard-bg--delete`) no depende de que esta capa lo
+     tape — su opacidad la controla `leftReveal` en JS y es 0 en reposo. */
+  background: transparent;
   cursor: pointer;
   user-select: none;
   touch-action: pan-y;
