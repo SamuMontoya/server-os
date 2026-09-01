@@ -66,6 +66,8 @@ targets:
         # fallo se ve como "sin conexión".
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        NSMicrophoneUsageDescription: OS usa el micrófono para dictar.
+        NSSpeechRecognitionUsageDescription: OS transcribe lo que dictas.
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

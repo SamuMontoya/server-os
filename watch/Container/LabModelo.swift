@@ -34,6 +34,8 @@ final class LabModelo: ObservableObject {
   @Published var mostrarChats = false
   /// Mensaje que hay que llevar arriba tras enviar (el anclaje de la web).
   @Published var anclar: UUID?
+  /// Modelo que el router puso a correr el turno. Lo pinta la barra de estado.
+  @Published var modeloTurno: String?
 
   private var constructor = Constructor()
   private var turno: String?
@@ -195,8 +197,8 @@ final class LabModelo: ObservableObject {
       guardarPendiente(turno: id, base: b, seq: seq)
     case .sesion(let s):
       modificarActivo { $0.sdkSession = s }
-    case .modelo:
-      break
+    case .modelo(let m):
+      modeloTurno = m
     case .fin:
       trabajando = false
       modificarActivo { $0.corriendo = false }

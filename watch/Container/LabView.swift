@@ -10,6 +10,7 @@ struct LabView: View {
   @StateObject private var modelo = LabModelo()
   @FocusState private var escribiendo: Bool
   @State private var elegirFoto: PhotosPickerItem?
+  @StateObject private var dictado = Dictado()
 
   // Colores tomados uno a uno de globals.css. No son aproximaciones: un gris
   // "parecido" al lado del dashboard real se nota en cuanto se ven juntos.
@@ -28,7 +29,10 @@ struct LabView: View {
     }
     .background(Color.white)
     .task { await modelo.recuperarPendiente() }
-    .sheet(isPresented: $modelo.mostrarChats) { ChatsView(modelo: modelo) }
+    // fullScreenCover y no sheet: en la web la pantalla de chats es
+    // `position: fixed; inset: 0` — cubre el viewport entero. Un sheet deja
+    // ver el hilo detrás y se arrastra hacia abajo, que no es lo mismo.
+    .fullScreenCover(isPresented: $modelo.mostrarChats) { ChatsView(modelo: modelo) }
     .onChange(of: elegirFoto) { _, nuevo in
       guard let nuevo else { return }
       Task {
@@ -122,19 +126,63 @@ struct LabView: View {
     })
   }
 
+  /// Chat nuevo: el orbe en el centro, el saludo, y sugerencias abajo.
+  ///
+  /// El orbe va grande y centrado porque en un chat vacío ES el contenido: no
+  /// hay nada que leer todavía. Las sugerencias resuelven el problema real de
+  /// una pantalla en blanco — que no sabes qué se le puede pedir.
   private var vacio: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text("Laboratorio")
-        .font(.system(size: 22, weight: .semibold))
+    VStack(spacing: 0) {
+      Spacer(minLength: 20)
+      Orbe(lado: 96)
+      Text(Self.saludo)
+        .font(.system(size: 19, weight: .semibold))
         .foregroundStyle(Self.tinta)
-      Text("Escribe abajo. El turno vive en el servidor: puedes bloquear la pantalla y al volver sigue ahí.")
+        .padding(.top, 14)
+      Text("¿En qué andamos?")
         .font(.system(size: 15))
-        .lineSpacing(4)
-        .foregroundStyle(Self.tinta.opacity(0.55))
+        .foregroundStyle(Self.apagado)
+        .padding(.top, 3)
+      Spacer(minLength: 24)
+      VStack(spacing: 8) {
+        ForEach(Self.sugerencias, id: \.self) { s in
+          Button { modelo.borrador = s } label: {
+            HStack {
+              Text(s)
+                .font(.system(size: 14))
+                .foregroundStyle(Self.tinta)
+                .multilineTextAlignment(.leading)
+              Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(hex: 0xEFEEEA)))
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      Spacer(minLength: 8)
     }
-    .padding(.top, 40)
-    .padding(.bottom, 12)
+    .frame(maxWidth: .infinity)
+    .padding(.top, 10)
   }
+
+  /// Saludo según la hora. Un "Hola" fijo a las 2 de la mañana suena a robot.
+  private static var saludo: String {
+    switch Calendar.current.component(.hour, from: Date()) {
+    case 5..<12: "Buenos días"
+    case 12..<19: "Buenas tardes"
+    default: "Buenas noches"
+    }
+  }
+
+  private static let sugerencias = [
+    "¿En qué quedamos ayer?",
+    "¿Qué tengo pendiente en los proyectos activos?",
+    "Apunta una idea",
+  ]
 
   private func burbujaMia(_ m: Mensaje) -> some View {
     HStack {
@@ -163,14 +211,9 @@ struct LabView: View {
       ForEach(m.bloques) { b in
         switch b {
         case .texto(_, let c):
-          Text(c)
-            .font(.system(size: 15))
-            // 1,6 de interlineado del CSS: SwiftUI mide lineSpacing como el
-            // hueco EXTRA, así que a 15px (interlineado propio ~18) hay que
-            // sumar 6 para llegar a los 24 de 1,6 — no 24.
-            .lineSpacing(6)
-            .foregroundStyle(Self.tinta)
-            .textSelection(.enabled)
+          // Markdown de verdad: títulos, listas, código y enlaces. Pintar el
+          // texto crudo dejaba los `##` y los `-` a la vista.
+          Markdown(fuente: c)
         case .pasos(_, let lista):
           BloquePasos(pasos: lista, vivo: modelo.trabajando && esUltimo(m))
         }
@@ -204,7 +247,19 @@ struct LabView: View {
           .focused($escribiendo)
           .foregroundStyle(Self.tinta)
 
+        Button { dictado.alternar($modelo.borrador) } label: {
+          if dictado.grabando {
+            BarrasMic(nivel: dictado.nivel).frame(width: 26, height: 30)
+          } else {
+            Image(systemName: "mic")
+              .font(.system(size: 16))
+              .foregroundStyle(Self.apagado)
+              .frame(width: 26, height: 30)
+          }
+        }
+
         Button {
+          if dictado.grabando { dictado.parar() }
           if modelo.trabajando { Task { await modelo.detener() } }
           else { modelo.enviar() }
         } label: {
@@ -225,6 +280,16 @@ struct LabView: View {
       .overlay(RoundedRectangle(cornerRadius: 10).stroke(Self.borde))
       .padding(.horizontal, 20)      // --lab-bar-x
       .padding(.top, 14)             // --lab-bar-top
+
+      if let e = dictado.error {
+        Text(e)
+          .font(.system(size: 11))
+          .foregroundStyle(Color(hex: 0xE35B4A))
+          .padding(.top, 6)
+      }
+      BarraEstado(modelo: modelo.modeloTurno)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
       // 22 y no 10: el mismo padding inferior que se subió en la web, porque
       // con el indicador de inicio del iPhone justo debajo, 10 px dejan el
       // composer pegado al borde y se toca sin querer.
