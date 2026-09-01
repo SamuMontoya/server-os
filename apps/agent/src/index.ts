@@ -222,6 +222,7 @@ import { homedir } from "node:os";
 import { join as joinPath } from "node:path";
 import { Readable } from "node:stream";
 import { OWNER } from "./owner.js";
+import { relojRapido, CENTINELA } from "./watch/rapido.js";
 
 const app = new Hono();
 const startedAt = Date.now();
@@ -531,6 +532,62 @@ app.get("/chat/attachments/:id", async (c) => {
       // Inmutable de verdad: el id es un uuid y el archivo nunca se reescribe.
       "Cache-Control": "private, max-age=86400, immutable",
     },
+  });
+});
+
+/**
+ * Canal del reloj: DOS velocidades.
+ *
+ * Primero pregunta a la sesión persistente (sin tools, proceso ya vivo): eso
+ * contesta en menos de un segundo y cubre la charla, que es la mayoría de lo
+ * que se dicta a un reloj. Si la pregunta necesita el sistema de verdad, el
+ * modelo devuelve el centinela CONSULTAR y ahí SÍ se paga un turno completo,
+ * con tools, emitiendo sus pasos.
+ *
+ * La premisa es la conversación híper rápida: el camino lento se paga solo
+ * cuando hace falta, no por si acaso.
+ */
+app.post("/watch/ask", async (c) => {
+  const b = await c.req.json<{ message?: string }>().catch(() => ({}) as Record<string, never>);
+  const message = b.message?.trim();
+  if (!message) return c.json({ error: "message requerido" }, 400);
+
+  return streamSSE(c, async (stream) => {
+    const enviar = (event: string, data: unknown) =>
+      stream.writeSSE({ event, data: JSON.stringify(data) });
+
+    const rapida = await relojRapido.preguntar(message, (t) => {
+      void enviar("delta", { text: t });
+    });
+
+    if (rapida.trim().toUpperCase() !== CENTINELA) {
+      await enviar("fin", { via: "rapido" });
+      return;
+    }
+
+    // Escalada: la pregunta necesita mirar el sistema.
+    await enviar("escala", {});
+    const turno = chatTurns.start({
+      prompt: message,
+      sessionKey: "reloj",
+      maxTier: "light",
+      magro: true,
+      cwd: await resolveChatCwd(undefined),
+    });
+    await pipeTurn(turno.id, 0, {
+      signal: c.req.raw.signal,
+      onEvent: (ev) => {
+        const e = ev as {
+          kind?: string;
+          text?: string;
+          tool?: { name?: string; target?: string };
+        };
+        if (e.kind === "delta" && e.text) void enviar("delta", { text: e.text });
+        else if (e.kind === "tool" && e.tool?.name)
+          void enviar("paso", { name: e.tool.name, target: e.tool.target ?? "" });
+      },
+    });
+    await enviar("fin", { via: "completo" });
   });
 });
 
@@ -2922,3 +2979,8 @@ serve({ fetch: app.fetch, port: env.PORT, hostname, websocket: { server: wss } }
     ),
   );
 });
+
+// El proceso del CLI del reloj se levanta AL ARRANCAR, no en la primera
+// pregunta: así el primer dictado del día ya lo encuentra caliente en vez de
+// pagar los ~5 s de arranque justo cuando alguien está mirando la muñeca.
+relojRapido.calentar();

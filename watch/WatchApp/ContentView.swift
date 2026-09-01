@@ -105,6 +105,10 @@ struct ContentView: View {
               // Al llegar texto el paso desaparece: la respuesta va sola.
               paso = nil
               respuesta += t
+            case .escala:
+              // La vía rápida no bastó. Se limpia lo que hubiera dicho y a
+              // partir de aquí se ven los pasos del turno completo.
+              respuesta = ""
             case .paso(let n, let o):
               // Reemplaza, no acumula: solo interesa lo que está haciendo AHORA.
               withAnimation(.easeInOut(duration: 0.18)) {
