@@ -231,6 +231,7 @@ import {
 import { buscarImagen } from "./watch/imagen.js";
 import { capturarIdea, CENTINELA_IDEA } from "./watch/intenciones.js";
 import { limitesDelPlan } from "./limits.js";
+import * as relojTurnos from "./watch/turnos.js";
 
 const app = new Hono();
 const startedAt = Date.now();
@@ -566,6 +567,42 @@ let ultimaImagen: { q: string; indice: number } | null = null;
  * pueden, así que lo expone el agente. Cachea 60s: lo pide un cliente por
  * turno y el endpoint de origen es de Anthropic, no nuestro.
  */
+/**
+ * Re-enganche del turno del reloj.
+ *
+ * `?from=` es el cursor: se devuelve solo lo que el reloj no vio. El texto
+ * íntegro va aparte para poder repintar sin concatenar si hiciera falta.
+ */
+app.get("/watch/turns/:id", (c) => {
+  const snap = relojTurnos.snapshot(c.req.param("id"), Number(c.req.query("from") ?? 0) || 0);
+  if (!snap) return c.json({ error: "turno no encontrado" }, 404);
+  return c.json(snap);
+});
+
+/** Igual, pero en streaming: sirve lo pendiente y sigue hasta que cierre. */
+app.get("/watch/turns/:id/stream", (c) => {
+  const id = c.req.param("id");
+  if (!relojTurnos.existe(id)) return c.json({ error: "turno no encontrado" }, 404);
+  const desde = Number(c.req.query("from") ?? 0) || 0;
+
+  return streamSSE(c, async (stream) => {
+    await new Promise<void>((resolve) => {
+      const soltar = relojTurnos.seguir(id, desde, (e) => {
+        void stream.writeSSE({ event: e.tipo, data: JSON.stringify(e.datos) });
+        if (e.tipo === "fin" || e.tipo === "error") {
+          soltar?.();
+          resolve();
+        }
+      });
+      if (!soltar) return resolve();
+      c.req.raw.signal.addEventListener("abort", () => {
+        soltar();
+        resolve();
+      });
+    });
+  });
+});
+
 app.get("/limits", async (c) => c.json(await limitesDelPlan()));
 
 app.post("/watch/ask", async (c) => {
@@ -573,9 +610,26 @@ app.post("/watch/ask", async (c) => {
   const message = b.message?.trim();
   if (!message) return c.json({ error: "message requerido" }, 400);
 
+  // El turno tiene ID y sus eventos se GUARDAN. Eso es lo que permite que
+  // bajar la muñeca deje de perder la respuesta: watchOS suspende la app y
+  // mata el SSE, pero el turno sigue vivo aquí y el reloj se re-engancha desde
+  // su cursor. Sin esto no hay arreglo posible en el cliente — watchOS no
+  // permite background sessions para data tasks ni WebSocket (TN3135).
+  const turnoId = randomUUID();
+  relojTurnos.crear(turnoId);
+
   return streamSSE(c, async (stream) => {
-    const enviar = (event: string, data: unknown) =>
-      stream.writeSSE({ event, data: JSON.stringify(data) });
+    const enviar = (event: string, data: unknown) => {
+      // Se guarda ANTES de escribir: si el socket ya murió, el evento tiene
+      // que quedar registrado igual para quien vuelva a por él.
+      relojTurnos.emitir(turnoId, event, data);
+      return stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {
+        /* el reloj se fue; el turno sigue */
+      });
+    };
+
+    // Lo primero, el id: el reloj lo guarda y con él puede volver.
+    await stream.writeSSE({ event: "turno", data: JSON.stringify({ id: turnoId }) });
 
     // El latido arranca AQUÍ, no al escalar. Antes solo existía en la rama
     // escalada, así que si la sesión rápida se atascaba el stream se quedaba

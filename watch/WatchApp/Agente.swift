@@ -82,6 +82,99 @@ enum Agente {
   /// nunca queda bloqueado detrás de una tarea larga abierta en el escritorio.
   static let canal = "reloj"
 
+  /// Turno en vuelo, guardado en disco.
+  ///
+  /// watchOS suspende la app al bajar la muñeca y eso mata el SSE. Con el id y
+  /// el cursor guardados, al volver se recupera lo que se perdió en vez de
+  /// darlo por muerto. Va a UserDefaults porque tiene que sobrevivir a que el
+  /// sistema mate el proceso, no solo a que se oculte.
+  private static var pendiente: (id: String, seq: Int)? {
+    get {
+      guard let d = UserDefaults.standard.dictionary(forKey: "turnoReloj"),
+            let id = d["id"] as? String else { return nil }
+      return (id, d["seq"] as? Int ?? 0)
+    }
+    set {
+      if let n = newValue {
+        UserDefaults.standard.set(["id": n.id, "seq": n.seq], forKey: "turnoReloj")
+      } else {
+        UserDefaults.standard.removeObject(forKey: "turnoReloj")
+      }
+    }
+  }
+
+  /// ¿Había un turno a medias? Se re-engancha desde su cursor.
+  ///
+  /// Devuelve `false` si no había nada que recuperar, para que quien llama
+  /// sepa si tiene que pintar la pantalla de reposo.
+  static func recuperar(alRecibir: @escaping (Evento) -> Void) async -> Bool {
+    guard let p = pendiente, configurado else { return false }
+    guard let u = URL(string: "\(base)/watch/turns/\(p.id)/stream?from=\(p.seq)") else {
+      return false
+    }
+    var r = URLRequest(url: u)
+    r.setValue("Bearer \(clave)", forHTTPHeaderField: "Authorization")
+
+    do {
+      let (bytes, resp) = try await sesionHTTP.bytes(for: r)
+      // 404 = el turno ya no existe (caducó o el agente reinició): pérdida
+      // confirmada, se limpia. Cualquier otro fallo se deja para el próximo
+      // arranque, porque puede ser solo red.
+      if (resp as? HTTPURLResponse)?.statusCode == 404 {
+        pendiente = nil
+        return false
+      }
+      var evento = ""
+      var seq = p.seq
+      for try await linea in bytes.lines {
+        if linea.hasPrefix("event:") {
+          evento = String(linea.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+        } else if linea.hasPrefix("data:") {
+          let crudo = String(linea.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+          let j = (try? JSONSerialization.jsonObject(
+            with: Data(crudo.utf8))) as? [String: Any] ?? [:]
+          seq += 1
+          pendiente = (p.id, seq)
+          if despacharEvento(evento, j, alRecibir: alRecibir) {
+            pendiente = nil
+            return true
+          }
+        }
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /// Reparte un evento del stream. Devuelve `true` si el turno cerró.
+  ///
+  /// Vive aparte porque lo usan DOS caminos —la pregunta nueva y el
+  /// re-enganche— y tenerlo duplicado garantizaba que un día divergieran.
+  private static func despacharEvento(_ evento: String, _ j: [String: Any],
+                                      alRecibir: @escaping (Evento) -> Void) -> Bool {
+    switch evento {
+    case "delta":
+      if let t = j["text"] as? String, !t.isEmpty { alRecibir(.texto(t)) }
+    case "paso":
+      if let n = j["name"] as? String, !n.isEmpty {
+        alRecibir(.paso(nombre: n, objetivo: j["target"] as? String ?? ""))
+      }
+    case "imagen":
+      if let u = j["url"] as? String, let url = URL(string: u) { alRecibir(.imagen(url)) }
+    case "escala":
+      alRecibir(.escala)
+    case "latido", "turno":
+      break
+    case "fin":
+      alRecibir(.fin)
+      return true
+    default:
+      break
+    }
+    return false
+  }
+
 
   static func preguntar(_ texto: String,
                         sesion: String = canal,
@@ -140,6 +233,7 @@ enum Agente {
       // sin el paso previo de crear un turno. Un viaje menos antes de hablar.
       let (bytes, _) = try await URLSession.shared.bytes(for: p)
       var evento = ""
+      var seq = 0
       for try await linea in bytes.lines {
         if linea.hasPrefix("event:") {
           evento = String(linea.dropFirst(6)).trimmingCharacters(in: .whitespaces)
@@ -147,35 +241,19 @@ enum Agente {
           let crudo = String(linea.dropFirst(5)).trimmingCharacters(in: .whitespaces)
           let j = (try? JSONSerialization.jsonObject(
             with: Data(crudo.utf8))) as? [String: Any] ?? [:]
-          switch evento {
-          case "delta":
-            if let t = j["text"] as? String, !t.isEmpty {
-              hablo = true
-              alRecibir(.texto(t))
-            }
-          case "paso":
-            if let n = j["name"] as? String, !n.isEmpty {
-              hablo = true
-              alRecibir(.paso(nombre: n, objetivo: j["target"] as? String ?? ""))
-            }
-          case "imagen":
-            if let u = j["url"] as? String, let url = URL(string: u) {
-              alRecibir(.imagen(url))
-            }
-          case "latido":
-            // Solo mantiene viva la conexión mientras el turno trabaja. No se
-            // pinta nada: el orbe dando mortales ya dice que sigue vivo.
-            break
-          case "escala":
-            // La pregunta necesitaba mirar el sistema: se limpia lo dicho por
-            // la vía rápida y a partir de aquí se ven los pasos.
-            alRecibir(.escala)
-          case "fin":
+          // El servidor manda el id como primer evento: se guarda para poder
+          // volver si la muñeca baja a mitad de la respuesta.
+          if evento == "turno", let id = j["id"] as? String {
+            pendiente = (id, 0)
+            continue
+          }
+          seq += 1
+          if let p = pendiente { pendiente = (p.id, seq) }
+          if evento == "delta" || evento == "paso" || evento == "imagen" { hablo = true }
+          if despacharEvento(evento, j, alRecibir: alRecibir) {
             vioFin = true
-            alRecibir(.fin)
+            pendiente = nil
             return true
-          default:
-            break
           }
         }
       }

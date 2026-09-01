@@ -84,44 +84,49 @@ struct ContentView: View {
       enRespuesta = true
       Task {
         await Agente.preguntar(dicho) { ev in
-          Task { @MainActor in
-            switch ev {
-            case .texto(let t):
-              // Vibra en la PRIMERA palabra, no al terminar: en un reloj lo
-              // valioso es poder bajar el brazo y que te avise cuando ya hay
-              // algo que leer. Solo la primera, o cada delta vibraría.
-              if respuesta.isEmpty { WKInterfaceDevice.current().play(.notification) }
-              // Al llegar texto el paso desaparece: la respuesta va sola.
-              paso = nil
-              respuesta += t
-              // Se habla lo MISMO que se pinta, ya sin markdown: si no, la
-              // voz lee "asterisco asterisco" en cada énfasis que se escape.
-              Voz.compartida.alLlegar(sinMarcas(t))
-            case .imagen(let u):
-              // La vibración NO va aquí: aquí solo llega la URL, y la foto
-              // tarda todavía en descargarse. Vibrar ahora hace mirar una
-              // pantalla que aún está vacía. La dispara la vista al pintarla.
-              imagen = u
-            case .escala:
-              // La vía rápida no bastó. Se limpia lo que hubiera dicho y a
-              // partir de aquí se ven los pasos del turno completo.
-              respuesta = ""
-            case .paso(let n, let o):
-              // Reemplaza, no acumula: solo interesa lo que está haciendo AHORA.
-              withAnimation(.easeInOut(duration: 0.18)) {
-                paso = Paso(nombre: n, objetivo: o)
-              }
-            case .fin:
-              corriendo = false
-              Voz.compartida.cerrar()
-            case .fallo(let m):
-              corriendo = false
-              WKInterfaceDevice.current().play(.failure)
-              if respuesta.isEmpty { respuesta = m }
-            }
-          }
+          Task { @MainActor in aplicar(ev) }
         }
       }
+    }
+  }
+
+  /// Reparte un evento del agente. Lo usan la pregunta nueva Y el re-enganche
+  /// al volver: duplicarlo garantizaba que un día divergieran.
+  @MainActor
+  private func aplicar(_ ev: Agente.Evento) {
+    switch ev {
+    case .texto(let t):
+      // Vibra en la PRIMERA palabra, no al terminar: en un reloj lo
+      // valioso es poder bajar el brazo y que te avise cuando ya hay
+      // algo que leer. Solo la primera, o cada delta vibraría.
+      if respuesta.isEmpty { WKInterfaceDevice.current().play(.notification) }
+      // Al llegar texto el paso desaparece: la respuesta va sola.
+      paso = nil
+      respuesta += t
+      // Se habla lo MISMO que se pinta, ya sin markdown: si no, la
+      // voz lee "asterisco asterisco" en cada énfasis que se escape.
+      Voz.compartida.alLlegar(sinMarcas(t))
+    case .imagen(let u):
+      // La vibración NO va aquí: aquí solo llega la URL, y la foto
+      // tarda todavía en descargarse. Vibrar ahora hace mirar una
+      // pantalla que aún está vacía. La dispara la vista al pintarla.
+      imagen = u
+    case .escala:
+      // La vía rápida no bastó. Se limpia lo que hubiera dicho y a
+      // partir de aquí se ven los pasos del turno completo.
+      respuesta = ""
+    case .paso(let n, let o):
+      // Reemplaza, no acumula: solo interesa lo que está haciendo AHORA.
+      withAnimation(.easeInOut(duration: 0.18)) {
+        paso = Paso(nombre: n, objetivo: o)
+      }
+    case .fin:
+      corriendo = false
+      Voz.compartida.cerrar()
+    case .fallo(let m):
+      corriendo = false
+      WKInterfaceDevice.current().play(.failure)
+      if respuesta.isEmpty { respuesta = m }
     }
   }
 
@@ -166,6 +171,26 @@ struct ContentView: View {
       .onTapGesture(perform: tocar)
     }
     .ignoresSafeArea()
+    .task {
+      // ¿Se bajó la muñeca a mitad de una respuesta? Se recupera desde su
+      // cursor en vez de darla por perdida: watchOS suspende la app y eso mata
+      // el stream, pero el turno sigue vivo en el servidor.
+      let habia = await Agente.recuperar { ev in
+        Task { @MainActor in
+          if !enRespuesta {
+            enRespuesta = true
+            corriendo = true
+          }
+          aplicar(ev)
+        }
+      }
+      if habia { corriendo = false }
+    }
+    .onChange(of: atenuada) { _, ahoraAtenuada in
+      // Al despertar sacude la cabeza. Al dormirse no se hace nada: la
+      // pantalla ya se está apagando y nadie lo vería.
+      if !ahoraAtenuada { sacudidaDesde = Date() }
+    }
     // watchOS NO expone forma de ocultar la hora ni el indicador de Modo
     // enfoque: `.statusBarHidden()` no existe en esta plataforma. Con un
     // VideoPlayer en pantalla el sistema la esconde solo, así que se deja uno
