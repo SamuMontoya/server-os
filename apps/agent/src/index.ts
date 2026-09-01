@@ -577,6 +577,17 @@ app.post("/watch/ask", async (c) => {
     const enviar = (event: string, data: unknown) =>
       stream.writeSSE({ event, data: JSON.stringify(data) });
 
+    // El latido arranca AQUÍ, no al escalar. Antes solo existía en la rama
+    // escalada, así que si la sesión rápida se atascaba el stream se quedaba
+    // abierto sin emitir un byte y el reloj giraba para siempre — sin nada que
+    // distinguir "pensando" de "colgado".
+    let latido: ReturnType<typeof setInterval> | null =
+      setInterval(() => void enviar("latido", {}), 3000);
+    const pararLatido = () => {
+      if (latido) clearInterval(latido);
+      latido = null;
+    };
+
     const rapida = await relojRapido.preguntar(message, (t) => {
       void enviar("delta", { text: t });
     });
@@ -591,6 +602,7 @@ app.post("/watch/ask", async (c) => {
       const dicho = ok ? "Apuntado." : "No pude guardarlo.";
       await enviar("delta", { text: dicho });
       if (ok) relojRapido.anotar(`Se apuntó esta idea del usuario: ${idea}`);
+      pararLatido();
       await enviar("fin", { via: "idea" });
       return;
     }
@@ -623,11 +635,13 @@ app.post("/watch/ask", async (c) => {
           await enviar("delta", { text: "No hay más imágenes." });
         }
       }
+      pararLatido();
       await enviar("fin", { via: "imagen" });
       return;
     }
 
     if (limpia.toUpperCase() !== CENTINELA) {
+      pararLatido();
       await enviar("fin", { via: "rapido" });
       return;
     }
@@ -641,10 +655,6 @@ app.post("/watch/ask", async (c) => {
       magro: true,
       cwd: await resolveChatCwd(undefined),
     });
-    // Latido cada 3 s mientras trabaja. Una escalada puede pasar medio minuto
-    // sin emitir nada entre dos tools, y ahí un proxy o el propio iOS cortan
-    // la conexión por inactividad — el reloj se quedaría girando para siempre.
-    const latido = setInterval(() => void enviar("latido", {}), 3000);
     await pipeTurn(turno.id, 0, {
       signal: c.req.raw.signal,
       onEvent: (ev) => {
@@ -658,7 +668,7 @@ app.post("/watch/ask", async (c) => {
           void enviar("paso", { name: e.tool.name, target: e.tool.target ?? "" });
       },
     });
-    clearInterval(latido);
+    pararLatido();
     const cerrado = chatTurns.snapshot(turno.id, 0);
     if (cerrado?.text) {
       relojRapido.anotar(

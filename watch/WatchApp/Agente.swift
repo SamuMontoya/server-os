@@ -107,12 +107,24 @@ enum Agente {
     }
   }
 
-  /// Devuelve `true` si llegó a abrir el turno. Con `silencioso` no reporta el
-  /// fallo: es un intento intermedio y todavía queda otra dirección que probar.
+  /// Devuelve `true` si el turno se completó.
+  ///
+  /// OJO con reintentar: `/watch/ask` NO es idempotente — puede apuntar una
+  /// idea en la base y siempre alimenta la memoria de la sesión rápida. Si ya
+  /// se vio texto, repetir duplicaría el trabajo del servidor y la respuesta
+  /// en pantalla. Por eso `hablo` corta los reintentos.
   private static func intentar(_ servidor: String, texto: String, sesion: String,
                                alRecibir: @escaping (Evento) -> Void,
                                silencioso: Bool) async -> Bool {
     guard let u = URL(string: "\(servidor)/watch/ask") else { return false }
+
+    /// Se enciende cuando el usuario YA vio u oyó algo. A partir de ahí no se
+    /// puede reintentar: /watch/ask escribe en la base y alimenta la memoria
+    /// de la sesión, así que repetir duplicaría las dos cosas.
+    var hablo = false
+    /// El servidor cierra con `fin`. Acabar sin él es un CORTE, no un final.
+    var vioFin = false
+
     do {
       var p = URLRequest(url: u)
       p.httpMethod = "POST"
@@ -137,9 +149,13 @@ enum Agente {
             with: Data(crudo.utf8))) as? [String: Any] ?? [:]
           switch evento {
           case "delta":
-            if let t = j["text"] as? String, !t.isEmpty { alRecibir(.texto(t)) }
+            if let t = j["text"] as? String, !t.isEmpty {
+              hablo = true
+              alRecibir(.texto(t))
+            }
           case "paso":
             if let n = j["name"] as? String, !n.isEmpty {
+              hablo = true
               alRecibir(.paso(nombre: n, objetivo: j["target"] as? String ?? ""))
             }
           case "imagen":
@@ -155,6 +171,7 @@ enum Agente {
             // la vía rápida y a partir de aquí se ven los pasos.
             alRecibir(.escala)
           case "fin":
+            vioFin = true
             alRecibir(.fin)
             return true
           default:
@@ -162,9 +179,22 @@ enum Agente {
           }
         }
       }
-      alRecibir(.fin)
-      return true
+      if vioFin { return true }
+      // Se acabó el stream sin que el servidor dijera `fin`.
+      if hablo {
+        // Ya se vio texto: no se reintenta (no es idempotente), pero tampoco
+        // se miente diciendo que terminó bien.
+        alRecibir(.fallo("Se cortó a medias"))
+        return true
+      }
+      if !silencioso { alRecibir(.fallo("El servidor no dijo nada")) }
+      return false
     } catch {
+      // Si ya habló, se corta aquí: reintentar duplicaría lo dicho.
+      if hablo {
+        alRecibir(.fallo("Se cortó a medias"))
+        return true
+      }
       if !silencioso { alRecibir(.fallo("No se pudo conectar")) }
       return false
     }
