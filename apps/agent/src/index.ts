@@ -230,6 +230,7 @@ import {
 } from "./watch/rapido.js";
 import { buscarImagen } from "./watch/imagen.js";
 import { capturarIdea, CENTINELA_IDEA } from "./watch/intenciones.js";
+import { limitesDelPlan } from "./limits.js";
 
 const app = new Hono();
 const startedAt = Date.now();
@@ -558,6 +559,15 @@ let ultimaImagen: { q: string; indice: number } | null = null;
  * La premisa es la conversación híper rápida: el camino lento se paga solo
  * cuando hace falta, no por si acaso.
  */
+/**
+ * Consumo del plan, para el pie del chat del reloj y del iPhone.
+ *
+ * La web lo lee ella misma con su propia ruta de Next; esos clientes no
+ * pueden, así que lo expone el agente. Cachea 60s: lo pide un cliente por
+ * turno y el endpoint de origen es de Anthropic, no nuestro.
+ */
+app.get("/limits", async (c) => c.json(await limitesDelPlan()));
+
 app.post("/watch/ask", async (c) => {
   const b = await c.req.json<{ message?: string }>().catch(() => ({}) as Record<string, never>);
   const message = b.message?.trim();

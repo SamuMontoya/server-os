@@ -11,98 +11,56 @@ enum Agente {
   /// URL y clave se inyectan al compilar desde el `.env` del repo (lo hace
   /// `scripts/install-watch.sh`), para no dejar la clave escrita en el
   /// proyecto, que sí va a git.
-  /// TRES direcciones, probadas en orden: LAN → tailnet → Funnel público.
+  /// UNA sola dirección: la pública.
   ///
-  /// La LAN primero porque es directa y no sale de casa. El tailnet después.
-  /// Y la pública al final, que es la ÚNICA que funciona fuera de casa: el
-  /// reloj no corre Tailscale (watchOS no lo soporta) y NO hereda la VPN del
-  /// iPhone —su tráfico va por su propia pila de red—, así que sin una URL
-  /// alcanzable desde internet se queda sin conexión en la calle.
+  /// Antes había tres (LAN, tailnet, Funnel) sondeadas en paralelo. Se quitan
+  /// las privadas, y no por gusto — por cómo funciona la red en watchOS:
   ///
-  /// El orden importa por algo más que la velocidad: probar primero las
-  /// privadas evita sacar el tráfico a internet cuando no hace falta.
+  /// · Con el iPhone cerca, watchOS NO usa la red del reloj: manda la petición
+  ///   por un túnel IPsec al teléfono y la hace ÉL (WWDC15/711). Así que "la
+  ///   LAN de casa" no es la del reloj, es la del iPhone, y depende de dónde
+  ///   esté el teléfono, no el reloj.
+  /// · Hay un fallo ABIERTO de Apple (FB23469093, reportado en watchOS 26.5
+  ///   con un Apple Watch SE 3) por el que si el iPhone está cerca pero sin
+  ///   internet, watchOS insiste en el túnel y NUNCA cae a la wifi del reloj.
+  ///   Apple no tiene solución ni API pública para forzar la otra ruta. Tener
+  ///   tres direcciones no lo esquiva: las tres salen por el mismo túnel roto.
+  /// · Y el Funnel funciona en las dos situaciones, dentro y fuera de casa.
+  ///
+  /// La ganancia real es quitar peticiones: en watchOS cada una se paga por el
+  /// túnel Bluetooth, y Apple pide "reducir el número de peticiones al mínimo
+  /// absoluto" (WWDC19/716).
   static var bases: [String] {
-    ["HermesURL", "HermesURLAlt", "HermesURLPub"]
+    ["HermesURLPub", "HermesURL", "HermesURLAlt"]
       .compactMap { Bundle.main.object(forInfoDictionaryKey: $0) as? String }
       .filter { !$0.isEmpty }
   }
   static var base: String { bases.first ?? "" }
+
+  static var configurado: Bool { !bases.isEmpty }
+
   private static var clave: String {
     (Bundle.main.object(forInfoDictionaryKey: "HermesAPIKey") as? String) ?? ""
   }
 
-  static var configurado: Bool { !bases.isEmpty }
-
-  /// La última dirección que funcionó, recordada entre sesiones.
+  /// Sesión propia, no `URLSession.shared`.
   ///
-  /// Sin esto, fuera de casa el reloj probaría la LAN primero y esperaría su
-  /// timeout ENTERO antes de pasar a la siguiente — la app se sentiría
-  /// colgada justo cuando más la necesitas. Recordando la buena, el caso
-  /// normal es un solo sondeo.
-  private static var ultimaBuena: String? {
-    get { UserDefaults.standard.string(forKey: "ultimaBase") }
-    set { UserDefaults.standard.set(newValue, forKey: "ultimaBase") }
-  }
-
-  /// Orden de intento: la que funcionó la última vez y luego las demás.
-  private static var ordenadas: [String] {
-    guard let u = ultimaBuena, bases.contains(u) else { return bases }
-    return [u] + bases.filter { $0 != u }
-  }
-
-  /// Sondea `/health` (que no pide autenticación) con un plazo REAL.
+  /// `waitsForConnectivity` es lo que Apple recomienda EN LUGAR de sondear
+  /// (Tech Talk 111378: "los chequeos previos suelen ser incorrectos"). En vez
+  /// de preguntar si hay red, se lanza la petición y el sistema la retiene
+  /// hasta que se pueda, avisando en vez de fallar.
   ///
-  /// OJO con `timeoutInterval`: es el tiempo sin recibir DATOS, no un límite
-  /// para establecer la conexión. Contra una IP que se traga los paquetes
-  /// —una LAN ajena, por ejemplo— la petición se queda colgada mucho más de
-  /// lo que ese valor promete: medido, 8 segundos con un plazo de 2,5. De ahí
-  /// la carrera contra un `Task.sleep`, que sí corta de verdad.
-  private static func vive(_ servidor: String, plazo: Double = 2.5) async -> Bool {
-    guard let u = URL(string: "\(servidor)/health") else { return false }
-    return await withTaskGroup(of: Bool.self) { grupo in
-      grupo.addTask {
-        var r = URLRequest(url: u)
-        r.timeoutInterval = plazo
-        r.cachePolicy = .reloadIgnoringLocalCacheData
-        do {
-          let (_, resp) = try await URLSession.shared.data(for: r)
-          return (resp as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-          return false
-        }
-      }
-      grupo.addTask {
-        try? await Task.sleep(for: .seconds(plazo))
-        return false
-      }
-      let primero = await grupo.next() ?? false
-      grupo.cancelAll()
-      return primero
-    }
-  }
-
-  /// Elige servidor probando TODAS las direcciones A LA VEZ.
-  ///
-  /// En serie, una dirección colgada bloquea a las siguientes y el reloj dice
-  /// "sin conexión" aunque otra estuviera perfectamente viva — que es
-  /// exactamente lo que pasaba fuera de casa. En paralelo cuesta el plazo de
-  /// UNA, no la suma, y gana la que responda antes.
-  ///
-  /// El desempate lo lleva el orden de `ordenadas`: si dos contestan dentro
-  /// del mismo instante, se prefiere la privada.
-  private static func elegirServidor() async -> String? {
-    let candidatas = ordenadas
-    let vivas = await withTaskGroup(of: (Int, Bool).self) { grupo in
-      for (i, s) in candidatas.enumerated() {
-        grupo.addTask { (i, await vive(s)) }
-      }
-      var res: [Int] = []
-      for await (i, ok) in grupo where ok { res.append(i) }
-      return res.sorted()
-    }
-    guard let mejor = vivas.first else { return nil }
-    return candidatas[mejor]
-  }
+  /// OJO con su alcance: solo cubre ESTABLECER la conexión. Si se cae a mitad,
+  /// llega el error igual — por eso sigue habiendo reintentos abajo.
+  private static let sesionHTTP: URLSession = {
+    let c = URLSessionConfiguration.default
+    c.waitsForConnectivity = true
+    // Generoso a propósito: una escalada con tools puede tardar minutos, y el
+    // servidor manda un latido cada 3s para que no parezca colgada.
+    c.timeoutIntervalForRequest = 90
+    c.timeoutIntervalForResource = 600
+    return URLSession(configuration: c)
+  }()
 
   /// Lo que el reloj sabe pintar. El resto de eventos del contrato (`model`,
   /// `session`, `retry`) se ignoran a propósito: en una pantalla así no
@@ -132,13 +90,20 @@ enum Agente {
       alRecibir(.fallo("Sin servidor configurado"))
       return
     }
-    guard let servidor = await elegirServidor() else {
-      alRecibir(.fallo("Sin conexión con el servidor"))
-      return
-    }
-    if await intentar(servidor, texto: texto, sesion: sesion,
-                      alRecibir: alRecibir, silencioso: false) {
-      ultimaBuena = servidor
+    // Reintentos con espera creciente. Hacen falta a pesar de
+    // `waitsForConnectivity`: ese cubre "todavía no hay red", no "el túnel al
+    // iPhone está en pie pero no lleva a ningún sitio", que es el fallo
+    // abierto de Apple. Tres intentos y se rinde, porque en la muñeca esperar
+    // más ya no es útil.
+    let esperas: [Double] = [0.6, 2.0]
+    for intento in 0...esperas.count {
+      if await intentar(base, texto: texto, sesion: sesion,
+                        alRecibir: alRecibir, silencioso: intento < esperas.count) {
+        return
+      }
+      if intento < esperas.count {
+        try? await Task.sleep(for: .seconds(esperas[intento]))
+      }
     }
   }
 
