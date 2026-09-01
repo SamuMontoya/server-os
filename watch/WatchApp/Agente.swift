@@ -50,22 +50,58 @@ enum Agente {
     return [u] + bases.filter { $0 != u }
   }
 
-  /// Sondea `/health`, que NO pide autenticación, con un plazo corto.
+  /// Sondea `/health` (que no pide autenticación) con un plazo REAL.
   ///
-  /// Es la forma barata de saber si una dirección está viva sin arriesgar el
-  /// turno: un timeout corto en la petición real cortaría el streaming a
-  /// mitad de una respuesta larga.
-  private static func vive(_ servidor: String) async -> Bool {
+  /// OJO con `timeoutInterval`: es el tiempo sin recibir DATOS, no un límite
+  /// para establecer la conexión. Contra una IP que se traga los paquetes
+  /// —una LAN ajena, por ejemplo— la petición se queda colgada mucho más de
+  /// lo que ese valor promete: medido, 8 segundos con un plazo de 2,5. De ahí
+  /// la carrera contra un `Task.sleep`, que sí corta de verdad.
+  private static func vive(_ servidor: String, plazo: Double = 2.5) async -> Bool {
     guard let u = URL(string: "\(servidor)/health") else { return false }
-    var r = URLRequest(url: u)
-    r.timeoutInterval = 2.5
-    r.cachePolicy = .reloadIgnoringLocalCacheData
-    do {
-      let (_, resp) = try await URLSession.shared.data(for: r)
-      return (resp as? HTTPURLResponse)?.statusCode == 200
-    } catch {
-      return false
+    return await withTaskGroup(of: Bool.self) { grupo in
+      grupo.addTask {
+        var r = URLRequest(url: u)
+        r.timeoutInterval = plazo
+        r.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+          let (_, resp) = try await URLSession.shared.data(for: r)
+          return (resp as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+          return false
+        }
+      }
+      grupo.addTask {
+        try? await Task.sleep(for: .seconds(plazo))
+        return false
+      }
+      let primero = await grupo.next() ?? false
+      grupo.cancelAll()
+      return primero
     }
+  }
+
+  /// Elige servidor probando TODAS las direcciones A LA VEZ.
+  ///
+  /// En serie, una dirección colgada bloquea a las siguientes y el reloj dice
+  /// "sin conexión" aunque otra estuviera perfectamente viva — que es
+  /// exactamente lo que pasaba fuera de casa. En paralelo cuesta el plazo de
+  /// UNA, no la suma, y gana la que responda antes.
+  ///
+  /// El desempate lo lleva el orden de `ordenadas`: si dos contestan dentro
+  /// del mismo instante, se prefiere la privada.
+  private static func elegirServidor() async -> String? {
+    let candidatas = ordenadas
+    let vivas = await withTaskGroup(of: (Int, Bool).self) { grupo in
+      for (i, s) in candidatas.enumerated() {
+        grupo.addTask { (i, await vive(s)) }
+      }
+      var res: [Int] = []
+      for await (i, ok) in grupo where ok { res.append(i) }
+      return res.sorted()
+    }
+    guard let mejor = vivas.first else { return nil }
+    return candidatas[mejor]
   }
 
   /// Lo que el reloj sabe pintar. El resto de eventos del contrato (`model`,
@@ -96,20 +132,14 @@ enum Agente {
       alRecibir(.fallo("Sin servidor configurado"))
       return
     }
-    let candidatas = ordenadas
-    for (i, servidor) in candidatas.enumerated() {
-      let ultima = i == candidatas.count - 1
-      // Se sondea antes de comprometer el turno, salvo en la última: si es la
-      // única que queda, mejor intentarlo y dar su error real que descartarla
-      // por un sondeo que pudo fallar por otra cosa.
-      if !ultima, await !vive(servidor) { continue }
-      if await intentar(servidor, texto: texto, sesion: sesion,
-                        alRecibir: alRecibir, silencioso: !ultima) {
-        ultimaBuena = servidor
-        return
-      }
+    guard let servidor = await elegirServidor() else {
+      alRecibir(.fallo("Sin conexión con el servidor"))
+      return
     }
-    alRecibir(.fallo("Sin conexión con el servidor"))
+    if await intentar(servidor, texto: texto, sesion: sesion,
+                      alRecibir: alRecibir, silencioso: false) {
+      ultimaBuena = servidor
+    }
   }
 
   /// Devuelve `true` si llegó a abrir el turno. Con `silencioso` no reporta el
