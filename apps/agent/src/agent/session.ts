@@ -251,10 +251,15 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         settingSources: [],
         resume: opts.resumeSessionId,
         ...(opts.abortController ? { abortController: opts.abortController } : {}),
+        // En modo magro solo va `hermes`, que es en-proceso y gratis. Los
+        // otros dos se pagan EN CADA TURNO antes de la primera palabra: el de
+        // Linear es un MCP REMOTO (apretón de manos por red contra
+        // mcp.linear.app) y el de chrome-devtools levanta un proceso nuevo.
+        // Para una pregunta de reloj no aportan nada y cuestan segundos.
         mcpServers: {
           hermes: hermesMcpServer,
-          ...(linearEnabled() ? { linear: linearMcpServer() } : {}),
-          ...(env.BROWSER_AGENT_ENABLED && resolveChromeMcpBin()
+          ...(!opts.magro && linearEnabled() ? { linear: linearMcpServer() } : {}),
+          ...(!opts.magro && env.BROWSER_AGENT_ENABLED && resolveChromeMcpBin()
             ? { "chrome-devtools": chromeMcpServer(resolveChromeMcpBin()!) }
             : {}),
         },
