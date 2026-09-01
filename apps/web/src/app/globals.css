@@ -1285,24 +1285,15 @@ html.lab-route body::after {
     transform 0.18s ease-out,
     background-color 0.18s ease-out;
 }
-/* Sin caja no hay sombra que levantar: el "esto es pulsable" lo dice un lavado
-   de fondo. Va sangrado a los lados con `box-shadow` de color plano (no
-   `padding`, que movería el texto al pasar el ratón) para que el resaltado
-   respire un poco más allá del texto. */
+/* Samu pidió quitar el lavado gris de hover/foco: la fila se queda blanca
+   (transparente sobre `.lab-chats-screen`) tanto en reposo como al pasar el
+   ratón o al estar activa. Lo único que la marca como "viendo esto" es el
+   título en negro pleno (ver `.lab-chatcard--active .lab-chatcard-title`). */
 .lab-chatcard:hover {
-  background: #faf9f8;
-  box-shadow:
-    -8px 0 0 0 #faf9f8,
-    8px 0 0 0 #faf9f8;
+  background: transparent;
 }
-/* El chat que se está viendo: mismo lavado pero permanente y algo más marcado,
-   más el título en negro pleno (ver abajo). Nada de bordes ni sombras que
-   vuelvan a dibujar la caja que Samu quitó. */
 .lab-chatcard--active {
-  background: #f4f3f1;
-  box-shadow:
-    -8px 0 0 0 #f4f3f1,
-    8px 0 0 0 #f4f3f1;
+  background: transparent;
 }
 .lab-chatcard--active .lab-chatcard-title {
   color: #1f1e1b;
