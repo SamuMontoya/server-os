@@ -1410,6 +1410,17 @@ export default function Laboratorio() {
     if (!remote) return;
     const startedAsActiveId = activeChatIdRef.current;
     const targetActiveId = remote.activeId || startedAsActiveId;
+    // Huella del chat activo AL EMPEZAR: cada `await` de abajo es un viaje de
+    // red, y si Samu manda un mensaje (o cambia de chat) mientras tanto,
+    // `messagesRef.current` cambia de referencia (setMessages siempre crea un
+    // array nuevo). Si eso pasó, tocar el chat activo con una foto vieja del
+    // servidor le pisaría el mensaje recién mandado o el turno recién
+    // arrancado — el bug real: el turno seguía corriendo bien, pero
+    // `loadChatIntoState` reseteaba `busy` a false y `messages` a lo de antes,
+    // así que la pantalla se quedaba pegada en el orbe grande (chat "vacío")
+    // hasta que el turno cerraba solo y algo más refrescaba la vista.
+    const snapshotAtStart = messagesRef.current;
+    const activeChatEstable = () => messagesRef.current === snapshotAtStart;
 
     // Chats de fondo: se actualizan directo en chatsRef, nunca tocan la
     // pantalla. El chat activo (targetActiveId) se maneja aparte más abajo.
@@ -1422,6 +1433,8 @@ export default function Laboratorio() {
       if (full) chatsRef.current.set(key, full);
     }
 
+    if (!activeChatEstable()) return; // Samu ya se movió: no tocar el activo.
+
     if (targetActiveId === startedAsActiveId) {
       // Mismo chat activo en ambos lados: solo se refresca si el servidor
       // tiene una versión más nueva (p. ej. el turno siguió avanzando en
@@ -1430,14 +1443,14 @@ export default function Laboratorio() {
       const localUpdatedAt = initialThread?.id === targetActiveId ? initialThread.updatedAt : 0;
       if (remoteMeta && remoteMeta.updatedAt > localUpdatedAt) {
         const full = await fetchRemoteThread(targetActiveId);
-        if (full) loadChatIntoState(targetActiveId, full);
+        if (full && activeChatEstable()) loadChatIntoState(targetActiveId, full);
       }
     } else {
       // El otro dispositivo dejó activo un chat distinto al que esta
       // pestaña iba a abrir: se retoma ESE (es la esencia de "seguir el
       // chat del Mac desde el iPhone").
       const full = await fetchRemoteThread(targetActiveId);
-      if (full) {
+      if (full && activeChatEstable()) {
         saveActiveIntoMap();
         chatsRef.current.delete(chatStorageKey(projKey, targetActiveId));
         loadChatIntoState(targetActiveId, full);
