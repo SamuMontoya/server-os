@@ -11,6 +11,7 @@ import {
   isRetryable,
   MAX_ATTEMPTS,
   MAX_CONTINUATIONS,
+  CHECKPOINT_INTERVAL_MS,
   type TurnEvent,
   type TurnRunnerArgs,
   type TurnRunnerResult,
@@ -21,6 +22,8 @@ function engineWith(run: (args: TurnRunnerArgs, attempt: number) => Promise<Turn
   let attempt = 0;
   const slept: number[] = [];
   const persisted: { prompt: string; text: string; status: string }[] = [];
+  const checkpoints: { text: string; sdkSessionId?: string }[] = [];
+  const clearedCheckpoints: string[] = [];
   let clock = 1_000;
   const engine = createTurnEngine({
     run: (args) => run(args, ++attempt),
@@ -29,11 +32,15 @@ function engineWith(run: (args: TurnRunnerArgs, attempt: number) => Promise<Turn
     },
     now: () => clock,
     persist: (t) => persisted.push({ prompt: t.prompt, text: t.text, status: t.status }),
+    checkpoint: (t) => checkpoints.push({ text: t.text, sdkSessionId: t.sdkSessionId }),
+    clearCheckpoint: (id) => clearedCheckpoints.push(id),
   });
   return {
     engine,
     slept,
     persisted,
+    checkpoints,
+    clearedCheckpoints,
     attempts: () => attempt,
     advance: (ms: number) => {
       clock += ms;
@@ -469,4 +476,82 @@ test("las auto-continuaciones NO repiten la búsqueda semántica del turno", asy
   await settle();
   assert.equal(h.engine.snapshot(turn.id)!.status, "done");
   assert.deepEqual(flags, [true, false], "el turno real precarga; la continuación no");
+});
+
+// ── Checkpoint (sobrevivir un reinicio del agente a mitad de turno) ─────
+
+test("onSession dispara un checkpoint INMEDIATO, sin esperar al throttle", async () => {
+  const h = engineWith(async (args) => {
+    args.onSession("sdk-1");
+    args.onDelta("hola");
+    return { finalText: "", isError: false };
+  });
+  h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  // El primer checkpoint (el de onSession) ya debe existir con el sdkSessionId,
+  // aunque no haya pasado ni un ms de reloj.
+  assert.ok(h.checkpoints.length >= 1);
+  assert.equal(h.checkpoints[0].sdkSessionId, "sdk-1");
+});
+
+test("los deltas siguientes NO re-checkpointean hasta que pasa el intervalo", async () => {
+  const h = engineWith(async (args) => {
+    args.onSession("sdk-1");
+    args.onDelta("a"); // checkpoint por onSession ya cuenta como "reciente"
+    args.onDelta("b"); // sin avanzar el reloj: no debe sumar otro checkpoint
+    args.onDelta("c");
+    return { finalText: "", isError: false };
+  });
+  h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  // Solo el de onSession: los tres deltas corrieron en el mismo instante.
+  assert.equal(h.checkpoints.length, 1);
+});
+
+test("pasado CHECKPOINT_INTERVAL_MS, el siguiente delta SÍ checkpointea de nuevo", async () => {
+  const h = engineWith(async (args) => {
+    args.onSession("sdk-1");
+    args.onDelta("primero");
+    h.advance(CHECKPOINT_INTERVAL_MS + 1);
+    args.onDelta("segundo");
+    return { finalText: "", isError: false };
+  });
+  h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  // onSession + el delta que cae después de que venció el throttle.
+  assert.equal(h.checkpoints.length, 2);
+  assert.equal(h.checkpoints[1].text, "primerosegundo");
+});
+
+test("al cerrar (done/error/stopped) se limpia el checkpoint", async () => {
+  const h = engineWith(async (args) => {
+    args.onSession("sdk-1");
+    args.onDelta("hola");
+    return { finalText: "", isError: false };
+  });
+  const turn = h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  assert.equal(h.engine.snapshot(turn.id)!.status, "done");
+  assert.deepEqual(h.clearedCheckpoints, [turn.id]);
+});
+
+test("un turno detenido (⏹) también limpia su checkpoint", async () => {
+  let release: (() => void) | null = null;
+  const gate = new Promise<void>((r) => (release = r));
+  const h = engineWith(async (args) => {
+    args.onSession("sdk-1");
+    args.onDelta("a medias");
+    await gate;
+    // El SDK real lanza al abortar; imitamos eso (ver el test de arriba).
+    if (args.abortController.signal.aborted) throw new Error("aborted");
+    return { finalText: "", isError: false };
+  });
+  const turn = h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  h.engine.stop(turn.id);
+  release!();
+  await settle();
+  await settle();
+  assert.equal(h.engine.snapshot(turn.id)!.status, "stopped");
+  assert.deepEqual(h.clearedCheckpoints, [turn.id]);
 });

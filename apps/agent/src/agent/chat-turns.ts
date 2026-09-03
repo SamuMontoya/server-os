@@ -24,6 +24,8 @@ import type { ChatToolStep } from "@hermes/shared";
 import { runAgentTurn, saveSdkSession } from "./session.js";
 import { appendTurn } from "../conversations.js";
 import { attachmentNote } from "../chat-attachments.js";
+import { checkpointTurn, clearCheckpoint } from "../chat-turn-checkpoints.js";
+import { env } from "../env.js";
 
 // ── Eventos ────────────────────────────────────────────────────────────
 export type TurnEventKind =
@@ -201,7 +203,21 @@ export interface TurnEngineDeps {
   now: () => number;
   /** Persistencia del turno cerrado. Best-effort: no debe tumbar el turno. */
   persist?: (turn: ChatTurn) => void;
+  /**
+   * Checkpoint del turno EN VUELO (best-effort, no bloquea ni tumba el
+   * turno): sobrevive a un reinicio del proceso a mitad de una respuesta.
+   * Se llama apenas se conoce `sdkSessionId` (para que el próximo mensaje
+   * pueda retomar la MISMA conversación aunque esta respuesta se pierda) y,
+   * con throttle, en cada delta mientras el turno escribe.
+   */
+  checkpoint?: (turn: ChatTurn) => void;
+  /** Se llama al cerrar el turno (cualquier status): ya no hace falta el checkpoint. */
+  clearCheckpoint?: (id: string) => void;
 }
+
+/** Cada cuánto se re-escribe el checkpoint mientras el turno escribe texto —
+ *  no en cada delta, que sería un write por token. */
+export const CHECKPOINT_INTERVAL_MS = 3000;
 
 export interface StartTurnInput {
   prompt: string;
@@ -305,6 +321,9 @@ export function createTurnEngine(deps: TurnEngineDeps) {
     // El resume avanza con los intentos: si el primer intento alcanzó a crear
     // la sesión del SDK, el reintento CONTINÚA esa y no abre una nueva.
     let resume = input.resumeSessionId;
+    // Throttle del checkpoint de texto: independiente de los intentos, vive
+    // para toda la vida del turno.
+    let lastCheckpointAt = 0;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       turn.attempts = attempt;
@@ -369,12 +388,22 @@ export function createTurnEngine(deps: TurnEngineDeps) {
               turn.sdkSessionId = sessionId;
               resume = sessionId;
               emitEvent(turn.id, { kind: "session", sessionId });
+              // Checkpoint INMEDIATO, sin throttle: es el dato más valioso del
+              // turno (deja retomar la MISMA conversación del SDK aunque esta
+              // respuesta puntual se pierda en un reinicio) y no pasa seguido.
+              deps.checkpoint?.(turn);
+              lastCheckpointAt = deps.now();
             },
             onDelta: (text) => {
               if (!text) return;
               attemptText += text;
               turn.text += text;
               emitEvent(turn.id, { kind: "delta", text });
+              const now = deps.now();
+              if (now - lastCheckpointAt >= CHECKPOINT_INTERVAL_MS) {
+                lastCheckpointAt = now;
+                deps.checkpoint?.(turn);
+              }
             },
             onTool: (tool) => {
               turn.steps.push(tool);
@@ -455,6 +484,13 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       text: error,
     });
     aborts.delete(turn.id);
+    // El turno ya no está "en vuelo": el checkpoint cumplió su función (si
+    // el proceso llegó hasta acá, no hace falta reconciliar nada al arrancar).
+    try {
+      deps.clearCheckpoint?.(turn.id);
+    } catch {
+      /* best-effort */
+    }
     // Persistir aquí y no en la ruta: el turno se guarda aunque nadie esté
     // escuchando — que es justo el caso que rompía todo.
     if (!shouldPersist(turn)) return;
@@ -564,4 +600,6 @@ export const chatTurns: TurnEngine = createTurnEngine({
     void appendTurn(turn.project, stored, turn.text, turn.sessionKey);
     if (turn.sdkSessionId) void saveSdkSession(turn.sessionKey, turn.sdkSessionId, "text");
   },
+  checkpoint: (turn) => checkpointTurn(turn, env.MACHINE_NAME),
+  clearCheckpoint: (id) => clearCheckpoint(id),
 });

@@ -13,6 +13,7 @@ import { syncVaultKnowledge } from "./vault/knowledge-sync.js";
 import { startSystemSampler } from "./system.js";
 import { registerJob } from "./jobs.js";
 import { reconcileRunningTasks } from "./tasks/store.js";
+import { reconcileChatTurns } from "./chat-turn-checkpoints.js";
 import { relojRapido } from "./watch/rapido.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerWatchRoutes } from "./routes/watch.js";
@@ -133,6 +134,13 @@ registerVaultRoutes(app); // /projects*, /vault/doc
 startSystemSampler(); // sampler de CPU (5s) para GET /system
 void readProjects(); // primer parse + sync a projects_cache
 void reconcileRunningTasks(); // arregla tareas 'running' huérfanas de un reinicio
+// Turnos de chat que quedaron 'running' cuando el proceso ANTERIOR murió a
+// mitad de una respuesta (deploy, OOM): se persisten como parcial y se
+// limpia el checkpoint. Mismo patrón que reconcileRunningTasks, que el chat
+// nunca tuvo — ver chat-turn-checkpoints.ts.
+void reconcileChatTurns().then((n) => {
+  if (n > 0) console.log(`[hermes] ${n} turno(s) de chat recuperados de un reinicio anterior`);
+});
 
 // Jobs periódicos con estado observable (GET /jobs → panel AUTOMATIZACIONES).
 // Presencia: latido para que otras Macs sepan que estamos vivos.
