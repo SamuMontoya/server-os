@@ -18,6 +18,25 @@ export interface StoredMessage {
   content: string;
   ts: string;
   sessionId?: string;
+  /**
+   * Dueño del mensaje: el `userId` resuelto del JWT de Supabase (ver
+   * auth.ts), si el turno que lo generó tenía uno. Ausente en mensajes
+   * viejos (de antes de este campo) y en los que vinieron de la
+   * HERMES_API_KEY estática (LAN, sin login) — esos quedan visibles para
+   * cualquiera, como siempre. Ver `messageVisibleTo`.
+   */
+  userId?: string;
+}
+
+/**
+ * Regla de dueño de un mensaje — mismo criterio que `turnVisibleTo` en
+ * agent/chat-turns.ts, y por el mismo motivo: un mensaje sin `userId`
+ * (historial viejo, o generado por la key estática) es visible para
+ * cualquiera, y un requester sin `userId` (misma key estática) ve todo. Solo
+ * se filtra cuando AMBOS lados tienen `userId` y no coinciden.
+ */
+export function messageVisibleTo(msg: StoredMessage, requesterId?: string): boolean {
+  return !requesterId || !msg.userId || msg.userId === requesterId;
 }
 
 /**
@@ -96,13 +115,25 @@ export async function getConversation(project: string): Promise<StoredMessage[]>
 // Serializa TODAS las escrituras para evitar carreras de lectura-modificación.
 let writeChain: Promise<unknown> = Promise.resolve();
 
-async function doAppend(project: string, user: string, assistant: string, sessionId?: string) {
+async function doAppend(
+  project: string,
+  user: string,
+  assistant: string,
+  sessionId?: string,
+  userId?: string,
+) {
   await mkdir(DIR, { recursive: true });
   const file = fileFor(project);
   const existing = await getConversation(project);
   const now = new Date().toISOString();
-  const userMsg: StoredMessage = { role: "user", content: user, ts: now, sessionId };
-  const assistantMsg: StoredMessage = { role: "assistant", content: assistant, ts: now, sessionId };
+  const userMsg: StoredMessage = { role: "user", content: user, ts: now, sessionId, userId };
+  const assistantMsg: StoredMessage = {
+    role: "assistant",
+    content: assistant,
+    ts: now,
+    sessionId,
+    userId,
+  };
   existing.push(userMsg, assistantMsg);
   const trimmed = existing.slice(-MAX_STORED);
   const tmp = `${file}.tmp`;
@@ -117,10 +148,11 @@ export function appendTurn(
   user: string,
   assistant: string,
   sessionId?: string,
+  userId?: string,
 ): Promise<void> {
   // best-effort: nunca romper el chat si falla el disco.
   writeChain = writeChain
-    .then(() => doAppend(project, user, assistant, sessionId))
+    .then(() => doAppend(project, user, assistant, sessionId, userId))
     .catch((err) => console.error("[conversations] no se pudo guardar:", err));
   return writeChain as Promise<void>;
 }

@@ -19,6 +19,7 @@ interface CheckpointRow {
   prompt: string;
   text: string;
   sdk_session_id: string | null;
+  user_id: string | null;
   attempts: number;
   updated_at: string;
 }
@@ -35,6 +36,7 @@ export function checkpointTurn(turn: ChatTurn, machineName: string): void {
       prompt: turn.prompt,
       text: turn.text,
       sdk_session_id: turn.sdkSessionId ?? null,
+      user_id: turn.userId ?? null,
       attempts: turn.attempts,
       machine: machineName,
       updated_at: new Date().toISOString(),
@@ -81,7 +83,13 @@ export async function reconcileChatTurns(): Promise<number> {
     if (texto) {
       const nota =
         `${row.text}\n\n⚠ _Se interrumpió aquí: el agente se reinició a mitad de esta respuesta._`;
-      await appendTurn(row.project, row.prompt, nota, row.session_key).catch((err) =>
+      await appendTurn(
+        row.project,
+        row.prompt,
+        nota,
+        row.session_key,
+        row.user_id ?? undefined,
+      ).catch((err) =>
         console.error("[chat-checkpoint] reconcile appendTurn:", err),
       );
     }

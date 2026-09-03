@@ -61,6 +61,13 @@ export interface ChatTurn {
   project: string;
   prompt: string;
   /**
+   * Dueño del turno: el `userId` que el middleware de index.ts resolvió del
+   * JWT de Supabase (ver auth.ts). Ausente cuando el turno lo disparó la
+   * HERMES_API_KEY estática (LAN/reloj, sin login) — esos turnos no tienen
+   * dueño y quedan visibles para cualquiera, como siempre. Ver `turnVisibleTo`.
+   */
+  userId?: string;
+  /**
    * Rutas absolutas de las imágenes adjuntas. Viven en el turno (no solo en el
    * input) porque el motor reintenta hasta 3 veces: cada intento tiene que
    * volver a mandar los mismos adjuntos, o el reintento perdería la imagen y
@@ -168,6 +175,23 @@ export function shouldPersist(turn: ChatTurn): boolean {
   return turn.text.trim().length > 0;
 }
 
+/**
+ * Regla de dueño de un turno. Vive aquí (no en la ruta) por el mismo motivo
+ * que `shouldPersist`: es una regla del dominio, cubierta por sus propios
+ * tests.
+ *
+ * Un turno sin `userId` (HERMES_API_KEY estática, reloj) es visible para
+ * cualquiera — así se comportaba TODO antes de que existiera `userId`, y
+ * cambiarlo rompería el modo LAN/reloj sin login. Un requester sin `userId`
+ * (misma credencial estática) también ve cualquier turno: es "full trust",
+ * igual que hoy. Solo se niega cuando AMBOS lados tienen `userId` y no
+ * coinciden — dos usuarios de Supabase distintos no pueden leer ni cancelar
+ * el turno del otro.
+ */
+export function turnVisibleTo(turn: ChatTurn, requesterId?: string): boolean {
+  return !requesterId || !turn.userId || turn.userId === requesterId;
+}
+
 // ── Dependencias inyectables ───────────────────────────────────────────
 export interface TurnRunnerArgs {
   prompt: string;
@@ -226,6 +250,8 @@ export interface StartTurnInput {
   sessionKey: string;
   project?: string;
   cwd?: string;
+  /** Dueño del turno (ver ChatTurn.userId). Ausente = HERMES_API_KEY/reloj. */
+  userId?: string;
   /** Techo de nivel del turno. El canal del reloj lo fija en `light`. */
   maxTier?: Tier;
   /** Salta la precarga de contexto del prompt (canal del reloj). */
@@ -304,6 +330,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       project: input.project || "general",
       prompt: input.prompt,
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      ...(input.userId ? { userId: input.userId } : {}),
       status: "running",
       text: "",
       steps: [],
@@ -597,7 +624,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
     // barren a los 30 días) y ensuciarían la búsqueda semántica con ruido que
     // no significa nada para el Samu que relea esto en dos meses.
     const stored = turn.prompt + attachmentNote(turn.attachments?.length ?? 0);
-    void appendTurn(turn.project, stored, turn.text, turn.sessionKey);
+    void appendTurn(turn.project, stored, turn.text, turn.sessionKey, turn.userId);
     if (turn.sdkSessionId) void saveSdkSession(turn.sessionKey, turn.sdkSessionId, "text");
   },
   checkpoint: (turn) => checkpointTurn(turn, env.MACHINE_NAME),

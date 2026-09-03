@@ -9,9 +9,11 @@ import assert from "node:assert/strict";
 import {
   createTurnEngine,
   isRetryable,
+  turnVisibleTo,
   MAX_ATTEMPTS,
   MAX_CONTINUATIONS,
   CHECKPOINT_INTERVAL_MS,
+  type ChatTurn,
   type TurnEvent,
   type TurnRunnerArgs,
   type TurnRunnerResult,
@@ -379,6 +381,40 @@ test("isRetryable separa lo transitorio de lo que no lo es", () => {
     assert.equal(isRetryable(m), true, m);
   for (const m of ["no encontré el archivo", "permiso denegado por el usuario", "prompt vacío"])
     assert.equal(isRetryable(m), false, m);
+});
+
+test("turnVisibleTo: solo choca cuando AMBOS lados tienen userId y no coinciden", () => {
+  const turnDe = (userId?: string): ChatTurn => ({
+    id: "t1",
+    sessionKey: "tab-1",
+    project: "general",
+    prompt: "p",
+    status: "done",
+    text: "hola",
+    steps: [],
+    attempts: 1,
+    startedAt: 0,
+    ...(userId ? { userId } : {}),
+  });
+  // Turno sin dueño (HERMES_API_KEY estática / reloj): visible para todos.
+  assert.equal(turnVisibleTo(turnDe(undefined), "user-a"), true);
+  assert.equal(turnVisibleTo(turnDe(undefined), undefined), true);
+  // Requester sin userId (misma key estática): full trust, ve cualquier turno.
+  assert.equal(turnVisibleTo(turnDe("user-a"), undefined), true);
+  // Mismo dueño: visible.
+  assert.equal(turnVisibleTo(turnDe("user-a"), "user-a"), true);
+  // Dueños distintos: el único caso que se niega.
+  assert.equal(turnVisibleTo(turnDe("user-a"), "user-b"), false);
+});
+
+test("start() guarda el userId del requester en el turno", async () => {
+  const h = engineWith(ok("hola"));
+  const turn = h.engine.start({ prompt: "p", sessionKey: "tab-1", userId: "user-a" });
+  assert.equal(turn.userId, "user-a");
+  await settle();
+  assert.equal(h.engine.snapshot(turn.id)!.userId, "user-a");
+  const anonimo = h.engine.start({ prompt: "p", sessionKey: "tab-2" });
+  assert.equal(anonimo.userId, undefined);
 });
 
 test("un suscriptor que revienta no tumba el turno ni a los demás", async () => {

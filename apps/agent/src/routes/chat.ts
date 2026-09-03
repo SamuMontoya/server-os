@@ -2,9 +2,10 @@ import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import { env } from "../env.js";
+import { withUser } from "../auth.js";
 import { getSdkSession } from "../agent/session.js";
 import { listChatSessions, readChatSession, resolveChatCwd } from "../agent/chat-history.js";
-import { chatTurns, type TurnEvent } from "../agent/chat-turns.js";
+import { chatTurns, turnVisibleTo, type TurnEvent } from "../agent/chat-turns.js";
 import { titleForChat } from "../agent/chat-title.js";
 import { gistForAnswer } from "../agent/chat-gist.js";
 import {
@@ -21,6 +22,7 @@ import {
   archiveConversation,
   listChats,
   restoreChat,
+  messageVisibleTo,
 } from "../conversations.js";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -120,6 +122,7 @@ export function registerChatRoutes(app: Hono): void {
       project: focusProject,
       cwd,
       resumeSessionId: resume,
+      userId: withUser(c).get("userId"),
     });
 
     return streamSSE(c, async (stream) => {
@@ -244,6 +247,7 @@ export function registerChatRoutes(app: Hono): void {
       project,
       cwd: await resolveChatCwd(project),
       resumeSessionId: resume,
+      userId: withUser(c).get("userId"),
     });
     return c.json({ turn_id: turn.id, status: turn.status, seq: 0 });
   });
@@ -273,8 +277,15 @@ export function registerChatRoutes(app: Hono): void {
 
   /** Estado + lo que falte desde `from`. Es lo que pide quien vuelve. */
   app.get("/chat/turns/:id", (c) => {
+    const id = c.req.param("id");
+    const turn = chatTurns.get(id);
+    // Mismo 404 tanto si el turno no existe como si es de otro usuario: no
+    // hay que confirmarle a nadie que un turno ajeno existe.
+    if (!turn || !turnVisibleTo(turn, withUser(c).get("userId"))) {
+      return c.json({ error: "turno no encontrado" }, 404);
+    }
     const from = Number(c.req.query("from") ?? 0) || 0;
-    const snap = chatTurns.snapshot(c.req.param("id"), from);
+    const snap = chatTurns.snapshot(id, from);
     if (!snap) return c.json({ error: "turno no encontrado" }, 404);
     return c.json(snap);
   });
@@ -283,11 +294,16 @@ export function registerChatRoutes(app: Hono): void {
   app.get("/chat/turns", (c) => {
     const session = c.req.query("session");
     if (!session) return c.json({ error: "session requerido" }, 400);
-    return c.json(chatTurns.listBySession(session, Number(c.req.query("limit") ?? 5) || 5));
+    const userId = withUser(c).get("userId");
+    const turns = chatTurns.listBySession(session, Number(c.req.query("limit") ?? 5) || 5);
+    return c.json(turns.filter((t) => turnVisibleTo(t, userId)));
   });
 
   app.post("/chat/turns/:id/stop", (c) => {
-    const stopped = chatTurns.stop(c.req.param("id"));
+    const id = c.req.param("id");
+    const turn = chatTurns.get(id);
+    if (!turn || !turnVisibleTo(turn, withUser(c).get("userId"))) return c.json({ ok: false });
+    const stopped = chatTurns.stop(id);
     return c.json({ ok: stopped });
   });
 
@@ -299,7 +315,10 @@ export function registerChatRoutes(app: Hono): void {
   app.get("/chat/turns/:id/stream", (c) => {
     const id = c.req.param("id");
     const from = Number(c.req.query("from") ?? 0) || 0;
-    if (!chatTurns.get(id)) return c.json({ error: "turno no encontrado" }, 404);
+    const turn = chatTurns.get(id);
+    if (!turn || !turnVisibleTo(turn, withUser(c).get("userId"))) {
+      return c.json({ error: "turno no encontrado" }, 404);
+    }
 
     return streamSSE(c, async (stream) => {
       let queue: Promise<unknown> = Promise.resolve();
@@ -355,10 +374,20 @@ export function registerChatRoutes(app: Hono): void {
   // ── Historial de conversaciones por proyecto ──────────────────────────
   app.get("/conversations/:project", async (c) => {
     const project = c.req.param("project") || "general";
+    const userId = withUser(c).get("userId");
     const messages = await getConversation(project);
-    return c.json(messages.slice(-200)); // últimos 200 mensajes
+    // El proyecto es la clave del archivo, no el dueño: sin este filtro,
+    // cualquier usuario de Supabase con acceso lee la consola de CUALQUIER
+    // otro (ver messageVisibleTo — mensajes sin userId, de antes de este
+    // campo o de la key estática, se quedan visibles para todos).
+    const visible = messages.filter((m) => messageVisibleTo(m, userId));
+    return c.json(visible.slice(-200)); // últimos 200 mensajes
   });
 
+  // Borra el archivo entero del proyecto, no solo los mensajes propios —
+  // comportamiento sin cambios: "vaciar la consola" es una acción explícita
+  // sobre el proyecto, no sobre un mensaje puntual, y partirla por dueño
+  // dejaría el archivo en un estado a medias que nadie pidió.
   app.delete("/conversations/:project", async (c) => {
     const project = c.req.param("project") || "general";
     await clearConversation(project);
@@ -381,6 +410,14 @@ export function registerChatRoutes(app: Hono): void {
 
   // Historial de chats: lista de archivados, "nuevo chat" (archiva el activo)
   // y restaurar uno viejo como conversación activa.
+  //
+  // NO están filtrados por userId como el GET de arriba: son archivos por
+  // proyecto que pueden mezclar mensajes de varios usuarios, y separarlos
+  // (título del primer mensaje, conteo, restore parcial) exigiría partir
+  // cada chat archivado a mitad de camino — un cambio de forma, no un
+  // filtro. Gap conocido y documentado, no arreglado en esta pasada: el
+  // riesgo real es bajo hoy (mono-usuario, allowlist de correos) pero crece
+  // si el allowlist se abre a más gente.
   app.get("/conversations/:project/chats", async (c) =>
     c.json(await listChats(c.req.param("project") || "general")),
   );
