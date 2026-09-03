@@ -43,7 +43,7 @@ export function BotonGoogle({ destino }: { destino?: string }) {
         type="button"
         onClick={entrarConGoogle}
         disabled={cargando}
-        className="flex w-full cursor-pointer items-center justify-center gap-3 rounded-sm border border-line bg-panel-2 px-4 py-3 text-sm text-text transition-colors hover:border-line-2 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex w-full cursor-pointer items-center justify-center gap-3 rounded-sm border border-[#e3e2e0] bg-white px-4 py-3 text-sm text-[#37352f] transition-colors hover:bg-[#f4f3f0] disabled:cursor-not-allowed disabled:opacity-50"
       >
         {cargando ? (
           <span className="pulse-dot">◌</span>
@@ -71,7 +71,7 @@ export function BotonGoogle({ destino }: { destino?: string }) {
         )}
         {cargando ? "Conectando…" : "Continuar con Google"}
       </button>
-      {error && <p className="text-2xs text-red">{error}</p>}
+      {error && <p className="login-copy text-[#eb5757]">{error}</p>}
     </div>
   );
 }

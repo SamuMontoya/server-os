@@ -2290,3 +2290,27 @@ html.orbe-route body {
 html.orbe-route body::after {
   content: none;
 }
+
+/* ── Login: mismo papel blanco minimalista del Chat (.lab-hello) ─────────
+   Una sola pantalla — saludo grande, una línea de copy, el botón de Google —
+   así que no hereda el tema oscuro violeta del resto del dashboard: entra
+   ANTES que el usuario tenga sesión, y ese tema es el que ve alguien que
+   todavía no ha llegado a ningún lado dentro del producto. */
+.login-paper {
+  background: #fff;
+  color: #37352f;
+  font-family: var(--font-notion);
+}
+.login-hello {
+  margin: 0;
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: #37352f;
+}
+.login-copy {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #9b9a97;
+}

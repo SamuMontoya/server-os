@@ -33,27 +33,16 @@ export default async function LoginPage({
   if (user) redirect(next && next.startsWith("/") ? next : "/");
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
-      <div className="w-full max-w-sm">
-        <h1 className="text-xs font-semibold tracking-hero uppercase">
-          <span className="text-violet">OS</span>
-        </h1>
-        <p className="mt-6 text-base text-text-dim">
-          Hola, {OWNER}. Entra para abrir tu consola.
-        </p>
+    <main className="login-paper flex min-h-screen items-center justify-center p-6">
+      <div className="flex w-full max-w-sm flex-col items-center text-center">
+        <p className="login-hello">Hola{OWNER ? ` ${OWNER}` : ""}</p>
+        <p className="login-copy">Entra para abrir tu consola.</p>
 
-        <div className="mt-8">
+        <div className="mt-7 w-full">
           <BotonGoogle destino={next && next.startsWith("/") ? next : "/"} />
         </div>
 
-        {error && (
-          <p className="mt-4 text-2xs text-amber">{MOTIVOS[error] ?? MOTIVOS["1"]}</p>
-        )}
-
-        <p className="mt-10 text-2xs leading-relaxed text-text-faint">
-          Este dashboard controla un agente con acceso real a tu máquina. El acceso está
-          restringido a tu cuenta.
-        </p>
+        {error && <p className="login-copy mt-4 text-[#eb5757]">{MOTIVOS[error] ?? MOTIVOS["1"]}</p>}
       </div>
     </main>
   );
