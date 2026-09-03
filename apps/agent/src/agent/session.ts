@@ -8,7 +8,7 @@ import { emit } from "../events.js";
 import { notifyMac } from "../notify.js";
 import { setPresence } from "../presence.js";
 import { supabase } from "../supabase.js";
-import { buildSystemPrompt } from "./system-prompt.js";
+import { buildTurnContext, systemPromptFor } from "./system-prompt.js";
 import { checkTool } from "./guardrails.js";
 import { hermesMcpServer, HERMES_TOOL_NAMES } from "./tools.js";
 import { linearEnabled } from "../linear.js";
@@ -94,10 +94,28 @@ export interface RunTurnOptions {
    */
   attachments?: string[];
   resumeSessionId?: string;
+  /**
+   * Clave del HILO (la pestaña del chat), estable desde el primer mensaje.
+   *
+   * Es la que fija el nivel del router, y no `resumeSessionId`. El id de sesión
+   * del SDK no existe todavía en el primer turno —lo devuelve el propio SDK en
+   * el init—, así que usarlo como clave dejaba el primer mensaje sin fijar y el
+   * nivel de TODO el hilo lo acababa decidiendo el SEGUNDO: un "Arregla el bug
+   * del login" seguido de un "gracias" clavaba la conversación entera en haiku.
+   * Reproducido en scripts/probe-pin.ts.
+   */
+  sessionKey?: string;
   /** Techo de nivel para ESTE turno. Lo usa el canal del reloj. */
   maxTier?: Tier;
   /** Salta la precarga de contexto del prompt de sistema (canal del reloj). */
   magro?: boolean;
+  /**
+   * `false` salta SOLO la recuperación semántica del turno (memorias +
+   * conocimiento relevante al mensaje), no la identidad ni los proyectos.
+   * Lo usan las auto-continuaciones: su mensaje es un "sigue" sintético y
+   * buscar conocimiento con él es pagar por ruido. Default: true.
+   */
+  precargarContexto?: boolean;
   /** Interno: marca el reintento del escalado para no reintentar en bucle. */
   _escalated?: boolean;
   taskId?: string;
@@ -167,17 +185,46 @@ export interface RunTurnResult {
    * escribir "continúa" a mano. Ver el consumidor en chat-turns.ts (drive()).
    */
   errorSubtype?: string;
+  /** Consumo real del turno, tal como lo reportó el SDK. Ver TurnUsage. */
+  usage?: TurnUsage;
+}
+
+/**
+ * Consumo de UN turno. `cacheado` (0-1) es el indicador que hay que vigilar:
+ * es la fracción del prefijo que se reusó del caché. Un hilo sano se estabiliza
+ * arriba del 90% a partir del segundo turno; si se hunde, alguien volvió a
+ * meter contenido variable en el system prompt.
+ */
+export interface TurnUsage {
+  entrada: number;
+  salida: number;
+  cacheEscrito: number;
+  cacheLeido: number;
+  /** 0-1: cacheLeido / (cacheLeido + cacheEscrito + entrada). */
+  cacheado: number;
+  costoUsd?: number;
 }
 
 export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
   // El perfil decide cuánto contexto se PRECARGA (ver budget.ts).
   const _profile = await currentProfile();
-  const systemPrompt = await buildSystemPrompt(
-    opts.prompt,
-    opts.project,
-    _profile.retrieval,
-    opts.magro,
-  );
+  // El system prompt es ESTABLE por sesión (memoizado, sin el mensaje dentro):
+  // es lo que hace que el caché de prompt pegue turno a turno. El contexto que
+  // sí depende del mensaje se arma aparte y viaja pegado al mensaje. Ver el
+  // comentario largo en system-prompt.ts — de aquí venía el consumo.
+  //
+  // Las dos se piden a la vez: la búsqueda semántica contra Supabase son
+  // varios segundos y encadenarlas era tiempo hasta la primera palabra.
+  const [systemPrompt, turnContext] = await Promise.all([
+    systemPromptFor(opts.project, opts.magro),
+    // `precargarContexto: false` = auto-continuación (ver chat-turns.ts): el
+    // mensaje es un "sigue" sintético, así que buscar conocimiento semántico
+    // con él devuelve ruido y se paga igual. El contexto real ya está en el
+    // historial del turno que se está continuando.
+    opts.precargarContexto === false
+      ? Promise.resolve("")
+      : buildTurnContext(opts.prompt, _profile.retrieval, opts.magro),
+  ]);
 
   // Enrutamiento del turno. La clasificación es local (cero tokens) y el nivel
   // queda FIJO por sesión: el caché de prompt es por modelo, así que cambiarlo
@@ -191,7 +238,8 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   const route = routerEnabled()
     ? routeTurn(
         opts.prompt,
-        opts.resumeSessionId,
+        // La clave del hilo primero: existe desde el turno 1, el id del SDK no.
+        opts.sessionKey ?? opts.resumeSessionId,
         attachments.length > 0 ? IMAGE_FLOOR_TIER : undefined,
       )
     : { tier: "deep" as Tier, reason: "router desactivado", pinned: false };
@@ -212,6 +260,10 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     model: tierOpts.model,
     ...(effort && tierOpts.model !== "haiku" ? { effort } : {}),
   };
+  // Igual que con el nivel y el esfuerzo: dos techos y gana el más bajo. El del
+  // nivel acota por para-qué-sirve-este-turno (router.ts) y el del perfil por
+  // cuánta ventana queda (budget.ts).
+  const maxTurns = Math.min(tierOpts.maxTurns, profile.maxTurns);
   // El modelo se anuncia SIEMPRE (aunque el nivel venga fijado por la sesión):
   // el cliente necesita saber con qué está respondiendo, no solo cuándo cambia.
   opts.onModel?.(tierOpts.model, effort);
@@ -227,6 +279,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   let toolCalls = 0;
   let isError = false;
   let errorSubtype: string | undefined;
+  let usage: TurnUsage | undefined;
   let deltasSeen = false;
 
   setPresence("working", opts.prompt.slice(0, 120));
@@ -235,9 +288,16 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // alimenta buildSystemPrompt (retrieval) y el que se persiste en el
   // historial: las rutas del .data no son contexto útil para la búsqueda
   // semántica ni para releer la conversación dentro de un mes.
-  const sdkPrompt = attachments.length
-    ? `${attachmentPreamble(attachments)}\n\n${opts.prompt}`
-    : opts.prompt;
+  //
+  // El contexto recuperado va DELANTE del mensaje y no en el system prompt:
+  // ahí cambia en cada turno y rompería el prefijo cacheado (system-prompt.ts).
+  const sdkPrompt = [
+    turnContext,
+    attachments.length ? attachmentPreamble(attachments) : "",
+    opts.prompt,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   try {
     const q = query({
@@ -246,7 +306,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         cwd: opts.cwd || env.VAULT_PATH || process.cwd(),
         systemPrompt,
         ...modelOpts,
-        maxTurns: profile.maxTurns,
+        maxTurns,
         includePartialMessages: true,
         settingSources: [],
         resume: opts.resumeSessionId,
@@ -280,6 +340,40 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
               },
             }
           : undefined,
+        // El catálogo BASE de tools built-in. Esta opción es la que RECORTA;
+        // `allowedTools` (abajo) solo auto-aprueba lo que ya está cargado —
+        // son dos cosas distintas y el SDK lo dice explícitamente en su tipo:
+        // "To restrict which tools are available, use the `tools` option
+        // instead". Sin ella se carga el preset `claude_code` COMPLETO.
+        //
+        // MEDIDO con el SDK (haiku, un prompt de una palabra, comparando
+        // `cache_creation_input_tokens`):
+        //   preset completo …… 28.855 tokens de prefijo POR TURNO
+        //   esta lista ……….… 10.369
+        //   tools: [] ………….…      241
+        // O sea que el preset entero costaba ~18.500 tokens por turno en
+        // esquemas de herramientas que este chat no usa nunca (Artifact,
+        // NotebookEdit, ToolSearch, Skill, EnterPlanMode, Cron*, Monitor,
+        // DesignSync, worktrees…). Multiplicado por los turnos de un mensaje
+        // era la partida más grande del consumo, más que el historial.
+        //
+        // La lista se DERIVA de lo que este agente declara necesitar: los de
+        // `allowedTools` de abajo, más Bash/Write/Edit, que a propósito NO van
+        // ahí porque pasan por `canUseTool` → guardrails. Ojo: quitar uno de
+        // esos tres de aquí no lo "asegura", lo hace invisible — el guardrail
+        // dejaría de tener nada que vigilar y el agente no podría trabajar.
+        tools: [
+          "Read",
+          "Glob",
+          "Grep",
+          "Bash",
+          "Write",
+          "Edit",
+          "WebSearch",
+          "WebFetch",
+          "TodoWrite",
+          ...(subagentsEnabled() || profile.forceSubagents ? ["Task"] : []),
+        ],
         allowedTools: [
           "Read",
           "Glob",
@@ -410,6 +504,40 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
           isError = true;
           errorSubtype = m.subtype as string;
         }
+        // Consumo REAL del turno. Antes se descartaba entero, y eso dejaba al
+        // proyecto sin poder responder su propia pregunta: "¿cuánto gastó este
+        // mensaje?" solo se podía mirar en el porcentaje agregado de la ventana
+        // de 5 h, que llega tarde y no dice de dónde salió. Sin este dato, una
+        // mejora de consumo no se puede confirmar ni una regresión detectar.
+        //
+        // El que importa es `cacheado`: es la fracción del prefijo que se
+        // reusó. Si baja, algo volvió a romper el caché de prompt (ver el
+        // comentario largo de system-prompt.ts) y el gasto se multiplica sin
+        // que cambie nada visible.
+        const u = (m as { usage?: Record<string, number> }).usage;
+        if (u) {
+          const leido = u.cache_read_input_tokens ?? 0;
+          const escrito = u.cache_creation_input_tokens ?? 0;
+          const entrada = u.input_tokens ?? 0;
+          const prefijo = leido + escrito + entrada;
+          usage = {
+            entrada,
+            salida: u.output_tokens ?? 0,
+            cacheEscrito: escrito,
+            cacheLeido: leido,
+            cacheado: prefijo > 0 ? leido / prefijo : 0,
+            costoUsd: (m as { total_cost_usd?: number }).total_cost_usd,
+          };
+          emit({
+            kind: "text",
+            taskId: opts.taskId,
+            detail:
+              `[consumo] ${tierOpts.model}${effort ? `/${effort}` : ""} · ` +
+              `prefijo ${prefijo.toLocaleString()} (caché ${Math.round(usage.cacheado * 100)}%) · ` +
+              `salida ${usage.salida.toLocaleString()}` +
+              (usage.costoUsd !== undefined ? ` · $${usage.costoUsd.toFixed(4)}` : ""),
+          });
+        }
       }
     }
   } catch (err) {
@@ -439,9 +567,25 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // `runAgentTurn` no sabe que ya se streameó algo— cuando lo correcto es
   // simplemente CONTINUAR en la misma sesión; eso lo hace chat-turns.ts con
   // `errorSubtype` (ver MAX_CONTINUATIONS ahí).
+  // `api_error` queda fuera por la misma razón, y es la que más caro salía: un
+  // 429 / 529 / overloaded / 500 no dice NADA sobre si el modelo daba la talla
+  // — dice que el otro lado está saturado o que se pasó un límite. Escalar ahí
+  // era contraproducente por los dos lados: se re-corría el turno entero en un
+  // modelo 2,5× más caro Y con más probabilidad de volver a chocar contra el
+  // límite, que es justo lo que se acaba de chocar. Reintentar en el MISMO
+  // nivel con backoff es lo correcto, y eso ya lo hace chat-turns.ts
+  // (`isRetryable` + BACKOFF_MS).
+  //
+  // Y ojo con el efecto multiplicador que tenía: `_escalated` es interno a
+  // esta función, así que se reinicia en cada intento de chat-turns.ts. Con
+  // MAX_ATTEMPTS = 3, una racha de 429 daba 3 intentos × 2 corridas = 6
+  // ejecuciones completas del turno, subiendo de modelo por la escalera.
+  const escalable = errorSubtype !== "error_max_turns" && errorSubtype !== "api_error";
   const up = nextTier(tier);
-  if (isError && errorSubtype !== "error_max_turns" && up && routerEnabled() && !opts._escalated) {
-    escalateSession(opts.resumeSessionId ?? sdkSessionId, up);
+  if (isError && escalable && up && routerEnabled() && !opts._escalated) {
+    // La MISMA clave que usó routeTurn, o el escalado fijaría un hilo distinto
+    // del que se acaba de enrutar (y el pin quedaría sin efecto).
+    escalateSession(opts.sessionKey ?? opts.resumeSessionId ?? sdkSessionId, up);
     emit({
       kind: "error",
       taskId: opts.taskId,
@@ -450,7 +594,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     return runAgentTurn({ ...opts, resumeSessionId: sdkSessionId ?? opts.resumeSessionId, _escalated: true });
   }
 
-  return { sdkSessionId, finalText, toolCalls, isError, errorSubtype };
+  return { sdkSessionId, finalText, toolCalls, isError, errorSubtype, usage };
 }
 
 // ── Mapeo sesión-cliente (X-Hermes-Session-Id) → sesión SDK ────────────

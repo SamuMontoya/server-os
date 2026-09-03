@@ -386,3 +386,87 @@ test("un suscriptor que revienta no tumba el turno ni a los demás", async () =>
   assert.equal(h.engine.snapshot(turn.id)!.status, "done");
   assert.ok(sano.length > 0);
 });
+
+test("la PROSA del modelo no se juzga como error transitorio", async () => {
+  // Regresión de costo. `isRetryable()` hace match de subcadenas ("timeout",
+  // "500", "network"…) y antes se le pasaba `result.finalText`, o sea el texto
+  // del MODELO. Hermes es un asistente técnico que habla de códigos HTTP a
+  // diario, así que una respuesta perfectamente normal como la de abajo se
+  // leía como un fallo de red y RE-EJECUTABA el mensaje entero 3 veces.
+  //
+  // El guardia `partial` no cubría esto: solo mira si llegaron deltas, y el
+  // SDK puede cerrar con el texto final sin haber mandado ninguno — que es
+  // exactamente lo que simula este handler.
+  const h = engineWith(async () => ({
+    finalText: "Revisé el endpoint y devolvió 500 con un timeout de red.",
+    isError: true,
+    errorSubtype: "error_during_execution",
+  }));
+  const turn = h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  await settle();
+  const snap = h.engine.snapshot(turn.id)!;
+  assert.equal(snap.status, "error");
+  assert.equal(h.attempts(), 1, "no debe reintentar por lo que DICE el modelo");
+});
+
+test("un error de API sí se reintenta aunque el texto no suene a red", async () => {
+  // El espejo del test anterior: la señal buena es `errorSubtype`, no el texto.
+  const h = engineWith(async (args, attempt) => {
+    if (attempt === 1) {
+      return { finalText: "algo salió mal", isError: true, errorSubtype: "api_error" };
+    }
+    args.onDelta("ok");
+    return { finalText: "", isError: false };
+  });
+  const turn = h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  await settle();
+  assert.equal(h.engine.snapshot(turn.id)!.status, "done");
+  assert.equal(h.attempts(), 2);
+});
+
+test("el motor le pasa al runner la clave del HILO (fija el nivel del router)", async () => {
+  // Regresión de costo Y de calidad. El nivel del router se fija por hilo, y
+  // antes se usaba como clave el id de sesión del SDK — que en el PRIMER turno
+  // todavía no existe (lo devuelve el SDK en su init). Resultado: el primer
+  // mensaje no fijaba nada y el nivel de toda la conversación lo decidía el
+  // SEGUNDO. Un "Arregla el bug del login" seguido de un "gracias" clavaba un
+  // hilo de código entero en haiku.
+  //
+  // La clave correcta es `sessionKey` (la pestaña del chat): existe desde el
+  // primer mensaje y dura toda la conversación. Este test vigila que llegue
+  // hasta el runner — el salto donde ya se perdió `maxTier` una vez, porque el
+  // adaptador de producción copia campo a campo en vez de hacer spread.
+  const vistos: (string | undefined)[] = [];
+  const h = engineWith(async (args) => {
+    vistos.push(args.sessionKey);
+    args.onDelta("ok");
+    return { finalText: "", isError: false };
+  });
+  h.engine.start({ prompt: "Arregla el bug del login", sessionKey: "tab-uuid-1" });
+  await settle();
+  assert.deepEqual(vistos, ["tab-uuid-1"]);
+});
+
+test("las auto-continuaciones NO repiten la búsqueda semántica del turno", async () => {
+  // La continuación manda CONTINUE_PROMPT, un "sigue" sintético. Buscar
+  // conocimiento semántico con ese texto devuelve ruido y se paga igual (el
+  // contexto que hacía falta ya está en el historial de la sesión que se
+  // continúa), así que la precarga se apaga a partir de la primera.
+  const flags: (boolean | undefined)[] = [];
+  const h = engineWith(async (args, attempt) => {
+    flags.push(args.precargarContexto);
+    if (attempt === 1) {
+      args.onSession("sdk-1");
+      return { finalText: "", isError: true, errorSubtype: "error_max_turns" };
+    }
+    args.onDelta("listo");
+    return { finalText: "", isError: false };
+  });
+  const turn = h.engine.start({ prompt: "haz la tarea larga", sessionKey: "tab-1" });
+  await settle();
+  await settle();
+  assert.equal(h.engine.snapshot(turn.id)!.status, "done");
+  assert.deepEqual(flags, [true, false], "el turno real precarga; la continuación no");
+});

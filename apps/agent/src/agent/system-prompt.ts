@@ -61,20 +61,31 @@ El usuario está en su página VIDA (finanzas personales + hábitos + metas) hab
 /**
  * Ensambla el system prompt de Hermes explícitamente (no dependemos del
  * autoload por cwd): identidad + perfil del vault + proyectos activos +
- * preferencias + memorias recientes y relevantes al primer mensaje.
+ * preferencias.
+ *
+ * INVARIANTE CRÍTICA DE COSTO — este prompt NO puede depender del mensaje.
+ * El caché de prompt de Anthropic hace match por PREFIJO EXACTO y el system
+ * prompt ocupa la posición 0: si cambia un solo byte entre turnos, no se
+ * invalida "un pedacito" sino el prefijo COMPLETO, y el turno vuelve a cobrar
+ * todo el historial a precio de entrada nueva. Antes esta función recibía el
+ * mensaje del turno y metía `searchKnowledge(mensaje)` + `recentMemories()` en
+ * el prompt: dos fuentes que cambian en CADA turno (la búsqueda semántica por
+ * definición, y las memorias porque el propio prompt ordena guardarlas). O sea
+ * que el sistema garantizaba fallo de caché en todos los turnos menos el
+ * primero, y encima las auto-continuaciones (CONTINUE_PROMPT en chat-turns.ts)
+ * generaban un tercer prompt distinto. Con `maxTurns: 40` × 3 continuaciones
+ * eso son hasta 120 llamadas seguidas re-cobrando un historial que crece: el
+ * costo sale cuadrático en vez de lineal. Era la causa del salto de 0 a 46% de
+ * la ventana de 5 h en dos mensajes.
+ *
+ * Lo que sí depende del mensaje (memorias + conocimiento relevante) se arma
+ * aparte con `buildTurnContext()` y viaja en el MENSAJE DEL USUARIO, que es
+ * donde un contenido variable no rompe nada: va al final del prefijo, después
+ * de todo lo cacheado.
  */
 export async function buildSystemPrompt(
-  firstUserMessage?: string,
   focusSlug?: string,
-  /** Cuánto contexto PRECARGAR. Lo fija el perfil de consumo (budget.ts):
-   * en modo bajo se precarga poco y el agente amplía con search_knowledge
-   * solo si lo necesita — se paga contexto pedido, no especulativo. */
-  retrieval: { recent: number; relevant: number; chars: number } = {
-    recent: 5,
-    relevant: 8,
-    chars: 300,
-  },
-  /** Salta toda la precarga de contexto. Lo usa el canal del reloj. */
+  /** Salta la precarga de proyectos/preferencias. Lo usa el canal del reloj. */
   magro = false,
 ): Promise<string> {
   const parts: string[] = [];
@@ -90,14 +101,10 @@ export async function buildSystemPrompt(
   // necesite con search_knowledge; lo que se quita es la precarga
   // especulativa, que para "¿cuánto espacio libre hay?" no aporta nada y se
   // paga entera antes de la primera palabra.
-  const [perfilTxt, projects, prefs, recent, relevant] = await Promise.all([
+  const [perfilTxt, projects, prefs] = await Promise.all([
     readFile(join(env.VAULT_PATH, "10 Notas", "Perfil.md"), "utf8").catch(() => ""),
     magro ? Promise.resolve([]) : readProjects(),
     magro ? Promise.resolve({}) : listPreferences(),
-    magro ? Promise.resolve([]) : recentMemories(retrieval.recent),
-    magro || !firstUserMessage
-      ? Promise.resolve([])
-      : searchKnowledge(firstUserMessage, { limit: retrieval.relevant }),
   ]);
 
   parts.push(`# Hermes — AI OS personal de ${OWNER}
@@ -199,35 +206,102 @@ Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en
     );
   }
 
-  // Memorias recientes + conocimiento relevante al primer mensaje.
-  // El retrieval es UNIFICADO (match_knowledge): memorias, reuniones,
-  // ejecuciones, conversaciones pasadas (texto/voz) y notas del vault.
+  return parts.join("\n\n---\n\n");
+}
+
+/**
+ * El system prompt memoizado por (foco × magro). Es la SEGUNDA mitad de la
+ * invariante de caché: que la función ya no dependa del mensaje evita el caso
+ * evidente, pero `readProjects()` y `listPreferences()` siguen siendo estado
+ * mutable — `update_project_note` o `save_preference` a mitad de un hilo
+ * cambiarían el prompt del turno siguiente y tirarían el prefijo igual.
+ * Memoizar congela los bytes mientras dura la ventana.
+ *
+ * El TTL es de una hora para acompañar al TTL largo del caché de prompt: no
+ * tiene sentido refrescar el prompt más seguido que el caché al que sirve. Lo
+ * que se pierde es frescura de proyectos/preferencias dentro de la hora, y no
+ * se pierde de verdad: el agente tiene `get_project_status` y
+ * `search_knowledge` para leer el estado real cuando importe, que además es la
+ * fuente de verdad — el bloque del prompt siempre fue un resumen recortado a
+ * 500 caracteres por proyecto.
+ */
+const PROMPT_TTL_MS = 60 * 60 * 1000;
+const promptCache = new Map<string, { at: number; prompt: string }>();
+
+export async function systemPromptFor(focusSlug?: string, magro = false): Promise<string> {
+  const key = `${focusSlug ?? ""}|${magro ? "magro" : "full"}`;
+  const hit = promptCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < PROMPT_TTL_MS) return hit.prompt;
+  const prompt = await buildSystemPrompt(focusSlug, magro);
+  promptCache.set(key, { at: now, prompt });
+  return prompt;
+}
+
+/** Tira el memo (tests, y cambios de perfil/vault que se quieran ver ya). */
+export function resetSystemPromptCache(): void {
+  promptCache.clear();
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  memory: "memoria",
+  meeting: "reunión",
+  execution: "ejecución",
+  conversation: "chat",
+  vault: "vault",
+};
+
+/**
+ * Contexto VOLÁTIL del turno: memorias recientes + conocimiento relevante al
+ * mensaje. El retrieval es UNIFICADO (match_knowledge): memorias, reuniones,
+ * ejecuciones, conversaciones pasadas (texto/voz) y notas del vault.
+ *
+ * Vive fuera del system prompt A PROPÓSITO (ver el comentario largo de
+ * `buildSystemPrompt`): las dos fuentes cambian en cada turno, así que en la
+ * posición 0 del prefijo tiraban el caché entero. Aquí, pegado al mensaje del
+ * usuario, el contenido variable queda DESPUÉS de todo lo cacheable y solo
+ * cuesta lo que pesa.
+ *
+ * Devuelve "" si no hay nada que aportar — el llamador no debe agregar
+ * encabezados vacíos al mensaje.
+ */
+export async function buildTurnContext(
+  message: string,
+  /** Cuánto contexto PRECARGAR. Lo fija el perfil de consumo (budget.ts):
+   * en modo bajo se precarga poco y el agente amplía con search_knowledge
+   * solo si lo necesita — se paga contexto pedido, no especulativo. */
+  retrieval: { recent: number; relevant: number; chars: number } = {
+    recent: 5,
+    relevant: 8,
+    chars: 300,
+  },
+  /** Salta toda la precarga. Lo usa el canal del reloj. */
+  magro = false,
+): Promise<string> {
+  if (magro || !message.trim()) return "";
+
+  const [recent, relevant] = await Promise.all([
+    recentMemories(retrieval.recent),
+    searchKnowledge(message, { limit: retrieval.relevant }),
+  ]);
+
   const seenMemories = new Set<string>(recent.map((m) => m.id));
   const lines = recent.map(
     (m) =>
       `- [memoria·${m.type}${m.project_slug ? `·${m.project_slug}` : ""}] ${(m.summary || m.content).slice(0, retrieval.chars)}`,
   );
-  const labels: Record<string, string> = {
-    memory: "memoria",
-    meeting: "reunión",
-    execution: "ejecución",
-    conversation: "chat",
-    vault: "vault",
-  };
   for (const h of relevant) {
     if (h.source === "memory" && seenMemories.has(h.ref)) continue;
-    const label = labels[h.source] ?? h.source;
+    const label = SOURCE_LABELS[h.source] ?? h.source;
     const scope = h.project_slug ? `·${h.project_slug}` : "";
     const body = h.content.replace(/\s+/g, " ").trim().slice(0, retrieval.chars);
     lines.push(`- [${label}${scope} ${h.created_at.slice(0, 10)}] ${body}`);
   }
-  if (lines.length) {
-    parts.push(
-      `# Lo que Hermes ya sabe (memorias recientes + contexto relevante al mensaje)\n` +
-        lines.join("\n") +
-        `\n\nSi necesitas más contexto sobre algo mencionado aquí, amplía con search_knowledge.`,
-    );
-  }
+  if (!lines.length) return "";
 
-  return parts.join("\n\n---\n\n");
+  return (
+    `<contexto-hermes>\nLo que ya sabes que puede venir al caso (memorias recientes + búsqueda semántica sobre el mensaje). Si necesitas más, amplía con search_knowledge.\n` +
+    lines.join("\n") +
+    `\n</contexto-hermes>`
+  );
 }

@@ -22,32 +22,88 @@ import type { Effort, ModelAlias } from "./models.js";
 
 export type Tier = "light" | "standard" | "deep";
 
-export const TIERS: Record<Tier, { model: ModelAlias; effort?: Effort }> = {
+/**
+ * `maxTurns` es por NIVEL, no global, y es un techo de COSTO, no de capacidad.
+ *
+ * Cada "turno" del SDK es una llamada al modelo que re-manda el historial
+ * completo. Con un techo único de 40 para todo, "¿ya está todo arriba?" tenía
+ * el mismo presupuesto de exploración que un refactor: el modelo no gasta los
+ * 40 si no los necesita, pero cuando se enreda —y se enreda— los gasta, y
+ * cuesta lo mismo enredarse en una pregunta trivial que en una difícil.
+ *
+ * Los números salen de para qué sirve cada nivel: una pregunta de estado se
+ * responde con una tool y una frase (6 sobra); el grueso son búsquedas y
+ * redacción con varias tools (16); el trabajo de código de verdad lee, escribe
+ * y verifica (28). Si un nivel se queda corto, el turno cierra con
+ * `error_max_turns` y la auto-continuación lo retoma (chat-turns.ts) — el
+ * trabajo no se pierde, solo se paga un techo en vez de una barra libre.
+ */
+export const TIERS: Record<Tier, { model: ModelAlias; effort?: Effort; maxTurns: number }> = {
   // Saludos, confirmaciones, preguntas de una línea sobre estado.
-  light: { model: "haiku" },
+  light: { model: "haiku", maxTurns: 6 },
   // El grueso: preguntas con contexto, búsquedas, redacción.
-  standard: { model: "sonnet", effort: "medium" },
-  // Código, diseño, análisis de varios pasos.
-  deep: { model: "opus", effort: "high" },
+  standard: { model: "sonnet", effort: "medium", maxTurns: 16 },
+  // Código: leer, escribir, verificar.
+  deep: { model: "opus", effort: "high", maxTurns: 28 },
 };
 
 // ── Señales ───────────────────────────────────────────────────────────
 // Todo lo que se puede saber sin gastar un token.
 
-/** Verbos que implican TRABAJO, no consulta. */
-const DEEP_VERBS =
-  /\b(refactoriz|implement|program|arregl|corrig|depur|debug|migr|dise[ñn]|arquitect|arregla|optimiz|arreglar|reescrib|analiz|audit|investig|compar|planific|resuelv|automatiz)/i;
+/**
+ * Verbos que implican MODIFICAR CÓDIGO. Solo estos justifican opus.
+ *
+ * La lista se recortó a la mitad a propósito. Antes incluía
+ * `analiz|audit|investig|compar|planific|resuelv|dise[ñn]` y esos no son
+ * escribir código: son consulta, orquestación y coordinación entre tools —
+ * trabajo de sonnet. Medido contra 37 mensajes reales del dueño, esos siete
+ * verbos eran 4 de los 5 turnos que abrían en opus/high ("auditate a ti
+ * mismo…", "Investiga en las carpetas…", "Analiza el repo…"): consultas, no
+ * refactors.
+ *
+ * Tres exclusiones que parecen inconsistentes y no lo son:
+ * - `migr`: "solo hicimos la migración, no?" es PREGUNTAR por una migración.
+ *   El límite de palabra no distingue eso de "migra la tabla", y preguntar es
+ *   el caso frecuente.
+ * - `commit`/`pnpm`/`git`: correr comandos es orquestación, no autoría. Es
+ *   literalmente el caso que pidió mover a sonnet.
+ * - `program` → `programa`: `program` también matcheaba "programado",
+ *   "programación" y el nombre de etapa del Estudio.
+ *
+ * Si sonnet no da, el escalado sube el hilo a opus y ahí se queda. El costo de
+ * equivocarse por abajo es un turno; por arriba, la ventana de 5 h.
+ */
+const CODE_WORK =
+  /\b(refactoriz|implement|programa|arregl|corrig|soluciona|depur|debug|arquitect|optimiz|reescrib|automatiz)/i;
 
-/** Marcadores de código o rutas: casi siempre trabajo técnico. */
-const CODE_MARKERS = /```|\b\w+\.(ts|tsx|js|jsx|py|sql|json|sh|md)\b|\/[\w.-]+\/[\w.-]+|\$\(|=>/;
+/**
+ * Marcadores de código: fences, archivos FUENTE y rutas de fuente.
+ *
+ * Dos cambios contra la versión anterior, los dos por falsos positivos que se
+ * disparaban con el lenguaje normal del producto:
+ * - Fuera `md` (y `json`): el markdown es el formato NATIVO del vault, así que
+ *   "resume mi nota de perfil.md" caía en opus. Y como el nivel queda FIJO por
+ *   sesión, UNA mención de un .md dejaba el hilo entero en opus/high.
+ * - La ruta ahora pide TRES segmentos (`apps/agent/src`), no dos: con dos,
+ *   "mira el video que subí a /descargas/reunion" era "código".
+ */
+const CODE_MARKERS =
+  /```|\b[\w.-]+\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|swift|sql|sh|zsh|css|html|yaml|yml|toml)\b|\b[\w.-]+\/[\w.-]+\/[\w.-]+|\$\(|=>/i;
 
-/** Charla: saludos, gracias, confirmaciones. */
+/**
+ * Charla y continuaciones: saludos, gracias, confirmaciones, "sigue", "TLDR".
+ *
+ * Incluye las continuaciones porque son la mitad de lo que se escribe en un
+ * hilo vivo y no traen trabajo nuevo. Antes `light` no se disparaba NUNCA
+ * (0 de 37 mensajes reales): el nivel barato existía en la tabla y estaba
+ * muerto en la práctica.
+ */
 const CHITCHAT =
-  /^(hola|buenas|buenos d[ií]as|buenas tardes|buenas noches|hey|qu[eé] tal|gracias|listo|ok|okay|dale|perfecto|s[ií]|no|entendido|vale)\b[\s!.,]*$/i;
+  /^(hola|buenas|buenos d[ií]as|buenas tardes|buenas noches|hey|qu[eé] tal|gracias|listo|ok|okay|dale|perfecto|s[ií]|no|entendido|vale|sigue|contin[uú]a|tldr)\b[\s!.,]*$/i;
 
 /** Preguntas de estado que se responden con una tool y una frase. */
 const STATUS_Q =
-  /^(qu[eé] (tengo|hay|falta|sigue)|c[oó]mo (va|voy|est[aá])|cu[aá]l(es)? (es|son)|cu[aá]nto|d[oó]nde est[aá]|resumen|recu[eé]rdame|mis (tareas|h[aá]bitos|notas))/i;
+  /^(qu[eé] (tengo|hay|falta|sigue|ponemos|sub)|c[oó]mo (va|voy|est[aá])|cu[aá]l(es)? (es|son)|cu[aá]nto|d[oó]nde est[aá]|resumen|recu[eé]rdame|ya est[aá]|con el \d|mis (tareas|h[aá]bitos|notas))/i;
 
 export interface RouteDecision {
   tier: Tier;
@@ -64,16 +120,24 @@ export function classify(prompt: string): RouteDecision {
   const p = prompt.trim().replace(/^[¿¡\s]+/, "");
   const words = p.split(/\s+/).length;
 
-  if (CODE_MARKERS.test(p)) return { tier: "deep", reason: "código o rutas en el mensaje" };
-  if (DEEP_VERBS.test(p)) return { tier: "deep", reason: "verbo de trabajo técnico" };
-  // Un mensaje largo casi nunca es trivial, aunque no traiga palabras clave.
-  if (words > 60) return { tier: "deep", reason: `mensaje largo (${words} palabras)` };
+  // Lo barato se decide PRIMERO. Antes iba al final y por eso no se alcanzaba
+  // casi nunca: cualquier verbo de la lista larga lo adelantaba por izquierda.
+  if (CHITCHAT.test(p)) return { tier: "light", reason: "saludo o continuación" };
+  // 10 y no 8: "Que sub carpetas tienes? TLDR" son 5 pero "ya está todo arriba
+  // en el repo de kreanding?" son 9 y sigue siendo una pregunta de una frase.
+  if (words <= 10 && STATUS_Q.test(p))
+    return { tier: "light", reason: "pregunta de estado corta" };
 
-  if (CHITCHAT.test(p)) return { tier: "light", reason: "saludo o confirmación" };
-  // 8 y no 12: "resumen de la semana pasada con detalle de lo que quedó
-  // pendiente" son 11 palabras y NO es una consulta de una frase.
-  if (words <= 8 && STATUS_Q.test(p)) return { tier: "light", reason: "pregunta de estado corta" };
+  if (CODE_MARKERS.test(p)) return { tier: "deep", reason: "código o ruta de fuente" };
+  if (CODE_WORK.test(p)) return { tier: "deep", reason: "verbo de modificar código" };
 
+  // Ya NO existe la regla "mensaje largo (>60 palabras) → deep". Era una
+  // proxy mala: el dueño escribe pidiendo las cosas en párrafos largos y
+  // discursivos, y la longitud medía su estilo de escritura, no la dificultad
+  // de la tarea. Este mismo encargo ("arregla el consumo… audita… corre 5
+  // veces…") pasa las 60 palabras y es coordinación, no un refactor. Un
+  // mensaje largo sin verbo de código ni ruta de fuente cae en sonnet, que es
+  // donde el dueño pidió que viviera la orquestación.
   return { tier: "standard", reason: "caso general" };
 }
 

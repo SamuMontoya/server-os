@@ -753,6 +753,18 @@ export default function Laboratorio() {
    *  fetchTurnResilient devolviendo null): evita apilar varios si visible +
    *  online se disparan casi juntos al volver de segundo plano. */
   const resumeRetryPendingRef = useRef(false);
+  /**
+   * true = hay una recuperación EN VUELO (esperando a `fetchTurnResilient`).
+   *
+   * `unfollowRef` no alcanzaba como candado: solo se llena cuando `follow` ya
+   * engancha, o sea DESPUÉS del await. Montar y volver de segundo plano se
+   * disparan casi juntos en iOS (el mismo caso que ya motivó
+   * `resumeRetryPendingRef`), así que las dos llamadas pasaban el guardia y
+   * arrancaban cada una su cadena de GET con backoff y su propio `follow` —
+   * dos SSE sobre el mismo turno, replayeando el mismo `seq` y pintando los
+   * deltas dos veces.
+   */
+  const resumeInFlightRef = useRef(false);
 
   // Textarea auto-crecible (hasta ~5 líneas), igual que en ChatPanel.
   //
@@ -1292,7 +1304,10 @@ export default function Laboratorio() {
    */
   const resumePending = () => {
     const pending = pendingTurnRef.current;
-    if (!pending || unfollowRef.current) return; // nada pendiente, o ya enganchado
+    // Tres condiciones para NO recuperar: nada pendiente, ya enganchado, o ya
+    // hay una recuperación en vuelo (ver resumeInFlightRef).
+    if (!pending || unfollowRef.current || resumeInFlightRef.current) return;
+    resumeInFlightRef.current = true;
     // El turno escribe en el ÚLTIMO mensaje del asistente. Si por lo que sea
     // no hay uno (se guardó entre el envío y el placeholder), se crea: sin
     // hueco donde escribir, la respuesta recuperada no se vería.
@@ -1314,6 +1329,7 @@ export default function Laboratorio() {
     // justo lo que obligaba a repetir la pregunta con el turno vivísimo del
     // otro lado.
     void fetchTurnResilient(pending.id, pending.seq).then((st) => {
+      resumeInFlightRef.current = false;
       if (st === "not-found") {
         // El agente se reinició y el turno ya no existe. Lo honesto es
         // decirlo, no dejar el composer bloqueado para siempre.
@@ -1343,7 +1359,15 @@ export default function Laboratorio() {
       // desde `pending.seq` (ni de más ni de menos, ver comentarios en
       // `follow`) y su primer `state` cierra de una si ya había terminado.
       follow(pending.id, pending.seq, replyId);
-    });
+    })
+      // Un candado que se queda puesto es peor que no tenerlo: dejaría el
+      // Laboratorio sin poder reengancharse nunca más en esta sesión. Se
+      // suelta también si la promesa rechaza (no debería —
+      // `fetchTurnResilient` devuelve null en vez de lanzar—, pero el precio
+      // de equivocarse aquí es asimétrico).
+      .catch(() => {
+        resumeInFlightRef.current = false;
+      });
   };
   resumePendingRef.current = resumePending;
 

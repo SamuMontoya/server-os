@@ -37,7 +37,7 @@ import {
   LINEAR_PRIORITIES,
 } from "../linear.js";
 import { createPiece, listPieces } from "../content/store.js";
-import { lightsCommand, LIGHT_ACTIONS } from "../lights.js";
+import { lightsCommand, lightsConfigured, LIGHT_ACTIONS } from "../lights.js";
 import { STAGES, daysInStage, isStuck, stageGates } from "@hermes/shared";
 import { OWNER } from "../owner.js";
 
@@ -711,6 +711,17 @@ const controlLightsTool = tool(
 // `tools` es opcional en la firma, de ahí el NonNullable antes de indexar.
 type AnyTool = NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>[number];
 
+/**
+ * Además de la feature, una tool puede exigir que su HARDWARE exista. Es la
+ * misma idea llevada un paso más allá: `null` no debería significar "se carga
+ * aunque no pueda hacer nada". Una tool que solo puede contestar "no está
+ * configurado" cuesta su schema en cada turno y le ofrece al modelo una
+ * capacidad que no tiene.
+ */
+const TOOL_REQUIRES: Map<AnyTool, () => boolean> = new Map([
+  [controlLightsTool as AnyTool, lightsConfigured],
+]);
+
 const TOOL_FEATURE: [AnyTool, Feature | null][] = [
   [searchKnowledgeTool, null],
   [saveMemoryTool, null],
@@ -738,11 +749,14 @@ const TOOL_FEATURE: [AnyTool, Feature | null][] = [
   [updateGoalTool, "vida"],
   [createContentIdeaTool, "estudio"],
   [listContentPiecesTool, "estudio"],
-  // Las luces son control por red (no osascript): funcionan igual en Linux.
+  // Las luces son control por red (no osascript): funcionan igual en Linux —
+  // pero solo si hay una tira en la LAN. Ver TOOL_REQUIRES.
   [controlLightsTool, null],
 ];
 
-const ACTIVE_TOOLS = TOOL_FEATURE.filter(([, f]) => f === null || isEnabled(f)).map(([tool]) => tool);
+const ACTIVE_TOOLS = TOOL_FEATURE.filter(
+  ([tool, f]) => (f === null || isEnabled(f)) && (TOOL_REQUIRES.get(tool)?.() ?? true),
+).map(([tool]) => tool);
 
 export const hermesMcpServer = createSdkMcpServer({
   name: "hermes",

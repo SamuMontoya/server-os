@@ -115,8 +115,23 @@ const BACKOFF_MS = [1000, 3000];
  * pedirle que siga. Antes esto se reportaba como `error` y Samu tenía que
  * escribir "continúa" a mano para que retomara. Con tope: un turno que de
  * verdad no converge (bucle) no debe reintentar para siempre.
+ *
+ * De 3 a 1, por costo. El tope se combina con MAX_ATTEMPTS (reintentos por
+ * fallo transitorio): en el peor caso, 3 intentos × (1 corrida + 3
+ * continuaciones) eran 12 procesos `query()` completos por UN mensaje, cada
+ * uno re-mandando el historial que crece — y cada uno de esos 12 podía además
+ * escalar de modelo una vez (session.ts), así que el techo real de procesos
+ * llegaba a 24. Con `maxTurns: 40` por proceso (antes de que también ese techo
+ * se volviera por nivel, ver router.ts), eso son hasta 960 turnos del SDK por
+ * un solo mensaje del usuario — el rango que confirmó el audit. Y la segunda y
+ * la tercera continuación son las peores del lote: para llegar ahí el modelo
+ * ya quemó su presupuesto DOS veces sin cerrar, que es la firma de estar dando
+ * vueltas, no de estar avanzando. Una continuación cubre el caso legítimo (se
+ * quedó corto por poco); las otras dos pagaban por un bucle. Si de verdad
+ * falta trabajo, el turno cierra avisando y el humano decide si sigue — que es
+ * más barato que adivinar tres veces.
  */
-export const MAX_CONTINUATIONS = 3;
+export const MAX_CONTINUATIONS = 1;
 const CONTINUE_PROMPT =
   "Se acabó el presupuesto de turnos antes de que terminaras. Continúa EXACTAMENTE donde te quedaste: no repitas lo ya hecho, no vuelvas a saludar ni a resumir la tarea, sigue la ejecución y ciérrala.";
 
@@ -158,8 +173,12 @@ export interface TurnRunnerArgs {
   attachments?: string[];
   project?: string;
   cwd?: string;
+  /** Clave del hilo: fija el nivel del router. Ver RunTurnOptions. */
+  sessionKey?: string;
   maxTier?: Tier;
   magro?: boolean;
+  /** `false` en las auto-continuaciones: ver RunTurnOptions en session.ts. */
+  precargarContexto?: boolean;
   resumeSessionId?: string;
   abortController: AbortController;
   onDelta: (text: string) => void;
@@ -307,6 +326,22 @@ export function createTurnEngine(deps: TurnEngineDeps) {
         let attemptText = "";
         let failure: string | null = null;
         let errorSubtype: string | undefined;
+        /**
+         * De dónde salió el fallo. `transporte` = una excepción real de esta
+         * capa (red, proceso muerto); `modelo` = el turno cerró con
+         * `isError` y lo único que hay es la PROSA del modelo.
+         *
+         * La distinción importa porque `isRetryable()` hace match de
+         * subcadenas ("timeout", "500", "502", "network", "rate limit",
+         * "unavailable"…) y aplicárselo al texto del modelo es un error de
+         * categoría con factura: Hermes es un asistente técnico que habla de
+         * códigos HTTP a diario, así que una respuesta como "el endpoint
+         * devolvió 500" se leía como un fallo transitorio y RE-EJECUTABA el
+         * mensaje entero, hasta 3 veces. El guardia `partial` no lo tapaba:
+         * solo mira si llegaron deltas, y el SDK puede cerrar con el texto
+         * final sin haber mandado ninguno (ver más abajo).
+         */
+        let failureSource: "transporte" | "modelo" | null = null;
 
         try {
           const result = await deps.run({
@@ -318,8 +353,16 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             project: input.project,
             cwd: input.cwd,
             resumeSessionId: resume,
+            // El nivel se fija por HILO, y el hilo es la pestaña del chat: es
+            // la única clave que existe ya en el primer mensaje.
+            sessionKey: input.sessionKey,
             maxTier: input.maxTier,
             magro: input.magro,
+            // La recuperación semántica se hace con el mensaje REAL. En una
+            // continuación el mensaje es CONTINUE_PROMPT, un "sigue"
+            // sintético: buscar conocimiento con eso trae ruido y se paga
+            // igual (y el contexto que hacía falta ya está en el historial).
+            precargarContexto: continuations === 0,
             abortController: abort,
             onSession: (sessionId) => {
               if (turn.sdkSessionId === sessionId) return;
@@ -357,8 +400,10 @@ export function createTurnEngine(deps: TurnEngineDeps) {
           }
           failure = result.finalText || "el agente terminó con error";
           errorSubtype = result.errorSubtype;
+          failureSource = "modelo";
         } catch (err) {
           failure = err instanceof Error ? err.message : String(err);
+          failureSource = "transporte";
         }
 
         // Cancelación explícita: no es un fallo y no se reintenta.
@@ -383,7 +428,14 @@ export function createTurnEngine(deps: TurnEngineDeps) {
         // Con texto ya entregado no se reintenta: el cliente lo está leyendo y
         // un segundo intento le repetiría media respuesta encima.
         const partial = attemptText.length > 0;
-        if (last || partial || !isRetryable(failure ?? "")) {
+        // Solo se juzga como transitorio lo que vino de ESTA capa (una
+        // excepción) o lo que el SDK marcó como error de API. La prosa del
+        // modelo no se pasa nunca por `isRetryable` — ver `failureSource`.
+        const transitorio =
+          failureSource === "transporte"
+            ? isRetryable(failure ?? "")
+            : errorSubtype === "api_error";
+        if (last || partial || !transitorio) {
           return close(turn, "error", failure ?? "error desconocido");
         }
         emitEvent(turn.id, { kind: "retry", attempt: attempt + 1, text: failure ?? "" });
@@ -485,6 +537,8 @@ export const chatTurns: TurnEngine = createTurnEngine({
       // último salto — que es exactamente lo que pasó con maxTier.
       maxTier: args.maxTier,
       magro: args.magro,
+      sessionKey: args.sessionKey,
+      precargarContexto: args.precargarContexto,
       resumeSessionId: args.resumeSessionId,
       abortController: args.abortController,
       onDelta: args.onDelta,

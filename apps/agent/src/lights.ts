@@ -19,6 +19,20 @@ import { resolve } from "node:path";
 const LIGHTS_HOST = process.env.HERMES_LIGHTS_HOST || "";
 const KASA_TIMEOUT_MS = 20_000;
 
+/**
+ * Si hay una tira que controlar. Sin host, la tool NO se registra en el
+ * catálogo del agente (tools.ts): registrarla costaba su schema en cada turno
+ * para poder contestar únicamente "luces no configuradas", y encima la ofrecía
+ * al modelo como si fuera una capacidad real. En este servidor headless (sin
+ * LAN de casa) ese era exactamente el caso.
+ *
+ * La ruta HTTP sí sigue existiendo y respondiendo el motivo: apagar la tool no
+ * es esconder la feature, es no cobrarla cuando no puede funcionar.
+ */
+export function lightsConfigured(): boolean {
+  return LIGHTS_HOST !== "";
+}
+
 // Binario por ruta absoluta, instalado con `uv tool install python-kasa`
 // (venv persistente en ~/.local/share/uv/tools — disco interno). Misma
 // lección que GRAPHIFY_BIN: launchd no tiene ~/.local/bin en PATH, y el
