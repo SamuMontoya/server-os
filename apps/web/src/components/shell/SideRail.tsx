@@ -53,11 +53,11 @@ const DESTS: Dest[] = [
       </svg>
     ),
   },
-  // Laboratorio: el chat principal, pantalla propia fuera del shell.
+  // Chat: la conversación principal, pantalla propia fuera del shell.
   {
     kind: "route",
     href: "/laboratorio",
-    label: "Laboratorio",
+    label: "Chat",
     icon: (
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M9 4.5a2.5 2.5 0 0 0-2.5 2.5c0 .3.03.6.1.88A2.5 2.5 0 0 0 5 10.2v1.1a2.5 2.5 0 0 0 .8 4.6c.15 1.4 1.35 2.5 2.8 2.5.4 0 .78-.08 1.13-.23A2 2 0 0 0 11.5 20V6.5A2 2 0 0 0 9 4.5Z" strokeLinecap="round" strokeLinejoin="round" />
@@ -80,7 +80,7 @@ export function SideRail() {
     >
       <Link
         href="/laboratorio"
-        title="Laboratorio"
+        title="Chat"
         className="mb-5 grid h-6.5 w-6.5 place-items-center drop-shadow-[0_0_7px_rgb(167_139_250_/_0.55)] transition-transform hover:scale-110"
       >
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none">

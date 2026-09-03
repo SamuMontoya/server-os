@@ -203,7 +203,7 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
   }, [onClose]);
 
   return (
-    <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats del Laboratorio">
+    <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats">
       {/* SIN barra propia: el Navbar del Laboratorio queda por encima de esta
           capa (z-index:3 vs 2) y sigue activo, así que la hamburguesa ya
           cierra la lista y el "+" ya crea un chat. Dibujar aquí otra ✕ y otro
