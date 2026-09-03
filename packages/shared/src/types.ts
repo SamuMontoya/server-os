@@ -522,3 +522,66 @@ export interface DashboardSnapshot {
   activity: ActivitySeries | null;
   usage: DailyRunUsage;
 }
+
+// ── Claude Code: límites del plan y uso histórico (GET /claude/limits,
+// GET /claude/usage) ────────────────────────────────────────────────────
+// El agente los lee de disco (~/.claude/*) y del endpoint privado de
+// Anthropic; la web solo hace proxy. Tipos compartidos porque ambos lados
+// necesitan la forma exacta de la respuesta.
+
+export interface LimitWindow {
+  label: string;
+  utilization: number; // 0-100
+  resetsAt: string | null; // ISO
+}
+
+/** Límites del plan de Claude Code (estilo /usage): sesión de 5h + semanales. */
+export interface ClaudeLimits {
+  available: boolean;
+  generatedAt: string;
+  plan: string | null; // tier de la suscripción, p.ej. "Max (5x)"
+  session: LimitWindow | null; // five_hour
+  weekly: LimitWindow[]; // seven_day, seven_day_opus, seven_day_sonnet…
+  reason?: string; // motivo cuando available=false
+}
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+  cost: number;
+  messages: number;
+}
+
+export interface DayUsage extends UsageTotals {
+  date: string; // YYYY-MM-DD (hora local)
+}
+
+export interface ModelUsage extends UsageTotals {
+  model: string;
+}
+
+export interface ProjectUsage {
+  project: string; // etiqueta legible
+  raw: string; // nombre del directorio codificado
+  totalTokens: number;
+  cost: number;
+  messages: number;
+  sessions: number;
+}
+
+/** Uso histórico agregado de ~/.claude/projects/*.jsonl (día/modelo/proyecto). */
+export interface ClaudeUsageData {
+  available: boolean;
+  generatedAt: string; // ISO
+  totals: UsageTotals & { sessions: number };
+  today: UsageTotals;
+  last7Days: UsageTotals;
+  last30Days: UsageTotals;
+  byDay: DayUsage[]; // ascendente por fecha
+  byModel: ModelUsage[]; // descendente por coste
+  byProject: ProjectUsage[]; // descendente por coste
+  error?: string;
+}

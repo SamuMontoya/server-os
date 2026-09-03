@@ -28,7 +28,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ClaudeLimits, LimitWindow } from "@/lib/claude-limits";
+import type { ClaudeLimits, LimitWindow } from "@hermes/shared";
 
 /** Cada cuánto se re-pide el usage. La lib del server cachea 60 s igual. */
 const POLL_MS = 60_000;

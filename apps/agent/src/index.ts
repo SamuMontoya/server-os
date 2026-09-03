@@ -33,6 +33,8 @@ import {
   type ClaudeLine,
 } from "./agent/claude-cli.js";
 import { getDailyUsage } from "./usage.js";
+import { getClaudeLimits } from "./claude-limits.js";
+import { getClaudeUsage } from "./claude-usage.js";
 import {
   getConversation,
   clearConversation,
@@ -1222,6 +1224,12 @@ app.get("/machines", async (c) => c.json({ machines: await listPresence() }));
 
 // Conteos reales de la base de conocimiento (panel MEMORIA ACTIVA).
 app.get("/knowledge/stats", async (c) => c.json(await knowledgeStats()));
+
+// Límites del plan de Claude Code (ventana de 5h + semanales) y uso histórico
+// agregado de ~/.claude/projects — la web (Vercel, sin este disco) los
+// consume vía proxy en /api/claude-limits y /api/claude-usage.
+app.get("/claude/limits", async (c) => c.json(await getClaudeLimits()));
+app.get("/claude/usage", async (c) => c.json(await getClaudeUsage()));
 
 // Conteos del tracker por estado (+ ?project= y ?byProject=1).
 app.get("/tracker/summary", async (c) =>

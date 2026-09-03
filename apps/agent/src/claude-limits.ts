@@ -1,39 +1,29 @@
 /**
  * Límites del plan de Claude Code (estilo /usage): ventana de sesión de 5h +
- * límites semanales. Solo servidor.
+ * límites semanales. Servido por GET /claude/limits.
+ *
+ * Puerto de `apps/web/src/lib/claude-limits.ts`: la web se movía a Vercel
+ * (sin `~/.claude` en disco) así que esto pasó a vivir en el agente, que sí
+ * corre en la máquina real. Sin Keychain: eso es de macOS y este agente corre
+ * en Linux — mismo razonamiento que `agent/budget.ts:readToken`.
  *
  * Estos datos salen del endpoint privado `/api/oauth/usage` de Anthropic, que
  * exige un token OAuth vivo de la suscripción. No lo refrescamos nosotros (el
  * endpoint de refresh está tras Cloudflare y rota el token → desloguearía a
- * Claude Code). En su lugar TÚ aportas el token y aquí se usa en solo-lectura:
+ * Claude Code). En su lugar se usa en solo-lectura el token que ya hay en
+ * disco:
  *
- *   1. env  CLAUDE_OAUTH_TOKEN   (en apps/web/.env)
- *   2. file ~/.hermes-os/claude-token   (lo escribe scripts/hermes-usage-token.mjs)
+ *   1. env  CLAUDE_OAUTH_TOKEN
+ *   2. file ~/.hermes-os/claude-token   (lo escribe apps/web/scripts/hermes-usage-token.mjs)
  *   3. file ~/.claude/.credentials.json (lo mantiene Claude Code en Linux)
- *   4. Keychain (opt-in con CLAUDE_USAGE_KEYCHAIN=1; puede pedir permiso)
  */
 
-import { promises as fs } from "fs";
-import os from "os";
-import path from "path";
-import { execFile } from "child_process";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { ClaudeLimits, LimitWindow } from "@hermes/shared";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-
-export interface LimitWindow {
-  label: string;
-  utilization: number; // 0-100
-  resetsAt: string | null; // ISO
-}
-
-export interface ClaudeLimits {
-  available: boolean;
-  generatedAt: string;
-  plan: string | null; // tier de la suscripción, p.ej. "Max (5x)"
-  session: LimitWindow | null; // five_hour
-  weekly: LimitWindow[]; // seven_day, seven_day_opus, seven_day_sonnet…
-  reason?: string; // motivo cuando available=false
-}
 
 // ── Resolución de credencial (token + tier del plan) ─────────────────────
 
@@ -43,12 +33,12 @@ interface Credential {
 }
 
 function tokenFilePath(): string {
-  return path.join(os.homedir(), ".hermes-os", "claude-token");
+  return join(homedir(), ".hermes-os", "claude-token");
 }
 
 // Deriva la etiqueta del plan que muestra la referencia ("Max (20x)") a partir
-// de los campos que Claude Code guarda en el Keychain (rateLimitTier tiene la
-// forma "default_claude_max_5x"; subscriptionType es "max"/"pro"/"free").
+// de los campos que Claude Code guarda en disco (rateLimitTier tiene la forma
+// "default_claude_max_5x"; subscriptionType es "max"/"pro"/"free").
 function planLabel(
   subscriptionType?: unknown,
   rateLimitTier?: unknown,
@@ -68,14 +58,11 @@ function planLabel(
 }
 
 // Fuente primaria del tier: ~/.claude.json (Claude Code lo refresca solo, con
-// campos como organizationRateLimitTier: "default_claude_max_20x"). No exige
-// Keychain ni flags: es una lectura local igual que la de ~/.claude/projects.
+// campos como organizationRateLimitTier: "default_claude_max_20x"). Es una
+// lectura local igual que la de ~/.claude/projects.
 async function readClaudeJsonPlan(): Promise<string | null> {
   try {
-    const raw = await fs.readFile(
-      path.join(os.homedir(), ".claude.json"),
-      "utf8",
-    );
+    const raw = await readFile(join(homedir(), ".claude.json"), "utf8");
     const oa = (JSON.parse(raw) as Record<string, unknown>).oauthAccount as
       | Record<string, unknown>
       | undefined;
@@ -89,22 +76,15 @@ async function readClaudeJsonPlan(): Promise<string | null> {
   }
 }
 
-// El Keychain puede tener dos items "Claude Code-credentials": el CLI moderno
-// guarda con account=<usuario> y las instalaciones viejas con account="Claude
-// Code" (token muerto). Probamos primero el del usuario y saltamos caducados.
 /**
- * Fuente nativa en Linux (y en instalaciones sin Keychain): Claude Code guarda
- * ahí el OAuth de la suscripción en claro, con permisos 600. Es una lectura
- * local más —igual que ~/.claude.json o ~/.claude/projects— y no rota nada, así
- * que no puede desloguear al CLI. Con esto el panel de consumo funciona sin que
- * Samu tenga que pegar el token a mano.
+ * Fuente nativa en Linux: Claude Code guarda ahí el OAuth de la suscripción
+ * en claro, con permisos 600. Es una lectura local más —igual que
+ * ~/.claude.json o ~/.claude/projects— y no rota nada, así que no puede
+ * desloguear al CLI.
  */
 async function readCredentialsFile(): Promise<Credential> {
   try {
-    const raw = await fs.readFile(
-      path.join(os.homedir(), ".claude", ".credentials.json"),
-      "utf8",
-    );
+    const raw = await readFile(join(homedir(), ".claude", ".credentials.json"), "utf8");
     const cred = (JSON.parse(raw) as Record<string, unknown>).claudeAiOauth as
       | Record<string, unknown>
       | undefined;
@@ -122,62 +102,22 @@ async function readCredentialsFile(): Promise<Credential> {
   }
 }
 
-function readKeychainEntry(account: string | null): Promise<Credential> {
-  const args = ["find-generic-password", "-s", "Claude Code-credentials"];
-  if (account) args.push("-a", account);
-  args.push("-w");
-  return new Promise((resolve) => {
-    execFile("security", args, { timeout: 5000 }, (err, stdout) => {
-      if (err) return resolve({ token: null, plan: null });
-      try {
-        const cred = JSON.parse(stdout).claudeAiOauth;
-        const expired =
-          typeof cred?.expiresAt === "number" && cred.expiresAt < Date.now();
-        resolve({
-          token: expired ? null : (cred?.accessToken ?? null),
-          plan: planLabel(cred?.subscriptionType, cred?.rateLimitTier),
-        });
-      } catch {
-        resolve({ token: null, plan: null });
-      }
-    });
-  });
-}
-
-async function readKeychainCredential(): Promise<Credential> {
-  const user = os.userInfo().username;
-  const fromUser = await readKeychainEntry(user);
-  if (fromUser.token) return fromUser;
-  const fallback = await readKeychainEntry(null);
-  return {
-    token: fallback.token,
-    plan: fromUser.plan ?? fallback.plan,
-  };
-}
-
 async function resolveCredential(): Promise<Credential> {
-  // Tier del plan: override manual → ~/.claude.json (fresco) → Keychain.
-  const plan =
-    process.env.CLAUDE_PLAN?.trim() || (await readClaudeJsonPlan());
+  // Tier del plan: override manual → ~/.claude.json (fresco).
+  const plan = process.env.CLAUDE_PLAN?.trim() || (await readClaudeJsonPlan());
 
   const env = process.env.CLAUDE_OAUTH_TOKEN?.trim();
   if (env) return { token: env, plan };
 
   try {
-    const fromFile = (await fs.readFile(tokenFilePath(), "utf8")).trim();
+    const fromFile = (await readFile(tokenFilePath(), "utf8")).trim();
     if (fromFile) return { token: fromFile, plan };
   } catch {
     /* sin archivo */
   }
 
   const fromCreds = await readCredentialsFile();
-  if (fromCreds.token) return { token: fromCreds.token, plan: plan ?? fromCreds.plan };
-
-  if (process.env.CLAUDE_USAGE_KEYCHAIN === "1") {
-    const cred = await readKeychainCredential();
-    return { token: cred.token, plan: plan ?? cred.plan };
-  }
-  return { token: null, plan: plan ?? fromCreds.plan };
+  return { token: fromCreds.token, plan: plan ?? fromCreds.plan };
 }
 
 // ── Fetch + mapeo ───────────────────────────────────────────────────────
@@ -205,11 +145,11 @@ function toWindow(key: string, raw: unknown): LimitWindow | null {
 }
 
 // Cache con TTL variable. El endpoint de usage rate-limita agresivo, así que
-// como mucho ~1 request por minuto aunque haya varias pestañas abiertas; los
+// como mucho ~1 request por minuto aunque haya varios clientes pidiendo; los
 // fallos se cachean más tiempo para no insistir con un token muerto.
 let cache: { at: number; ttl: number; data: ClaudeLimits } | null = null;
 // Último resultado bueno: ante un fallo transitorio (429, red) lo seguimos
-// mostrando en vez de tumbar el panel.
+// sirviendo en vez de tumbar el panel.
 let lastGood: { at: number; data: ClaudeLimits } | null = null;
 const TTL_OK = 60_000;
 const TTL_FAIL = 60_000;
@@ -217,8 +157,7 @@ const TTL_RATE_LIMITED = 300_000;
 // Ventana en la que un dato viejo sigue siendo mejor que ningún dato. Es
 // generosa (1 h) a propósito: lo que se muestra es la ventana de 5 h del plan,
 // que se mueve despacio, y el fallo típico (token rotando, 429 del endpoint)
-// dura minutos. Con los 15 min de antes, al agotarse, el pie del Laboratorio
-// se quedaba en "—" — el síntoma de "el consumo no se está mostrando".
+// dura minutos.
 const STALE_MAX = 60 * 60_000;
 
 export async function getClaudeLimits(): Promise<ClaudeLimits> {
@@ -259,7 +198,6 @@ export async function getClaudeLimits(): Promise<ClaudeLimits> {
         "anthropic-version": "2023-06-01",
         "User-Agent": "claude-cli/2.1.202 (external, hermes-os)",
       },
-      cache: "no-store",
     });
   } catch {
     return unavailable("No se pudo contactar api.anthropic.com");

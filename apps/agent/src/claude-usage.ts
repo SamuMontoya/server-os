@@ -1,14 +1,27 @@
 /**
- * Lector de uso de Claude Code. Solo servidor.
+ * Lector de uso de Claude Code. Servido por GET /claude/usage.
  * Recorre ~/.claude/projects/(proyecto)/*.jsonl, deduplica los mensajes del
  * asistente y agrega tokens + coste estimado (equivalente a precios de API)
- * por día, modelo y proyecto. Se importa únicamente desde el API route.
+ * por día, modelo y proyecto.
+ *
+ * Puerto de `apps/web/src/lib/claude-usage.ts`: la web se movía a Vercel (sin
+ * `~/.claude` en disco) así que esto pasó a vivir en el agente, que sí corre
+ * en la máquina real. Sin cambios de fondo — es Node/fs puro, sin nada de
+ * Next.js.
  */
 
-import { createReadStream, promises as fs } from "fs";
-import readline from "readline";
-import os from "os";
-import path from "path";
+import { createReadStream } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import readline from "node:readline";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type {
+  ClaudeUsageData,
+  DayUsage,
+  ModelUsage,
+  ProjectUsage,
+  UsageTotals,
+} from "@hermes/shared";
 
 // ── Precios (USD por token). Fuente: tabla de modelos del skill claude-api ──
 
@@ -61,48 +74,6 @@ function costFor(
     write5m * p.input * CACHE_WRITE_5M_MULT +
     write1h * p.input * CACHE_WRITE_1H_MULT
   );
-}
-
-// ── Tipos públicos ──────────────────────────────────────────────────────
-
-export interface UsageTotals {
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
-  totalTokens: number;
-  cost: number;
-  messages: number;
-}
-
-export interface DayUsage extends UsageTotals {
-  date: string; // YYYY-MM-DD (hora local)
-}
-
-export interface ModelUsage extends UsageTotals {
-  model: string;
-}
-
-export interface ProjectUsage {
-  project: string; // etiqueta legible
-  raw: string; // nombre del directorio codificado
-  totalTokens: number;
-  cost: number;
-  messages: number;
-  sessions: number;
-}
-
-export interface ClaudeUsageData {
-  available: boolean;
-  generatedAt: string; // ISO
-  totals: UsageTotals & { sessions: number };
-  today: UsageTotals;
-  last7Days: UsageTotals;
-  last30Days: UsageTotals;
-  byDay: DayUsage[]; // ascendente por fecha
-  byModel: ModelUsage[]; // descendente por coste
-  byProject: ProjectUsage[]; // descendente por coste
-  error?: string;
 }
 
 // ── Acumuladores internos ───────────────────────────────────────────────
@@ -283,13 +254,13 @@ async function parseFile(filePath: string, raw: string): Promise<FileAgg> {
 }
 
 async function getFileAgg(filePath: string, raw: string): Promise<FileAgg> {
-  const stat = await fs.stat(filePath);
+  const st = await stat(filePath);
   const cached = fileCache.get(filePath);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+  if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
     return cached.agg;
   }
   const agg = await parseFile(filePath, raw);
-  fileCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, agg });
+  fileCache.set(filePath, { mtimeMs: st.mtimeMs, size: st.size, agg });
   return agg;
 }
 
@@ -345,11 +316,11 @@ function emptyData(available: boolean, error?: string): ClaudeUsageData {
 }
 
 export async function getClaudeUsage(): Promise<ClaudeUsageData> {
-  const root = path.join(os.homedir(), ".claude", "projects");
+  const root = join(homedir(), ".claude", "projects");
 
   let dirents;
   try {
-    dirents = await fs.readdir(root, { withFileTypes: true });
+    dirents = await readdir(root, { withFileTypes: true });
   } catch {
     return emptyData(false, "No se encontró ~/.claude/projects");
   }
@@ -359,16 +330,16 @@ export async function getClaudeUsage(): Promise<ClaudeUsageData> {
   for (const dirent of dirents) {
     if (!dirent.isDirectory()) continue;
     const raw = dirent.name;
-    const dirPath = path.join(root, raw);
+    const dirPath = join(root, raw);
     let names: string[];
     try {
-      names = await fs.readdir(dirPath);
+      names = await readdir(dirPath);
     } catch {
       continue;
     }
     for (const name of names) {
       if (name.endsWith(".jsonl")) {
-        files.push({ filePath: path.join(dirPath, name), raw });
+        files.push({ filePath: join(dirPath, name), raw });
       }
     }
   }

@@ -9,8 +9,7 @@ import { StatBlock } from "@/components/ui/StatBlock";
 import { Sparkline } from "@/components/ui/Sparkline";
 import { Badge } from "@/components/ui/Badge";
 import type { Tone } from "@/components/ui/tones";
-import type { ClaudeUsageData } from "@/lib/claude-usage";
-import type { ClaudeLimits } from "@/lib/claude-limits";
+import type { ClaudeUsageData, ClaudeLimits } from "@hermes/shared";
 
 // Tonos HUD por modelo (mismo tono en toda la fila del desglose).
 const MODEL_TONES: Tone[] = ["violet", "cyan", "amber", "green", "blue"];
