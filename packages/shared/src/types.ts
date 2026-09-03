@@ -493,8 +493,6 @@ export interface MachineCapabilities {
   vault: boolean;
   /** Ejecuta `claude` (runs, tareas, chat con memoria de sesión). */
   runs: boolean;
-  /** Control del navegador (AppleScript de Chrome). */
-  browser: boolean;
   /** Grafo de código (binario de graphify presente). */
   codeGraph: boolean;
 }

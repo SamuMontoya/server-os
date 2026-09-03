@@ -1,12 +1,7 @@
 import "../env.js";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
 import { join } from "node:path";
-
-const execFileAsync = promisify(execFile);
 
 /**
  * Modo de consumo, en TRES escalones — no es un interruptor, es una rampa.
@@ -86,27 +81,9 @@ async function readToken(): Promise<string | null> {
 
   // Se reusa la credencial del PROPIO CLI: es el mismo token OAuth con el que
   // ya infiere y sirve tal cual contra /api/oauth/usage. Pedir un archivo
-  // aparte era trabajo inventado.
-  //
-  // El ORDEN importa y depende de la plataforma: en macOS la fuente viva es el
-  // Keychain y ~/.claude/.credentials.json suele ser un remanente RANCIO — si
-  // se lee primero, devuelve un token vencido que da 401 y nunca se llega al
-  // Keychain. En Linux (el servidor) no hay Keychain y el archivo ES la fuente.
+  // aparte era trabajo inventado. En Linux (el servidor) no hay Keychain: el
+  // archivo ES la fuente, sin fallback.
   const readers: (() => Promise<string | null>)[] = [];
-  const fromKeychain = async () => {
-    try {
-      const { stdout } = await execFileAsync("security", [
-        "find-generic-password",
-        "-s",
-        "Claude Code-credentials",
-        "-w",
-      ]);
-      const tok = JSON.parse(stdout)?.claudeAiOauth?.accessToken;
-      return typeof tok === "string" && tok ? tok : null;
-    } catch {
-      return null;
-    }
-  };
   const fromFile = async () => {
     try {
       const raw = await readFile(join(homedir(), ".claude", ".credentials.json"), "utf8");
@@ -116,8 +93,7 @@ async function readToken(): Promise<string | null> {
       return null;
     }
   };
-  if (process.platform === "darwin") readers.push(fromKeychain, fromFile);
-  else readers.push(fromFile);
+  readers.push(fromFile);
 
   // Archivo heredado del dashboard (compatibilidad).
   readers.push(async () => {

@@ -64,7 +64,6 @@ import {
   reconcileRunningTasks,
   trackerSummary,
 } from "./tasks/store.js";
-import { openInCursor } from "./agent/editor.js";
 import {
   listClaudeSessions,
   getClaudeSession,
@@ -1195,20 +1194,6 @@ app.get("/vault/doc", async (c) =>
 app.get("/projects/:slug/context", async (c) =>
   c.json(await readProjectContext(c.req.param("slug"))),
 );
-
-// Abre el repo local del proyecto en Cursor (la ruta se resuelve en el server).
-app.post("/projects/:slug/open-editor", async (c) => {
-  const slug = c.req.param("slug");
-  const project = (await readProjects()).find(
-    (p) => p.slug.toLowerCase() === slug.toLowerCase(),
-  );
-  if (!project?.ruta_local) {
-    return c.json({ ok: false, error: "el proyecto no tiene ruta_local en el vault" }, 400);
-  }
-  const res = await openInCursor(project.ruta_local);
-  if (res.ok) emit({ kind: "tool_call", toolName: "open(cursor)", detail: project.name });
-  return c.json(res, res.ok ? 200 : 500);
-});
 
 app.get("/memories/recent", async (c) => c.json(await recentMemories(12)));
 

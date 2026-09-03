@@ -96,12 +96,9 @@ function ensureClaudeProbe(): void {
 
 function capabilities(): MachineCapabilities {
   ensureClaudeProbe(); // el primer latido lo arranca; el resultado entra al siguiente
-  const mac = platform() === "darwin";
   return {
     vault: Boolean(env.VAULT_PATH) && existsSync(env.VAULT_PATH),
     runs: claudeOk === true,
-    // Control de navegador es AppleScript: solo macOS.
-    browser: mac,
     codeGraph: existsSync(env.GRAPHIFY_BIN),
   };
 }
