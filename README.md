@@ -94,10 +94,9 @@ curl -s -N -X POST localhost:8650/v1/chat/completions \
 
 ```
 apps/web        Next.js 15 — dashboard (shell único, providers, design system en src/components/ui)
-apps/agent      Hono — agente (Agent SDK, tools MCP, guardrails, jobs, rutas /v1 /tasks /meetings /content …)
-packages/shared Tipos y lógica compartida (contrato Hermes, etapas de contenido, beats de guion)
-mobile/         App Expo (Android): chat, grabación de juntas a prueba de red, tablero Linear
-supabase/       Migraciones (001 → 024)
+apps/agent      Hono — agente (Agent SDK, tools MCP, guardrails, jobs, rutas /v1 /chat /tracker /claude …)
+packages/shared Tipos y lógica compartida (contrato Hermes)
+supabase/       Migraciones (001 → 025)
 docs/           Guías: multi-máquina, flujo de contenido, publicación automática, SOUL.example.md
 hermes          Lanzador: dev · install · uninstall · doctor · stop · typecheck
 ```
@@ -114,7 +113,7 @@ La guía de arquitectura para trabajar en el código está en [CLAUDE.md](CLAUDE
 - **Estudio de contenido**: pipeline por etapas con criterios reales, teleprompter, checklist de captura contra el disco, voz en off, edición automática (OpenMontage) y métricas de YouTube.
 - **Vida**: finanzas (COP/USD) y hábitos por voz; agenda de Google Calendar con escritura por voz.
 - **Sistema (macOS)**: control por gestos con MediaPipe, navegación web agéntica en un Chrome dedicado, luces Kasa, multi-monitor.
-- **Multi-máquina y móvil**: un dashboard, un agente por PC (descubrimiento por heartbeat); túnel cloudflared + login Supabase para la app.
+- **Multi-máquina y acceso remoto**: un dashboard, un agente por PC (descubrimiento por heartbeat); túnel cloudflared + login Supabase para abrir la PWA fuera de la LAN.
 
 ## Comandos
 
@@ -132,7 +131,7 @@ Logs de producción: `~/.hermes-os/logs/`.
 
 ## Seguridad
 
-- El agente escucha solo en `127.0.0.1` sin `HERMES_API_KEY`; con key se abre a la red y exige Bearer (o JWT de Supabase Auth para el móvil).
+- El agente escucha solo en `127.0.0.1` sin `HERMES_API_KEY`; con key se abre a la red y exige Bearer (o JWT de Supabase Auth para el login de la PWA).
 - Bash/Write/Edit pasan por `canUseTool` ([guardrails.ts](apps/agent/src/agent/guardrails.ts)); el navegador y las luces reciben solo acciones semánticas de una allowlist.
 - `.env`, `SOUL.md`, `.data/` y los binarios generados están fuera de git. Nunca commitees credenciales.
 
