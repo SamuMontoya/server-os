@@ -29,9 +29,6 @@ importers:
       chokidar:
         specifier: ^4.0.3
         version: 4.0.3
-      chrome-devtools-mcp:
-        specifier: ^1.8.0
-        version: 1.8.0
       dotenv:
         specifier: ^16.6.1
         version: 16.6.1
@@ -789,19 +786,6 @@ packages:
   chokidar@4.0.3:
     resolution: {integrity: sha512-Qgzu8kfBvo+cA4962jnP1KkS6Dop5NS6g7R5LFYJr4b8Ub94PPQXUksCw9PvXoeXPRRddRNC5C1JQUR2SMGtnA==}
     engines: {node: '>= 14.16.0'}
-
-  chrome-devtools-mcp@1.8.0:
-    resolution: {integrity: sha512-Wrm9z0/5WbVs778apjWgYRkpe9bvYQWjK2zVRwqoPAtz1IHQ5+GvotM07UGXJcfrA0rj6Gt1Pnn5+w/Tf1nU4w==}
-    engines: {node: ^20.19.0 || ^22.12.0 || >=23}
-    hasBin: true
-    peerDependencies:
-      '@blackwell-systems/gcf': ^2.2.2
-      '@toon-format/toon': ^4.1.0
-    peerDependenciesMeta:
-      '@blackwell-systems/gcf':
-        optional: true
-      '@toon-format/toon':
-        optional: true
 
   client-only@0.0.1:
     resolution: {integrity: sha512-IV3Ou0jSMzZrd3pZ48nLkT9DA7Ag1pnPzaiQhpW7c3RbcqqzvzzVu+L8gfqMp/8IM2MQtSiqaCxrrcfu8I8rMA==}
@@ -2025,8 +2009,6 @@ snapshots:
   chokidar@4.0.3:
     dependencies:
       readdirp: 4.1.2
-
-  chrome-devtools-mcp@1.8.0: {}
 
   client-only@0.0.1: {}
 

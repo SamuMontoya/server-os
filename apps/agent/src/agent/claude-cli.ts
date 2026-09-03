@@ -1,26 +1,20 @@
 /**
- * Ejecuta el CLI real de Claude Code (`claude`) desde el agent server.
- *
- * Dos modos, ambos con Modelo + Esfuerzo + Modo de permisos configurables:
- *  1. Terminal.app real (interactiva)  → openClaudeTerminal()  vía osascript.
- *  2. Panel embebido (headless stream) → startClaudeRun() spawnea
- *     `claude -p --output-format stream-json` y transmite los eventos por SSE.
+ * Ejecuta el CLI real de Claude Code (`claude`) desde el agent server: panel
+ * embebido headless — spawnea `claude -p --output-format stream-json` y
+ * transmite los eventos por SSE. Modelo + esfuerzo + modo de permisos
+ * configurables.
  *
  * Seguridad: los tres parámetros se validan contra allowlists y el prompt
- * viaja SIEMPRE como un único argumento (spawn con array, sin shell) o
- * escapado con comillas simples en el script temporal de Terminal.app.
+ * viaja SIEMPRE como un único argumento (spawn con array, sin shell).
  */
-import { spawn, execFile, type ChildProcess } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { platform, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import type { ClaudeRunSummary, RunTokenUsage } from "@hermes/shared";
 import { env } from "../env.js";
 import { addRunCost } from "../usage.js";
-import { notifyMac } from "../notify.js";
 import { emit } from "../events.js";
 import { startSession, finishSession, checkpointSession } from "./claude-sessions.js";
 
@@ -115,50 +109,6 @@ export function resolveClaudeBin(): string {
   return (cachedBin = "claude"); // fallback a PATH
 }
 
-const sq = (s: string) => `'${String(s).replace(/'/g, `'\\''`)}'`;
-
-// ── Modo 1: Terminal.app real (interactiva) ────────────────────────────
-export async function openClaudeTerminal(
-  opts: ClaudeExecOpts,
-): Promise<{ ok: boolean; error?: string }> {
-  const s = sanitize(opts);
-  if (!s.prompt) return { ok: false, error: "prompt vacío" };
-  // Terminal.app + osascript: solo la Mac. En otra máquina se usa el panel
-  // embebido (startClaudeRun), que es multiplataforma.
-  if (platform() !== "darwin") {
-    return {
-      ok: false,
-      error: `Abrir Terminal.app solo funciona en la Mac (esta máquina: ${env.MACHINE_NAME}). Usa la consola embebida.`,
-    };
-  }
-  const bin = resolveClaudeBin();
-  const cwd = env.VAULT_PATH || process.cwd();
-  const flags = commonFlags(s).map(sq).join(" ");
-
-  // Script temporal: evita el infierno de comillas anidadas de AppleScript y
-  // mantiene el prompt fuera del shell (escapado con comillas simples).
-  const script = `#!/bin/bash
-cd ${sq(cwd)} || exit 1
-echo "▸ Hermes → Claude Code (${s.model} · ${s.effort} · ${s.permissionMode})"
-${sq(bin)} ${flags} -- ${sq(s.prompt)}
-`;
-  const file = join(tmpdir(), `hermes-claude-${randomUUID().slice(0, 8)}.sh`);
-  await writeFile(file, script, { mode: 0o700 });
-
-  const osa = `tell application "Terminal"
-  activate
-  do script "/bin/bash ${file}"
-end tell`;
-
-  return new Promise((resolve) => {
-    execFile("osascript", ["-e", osa], (err) => {
-      if (err) resolve({ ok: false, error: err.message });
-      else resolve({ ok: true });
-    });
-  });
-}
-
-// ── Modo 2: panel embebido (headless, stream-json → SSE) ───────────────
 export interface ClaudeLine {
   t: number;
   kind: "init" | "text" | "tool" | "result" | "done" | "error" | "raw";
@@ -420,17 +370,9 @@ export function startClaudeRun(opts: ClaudeExecOpts): ClaudeRun {
     ]
       .filter(Boolean)
       .join(" · ");
-    notifyMac(
-      run.projectSlug,
-      run.cancelled
-        ? `⏹ run cancelado: ${run.title.slice(0, 80)}`
-        : run.status === "done"
-          ? `✅ terminó${meta ? ` (${meta})` : ""}: ${run.title.slice(0, 80)}`
-          : `❌ falló (código ${code ?? "?"}): ${run.title.slice(0, 80)}`,
-    );
-    // Cierre en el bus de actividad → Toasts del dashboard y anuncio por voz
-    // (VoiceEventsBridge). Antes solo las tareas del SDK emitían task_done, así
-    // que un run de Claude Code terminaba en silencio para la UI y la voz.
+    // Cierre en el bus de actividad → Toasts del dashboard. Antes solo las
+    // tareas del SDK emitían task_done, así que un run de Claude Code
+    // terminaba en silencio para la UI.
     const preview =
       [...run.lines]
         .reverse()

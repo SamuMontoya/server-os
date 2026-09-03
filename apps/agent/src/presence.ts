@@ -102,8 +102,6 @@ function capabilities(): MachineCapabilities {
     runs: claudeOk === true,
     // Control de navegador es AppleScript: solo macOS.
     browser: mac,
-    liveMeetings: Boolean(env.ASSEMBLYAI_API_KEY) || env.LIVE_STT_PROVIDER === "fake",
-    estudioMedia: !!env.ESTUDIO_MEDIA_ROOT && existsSync(env.ESTUDIO_MEDIA_ROOT),
     codeGraph: existsSync(env.GRAPHIFY_BIN),
   };
 }

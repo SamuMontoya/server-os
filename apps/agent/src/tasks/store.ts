@@ -176,13 +176,6 @@ export async function getTask(id: number): Promise<Task | null> {
   return (data as Task) ?? null;
 }
 
-/** Tareas ya triadas de una reunión (para superponer estado en el detalle). */
-export async function tasksForMeeting(meetingId: string): Promise<Task[]> {
-  if (!supabase) return [];
-  const { data } = await supabase.from("tasks").select("*").eq("meeting_id", meetingId);
-  return (data ?? []) as Task[];
-}
-
 // ── Estado ─────────────────────────────────────────────────────────────
 
 export async function setTaskStatus(

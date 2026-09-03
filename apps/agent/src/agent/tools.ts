@@ -4,14 +4,12 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { isEnabled, type Feature } from "@hermes/shared";
 import { env } from "../env.js";
 import { queryCodeGraph } from "../code-graph.js";
 import { saveMemory, searchMemory, savePreference } from "../memory.js";
 import { searchKnowledge, knowledgeToText } from "../knowledge.js";
 import { readProjects } from "../vault/projects.js";
 import { supabase } from "../supabase.js";
-import { lightsCommand, lightsConfigured, LIGHT_ACTIONS } from "../lights.js";
 import { OWNER } from "../owner.js";
 
 const execFileAsync = promisify(execFile);
@@ -212,35 +210,7 @@ const queryCodeGraphTool = tool(
 );
 
 
-const controlLightsTool = tool(
-  "control_lights",
-  `Controla la tira de luces LED del cuarto de ${OWNER} (Kasa 'luz led', en su LAN): encender/apagar, ` +
-    "brillo, color por nombre o HSV, blanco cálido/neutro/frío y efectos animados (Ocean, Rainbow, " +
-    "Lightning, Aurora…). action=status dice cómo está ahora (encendida, brillo, color, consumo). " +
-    "Úsala para 'prende/apaga las luces', 'ponlas en azul', 'bájale el brillo', 'modo océano'.",
-  {
-    action: z.enum(LIGHT_ACTIONS).describe("on · off · toggle · brightness · color · temperature · effect · status"),
-    value: z
-      .string()
-      .optional()
-      .describe(
-        "brightness: 0-100 · color: nombre ('rojo', 'azul', 'blanco cálido'…) o 'hue sat val' · " +
-          "temperature: 2700-5000 o cálido/neutro/frío · effect: nombre del efecto (o alias: océano, arcoíris, tormenta…)",
-      ),
-  },
-  async (args) => {
-    const res = await lightsCommand(args.action, args.value);
-    return text(res.ok ? `Listo: ${res.detail}.` : `No pude: ${res.error}`);
-  },
-);
 
-/**
- * Cada tool declara a qué feature pertenece. Las de features apagadas NO se
- * registran: no basta con que su ruta responda 404 — una tool en el catálogo
- * gasta contexto en cada turno y tienta al modelo a llamarla para nada. Menos
- * tools también significa mejores decisiones, sobre todo en modelos chicos.
- * `null` = núcleo, nunca se apaga.
- */
 // El tipo sale de la firma del propio SDK: cada tool tiene su schema y
 // tiparlas con el de UNA sola las hace incompatibles entre sí.
 // `tools` es opcional en la firma, de ahí el NonNullable antes de indexar.
@@ -253,29 +223,20 @@ type AnyTool = NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>[nu
  * configurado" cuesta su schema en cada turno y le ofrece al modelo una
  * capacidad que no tiene.
  */
-const TOOL_REQUIRES: Map<AnyTool, () => boolean> = new Map([
-  [controlLightsTool as AnyTool, lightsConfigured],
-]);
-
-const TOOL_FEATURE: [AnyTool, Feature | null][] = [
-  [searchKnowledgeTool, null],
-  [saveMemoryTool, null],
-  [searchMemoryTool, null],
-  [savePreferenceTool, null],
-  [getProjectStatusTool, null],
-  [updateProjectNoteTool, null],
-  [searchVaultTool, null],
-  [captureIdeaTool, null],
-  [getRecentActivityTool, null],
-  [queryCodeGraphTool, null],
-  // Las luces son control por red (no osascript): funcionan igual en Linux —
-  // pero solo si hay una tira en la LAN. Ver TOOL_REQUIRES.
-  [controlLightsTool, null],
+// Catálogo completo: sin las 9 features que existían para apagar, ya no hace
+// falta ningún filtro — cada tool que se define acá se registra siempre.
+const ACTIVE_TOOLS: AnyTool[] = [
+  searchKnowledgeTool,
+  saveMemoryTool,
+  searchMemoryTool,
+  savePreferenceTool,
+  getProjectStatusTool,
+  updateProjectNoteTool,
+  searchVaultTool,
+  captureIdeaTool,
+  getRecentActivityTool,
+  queryCodeGraphTool,
 ];
-
-const ACTIVE_TOOLS = TOOL_FEATURE.filter(
-  ([tool, f]) => (f === null || isEnabled(f)) && (TOOL_REQUIRES.get(tool)?.() ?? true),
-).map(([tool]) => tool);
 
 export const hermesMcpServer = createSdkMcpServer({
   name: "hermes",

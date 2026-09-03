@@ -1,8 +1,8 @@
 "use client";
 
-import { Children, useEffect, useRef, useState } from "react";
+import { Children, useEffect, useState } from "react";
 import type { ProjectContext } from "@hermes/shared";
-import { getProjectContext, openProjectInCursor } from "@/lib/hermes";
+import { getProjectContext } from "@/lib/hermes";
 import { Panel } from "@/components/ui/Panel";
 import { PanelState } from "@/components/ui/PanelState";
 import type { Tone } from "@/components/ui/tones";
@@ -29,32 +29,11 @@ export function ProjectContextPanel({
   const [ctx, setCtx] = useState<ProjectContext | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [opening, setOpening] = useState(false);
-  const [openError, setOpenError] = useState<string | null>(null);
-  // Vive mientras el componente esté montado → no toca estado tras desmontar
-  // (p.ej. si se quita el foco con un "abrir en Cursor" todavía en vuelo).
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  const openCursor = async () => {
-    setOpening(true);
-    setOpenError(null);
-    const res = await openProjectInCursor(slug);
-    if (!mounted.current) return;
-    if (!res.ok) setOpenError(res.error ?? "no se pudo abrir Cursor");
-    setOpening(false);
-  };
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError(false);
-    setOpenError(null);
     setCtx(null);
     getProjectContext(slug)
       .then((data) => {
@@ -151,28 +130,10 @@ export function ProjectContextPanel({
               </span>
             </div>
             {ctx.ruta_local && (
-              <div className="flex items-center gap-2">
-                <p
-                  className="min-w-0 flex-1 truncate text-2xs text-text-dim"
-                  title={ctx.ruta_local}
-                >
-                  {ctx.ruta_local}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void openCursor()}
-                  disabled={opening}
-                  title="Abrir el proyecto en Cursor"
-                  aria-label="Abrir el proyecto en Cursor"
-                  className="flex shrink-0 items-center gap-1 rounded-sm border border-cyan bg-cyan/5 px-1.5 py-0.5 text-2xs tracking-label text-cyan uppercase opacity-80 transition-opacity hover:opacity-100 disabled:opacity-40"
-                >
-                  <CursorGlyph spinning={opening} />
-                  {opening ? "Abriendo…" : "Cursor"}
-                </button>
-              </div>
+              <p className="min-w-0 truncate text-2xs text-text-dim" title={ctx.ruta_local}>
+                {ctx.ruta_local}
+              </p>
             )}
-
-            {openError && <p className="text-2xs leading-snug text-red">⚠ {openError}</p>}
 
             {empty && (
               <p className="pt-1 text-2xs leading-relaxed text-text-dim">
@@ -330,28 +291,5 @@ function Chip({
     >
       {children}
     </span>
-  );
-}
-
-// Icono del botón "Abrir en Cursor": open-external en reposo, spinner al abrir.
-function CursorGlyph({ spinning }: { spinning?: boolean }) {
-  if (spinning) {
-    return (
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" className="animate-spin" aria-hidden="true">
-        <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" strokeOpacity="0.25" />
-        <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M14 4h6v6M20 4l-8 8M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"
-        stroke="currentColor"
-        strokeWidth="1.7"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }

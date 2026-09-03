@@ -27,7 +27,6 @@ export const CLAUDE_EFFORTS = [
 export const CLAUDE_PERMISSIONS = [
   { label: "Auto-editar", value: "acceptEdits" },
   { label: "Plan (solo lee)", value: "plan" },
-  { label: "Manual", value: "manual" },
 ] as const;
 
 export const DEFAULT_CLAUDE_CONFIG: ClaudeExecConfig = {
@@ -46,8 +45,8 @@ export const claudeModelLabel = (value: string): string => labelOf(CLAUDE_MODELS
 
 /**
  * Selector de ejecución de Claude Code (estilo la barra de model/effort del
- * propio Claude Code): Modelo + Esfuerzo + Permisos, más dos acciones —
- * abrir Terminal.app real o ejecutar en el panel embebido.
+ * propio Claude Code): Modelo + Esfuerzo + Permisos, más la acción de correr
+ * en el panel embebido.
  */
 export function ClaudeExecBar({
   config,
@@ -57,7 +56,7 @@ export function ClaudeExecBar({
 }: {
   config: ClaudeExecConfig;
   onChange: (cfg: ClaudeExecConfig) => void;
-  onRun: (mode: "terminal" | "embedded") => void;
+  onRun: () => void;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -85,16 +84,7 @@ export function ClaudeExecBar({
           <button
             type="button"
             disabled={disabled}
-            onClick={() => onRun("terminal")}
-            title="Abrir una Terminal.app real con claude corriendo"
-            className="rounded-sm border border-line-2 px-2 py-1 text-2xs tracking-[0.15em] text-text uppercase transition-colors disabled:opacity-40"
-          >
-            ▶ Terminal
-          </button>
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onRun("embedded")}
+            onClick={() => onRun()}
             title="Ejecutar aquí, en el panel embebido"
             className="rounded-sm bg-violet/15 px-2 py-1 text-2xs tracking-[0.15em] text-violet-hot uppercase transition-colors disabled:opacity-40"
           >
@@ -134,26 +124,19 @@ export function ClaudeExecBar({
             </div>
           </Field>
 
-          <div>
-            <Field label="Permisos">
-              <div className="flex gap-1">
-                {CLAUDE_PERMISSIONS.map((p) => (
-                  <Segment
-                    key={p.value}
-                    active={config.permissionMode === p.value}
-                    onClick={() => onChange({ ...config, permissionMode: p.value })}
-                  >
-                    {p.label}
-                  </Segment>
-                ))}
-              </div>
-            </Field>
-            {config.permissionMode === "manual" && (
-              <p className="mt-1 pl-[72px] text-2xs tracking-[0.1em] text-amber">
-                “Manual” solo aplica en ▶ Terminal; en ▣ Panel (headless) equivale a “default”.
-              </p>
-            )}
-          </div>
+          <Field label="Permisos">
+            <div className="flex gap-1">
+              {CLAUDE_PERMISSIONS.map((p) => (
+                <Segment
+                  key={p.value}
+                  active={config.permissionMode === p.value}
+                  onClick={() => onChange({ ...config, permissionMode: p.value })}
+                >
+                  {p.label}
+                </Segment>
+              ))}
+            </div>
+          </Field>
         </div>
       )}
     </div>

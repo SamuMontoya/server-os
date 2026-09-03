@@ -5,7 +5,6 @@ import type { ChatSessionSummary, ChatToolStep } from "@hermes/shared";
 import {
   listChatSessions,
   getChatSession,
-  claudeOpenTerminal,
   claudeStartRun,
   type ChatMessage,
   type ClaudeExecConfig,
@@ -21,7 +20,7 @@ import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { beginSpeechTurn, feedSpeech } from "@/hooks/useSpeech";
 import { SpeechHighlight } from "./SpeechHighlight";
 import { useWorkspace } from "@/state/WorkspaceContext";
-import { ClaudeExecBar, claudeModelLabel } from "./ClaudeExecBar";
+import { ClaudeExecBar } from "./ClaudeExecBar";
 import { AgentSteps } from "./AgentSteps";
 import { Markdown } from "./Markdown";
 import { Pensando } from "./Pensando";
@@ -657,8 +656,8 @@ export function ChatPanel({
     updateTab(active.key, (t) => ({ ...t, busy: false, pendingTurn: undefined }));
   };
 
-  // Enviar el prompt al CLI real de Claude Code (Terminal.app o panel embebido).
-  const runClaude = async (mode: "terminal" | "embedded") => {
+  // Enviar el prompt al CLI real de Claude Code (panel embebido).
+  const runClaude = async () => {
     const content = active.draft.trim();
     if (!content) {
       setClaudeNote("Escribe un prompt primero.");
@@ -669,21 +668,14 @@ export function ChatPanel({
     setClaudeBusy(true);
     if (listening) micStop();
     try {
-      if (mode === "terminal") {
-        await claudeOpenTerminal(content, claudeConfig, selectedProject);
-        setClaudeNote(
-          `▶ Terminal.app abierta (${claudeModelLabel(claudeConfig.model)} · ${claudeConfig.effort}).`,
-        );
-      } else {
-        const { runId, sessionId } = await claudeStartRun(
-          content,
-          claudeConfig,
-          selectedProject,
-          claudeSessionId,
-        );
-        onClaudeRun(runId, sessionId);
-        setClaudeNote("");
-      }
+      const { runId, sessionId } = await claudeStartRun(
+        content,
+        claudeConfig,
+        selectedProject,
+        claudeSessionId,
+      );
+      onClaudeRun(runId, sessionId);
+      setClaudeNote("");
       updateTab(active.key, (t) => ({ ...t, draft: "" }));
       resizeInput();
     } catch (err) {
@@ -942,7 +934,7 @@ export function ChatPanel({
       <ClaudeExecBar
         config={claudeConfig}
         onChange={onClaudeConfigChange}
-        onRun={(mode) => void runClaude(mode)}
+        onRun={() => void runClaude()}
         disabled={active.busy || claudeBusy}
       />
       {claudeNote && (

@@ -6,9 +6,7 @@ import { bodyLimit } from "hono/body-limit";
 import { streamSSE } from "hono/streaming";
 import type {
   TaskState,
-  Feature,
 } from "@hermes/shared";
-import { isEnabled, featureSummary } from "@hermes/shared";
 import { env } from "./env.js";
 import { EMB } from "./embeddings.js";
 import { modelSummary } from "./agent/models.js";
@@ -27,7 +25,6 @@ import { registerJob, listJobs } from "./jobs.js";
 import { updateCodeGraph } from "./code-graph.js";
 import { getSdkSession, getTask, listTasks, startTask } from "./agent/session.js";
 import {
-  openClaudeTerminal,
   startClaudeRun,
   getClaudeRun,
   listClaudeRuns,
@@ -54,16 +51,6 @@ import {
 } from "./chat-attachments.js";
 // El dictado del composer usaba el mismo STT que las juntas (Scribe → Whisper).
 import { transcribe } from "./stt.js";
-import {
-  openInBrowser,
-  listTabs,
-  switchTab,
-  browserCommand,
-  ensureCdpChrome,
-  BROWSER_COMMANDS,
-  type BrowserCommand,
-} from "./browser.js";
-import { lightsCommand, LIGHT_ACTIONS, type LightAction } from "./lights.js";
 import { listExecutions, getExecution } from "./tasks/executions.js";
 import {
   listTasks as listTrackerTasks,
@@ -189,25 +176,6 @@ app.use("*", async (c, next) => {
       const userId = await verifySupabaseToken(bearer || queryKey);
       if (!userId) return c.json({ error: "unauthorized" }, 401);
     }
-  }
-  await next();
-});
-
-// ── Features apagadas ─────────────────────────────────────────────────
-// Un solo guardia por PREFIJO en vez de tocar cada una de las ~80 rutas: son
-// planas y están repartidas por todo el archivo, así que gatearlas de a una
-// se desincronizaría a la primera ruta nueva. El código de la feature queda
-// intacto — solo deja de ser alcanzable.
-const FEATURE_PREFIX: [string, Feature][] = [
-];
-
-app.use("*", async (c, next) => {
-  const path = c.req.path;
-  const hit = FEATURE_PREFIX.find(([prefix]) => path === prefix || path.startsWith(`${prefix}/`));
-  if (hit && !isEnabled(hit[1])) {
-    // 404 con motivo, no 500 ni un silencio: quien llama debe poder distinguir
-    // "no existe aquí" de "se rompió".
-    return c.json({ error: `feature "${hit[1]}" desactivada en ${env.MACHINE_NAME}` }, 404);
   }
   await next();
 });
@@ -910,83 +878,6 @@ app.post(
 );
 
 
-// ── Control del navegador por voz (Chrome real vía AppleScript) ────────
-// Respuestas SIEMPRE 200 con { ok, error }: el client tool de la voz relata
-// el error tal cual (p.ej. el permiso de "Allow JavaScript from Apple Events").
-
-app.post("/browser/open", async (c) => {
-  const body = await c.req.json<{ target?: string }>().catch(() => ({}) as { target?: string });
-  const target = body.target?.trim();
-  if (!target) return c.json({ ok: false, error: "target requerido" }, 400);
-  const res = await openInBrowser(target);
-  if (res.ok) emit({ kind: "browser", detail: `abrió ${res.label}` });
-  return c.json(res);
-});
-
-app.get("/browser/tabs", async (c) => c.json(await listTabs()));
-
-app.post("/browser/tab", async (c) => {
-  const body = await c.req.json<{ query?: string }>().catch(() => ({}) as { query?: string });
-  const query = body.query?.trim();
-  if (!query) return c.json({ ok: false, error: "query requerido" }, 400);
-  const res = await switchTab(query);
-  if (res.ok) emit({ kind: "browser", detail: `pestaña → ${res.title.slice(0, 60)}` });
-  return c.json(res);
-});
-
-// Navegación PROFUNDA en lenguaje natural: un agente SDK con las tools de
-// chrome-devtools-mcp maneja el Chrome CDP dedicado (visible). Async como
-// /tasks: task_id inmediato, la voz reporta con check_task.
-app.post("/browser/navigate", async (c) => {
-  if (!env.BROWSER_AGENT_ENABLED) {
-    return c.json({ ok: false, error: "navegación agéntica desactivada (HERMES_BROWSER_AGENT=off)" });
-  }
-  const body = await c.req
-    .json<{ instruction?: string }>()
-    .catch(() => ({}) as { instruction?: string });
-  const instruction = body.instruction?.trim();
-  if (!instruction) return c.json({ ok: false, error: "instruction requerida" }, 400);
-  // Pre-lanza el Chrome dedicado: la ventana aparece YA (feedback visual)
-  // mientras arranca la sesión SDK; el guardrail lo re-garantiza por tool.
-  void ensureCdpChrome();
-  const task = startTask(
-    `Eres las manos de ${OWNER} en su navegador. Usa las tools del navegador (mcp__chrome-devtools__*) para cumplir EXACTAMENTE esta instrucción dicha por voz: "${instruction}".
-
-Método: navega a la URL que corresponda; toma un snapshot para VER la página y sus elementos (uids); interactúa (click, llenar, scroll) usando esos uids; verifica con otro snapshot tras cada acción importante. El Chrome es REAL y ${OWNER} lo está VIENDO en pantalla: no cierres pestañas que no abriste tú. Si un sitio pide iniciar sesión, NO intentes credenciales — reporta que ${OWNER} debe iniciar sesión una vez en el perfil "Hermes" y ahí queda guardada. Termina SIEMPRE con un resumen de una o dos frases aptas para voz: dónde quedaste y qué encontraste.`,
-  );
-  emit({ kind: "browser", detail: `navegando: ${instruction.slice(0, 120)}` });
-  return c.json({ ok: true, task_id: task.id });
-});
-
-app.post("/browser/command", async (c) => {
-  const body = await c.req.json<{ command?: string }>().catch(() => ({}) as { command?: string });
-  const command = body.command?.trim() as BrowserCommand | undefined;
-  if (!command || !BROWSER_COMMANDS.includes(command)) {
-    return c.json({ ok: false, error: `command inválido (${BROWSER_COMMANDS.join("|")})` }, 400);
-  }
-  const res = await browserCommand(command);
-  if (res.ok) emit({ kind: "browser", detail: `navegador · ${command}` });
-  return c.json(res);
-});
-
-// ── Luces del cuarto (tira Kasa KL400L5 "luz led" en la LAN) ───────────
-// Mismo contrato que el navegador: 200 con { ok, detail | error } para que
-// la voz relate el resultado (o el error) tal cual.
-
-app.post("/lights/command", async (c) => {
-  const body = await c.req
-    .json<{ action?: string; value?: string | number }>()
-    .catch(() => ({}) as { action?: string; value?: string | number });
-  const action = body.action?.trim() as LightAction | undefined;
-  if (!action || !LIGHT_ACTIONS.includes(action)) {
-    return c.json({ ok: false, error: `action inválida (${LIGHT_ACTIONS.join("|")})` }, 400);
-  }
-  const res = await lightsCommand(action, body.value == null ? undefined : String(body.value));
-  if (res.ok && action !== "status") emit({ kind: "lights", detail: `luces · ${res.detail}` });
-  return c.json(res);
-});
-
-app.get("/lights/state", async (c) => c.json(await lightsCommand("status")));
 
 
 // ── Tracker de tareas por proyecto ─────────────────────────────────────
@@ -1066,7 +957,7 @@ app.post("/tracker/reconcile", async (c) => c.json({ fixed: await reconcileRunni
 
 
 
-// ── Claude Code (CLI real): Terminal.app + panel embebido ──────────────
+// ── Claude Code (CLI real): panel embebido headless ────────────────────
 interface ClaudeExecBody {
   prompt?: string;
   model?: string;
@@ -1076,22 +967,6 @@ interface ClaudeExecBody {
   /** Si viene, se resume esa sesión de Claude Code en vez de crear una nueva. */
   resumeSessionId?: string;
 }
-
-// Abre una ventana de Terminal.app real con `claude` interactivo.
-app.post("/claude/terminal", async (c) => {
-  const b = await c.req.json<ClaudeExecBody>().catch(() => ({}) as ClaudeExecBody);
-  if (!b.prompt?.trim()) return c.json({ error: "prompt requerido" }, 400);
-  const res = await openClaudeTerminal({
-    prompt: b.prompt,
-    model: b.model,
-    effort: b.effort,
-    permissionMode: b.permissionMode,
-    projectContext: b.project,
-  });
-  if (!res.ok) return c.json({ ok: false, error: res.error }, 500);
-  emit({ kind: "tool_call", toolName: "claude(terminal)", detail: b.prompt.slice(0, 120) });
-  return c.json({ ok: true });
-});
 
 // Inicia una corrida headless de `claude -p` y transmite por SSE al panel.
 app.post("/claude/run", async (c) => {
@@ -1467,10 +1342,6 @@ serve({ fetch: app.fetch, port: env.PORT, hostname, websocket: { server: wss } }
   );
   console.log(`   vault: ${env.VAULT_PATH || "(sin configurar)"}`);
   console.log(`   supabase: ${hasSupabase() ? "conectado" : "no configurado"}`);
-  // Qué quedó apagado, explícito al arrancar: si una ruta responde 404 más
-  // tarde, esta línea es la respuesta y no hay que ir a leer el .env.
-  const feats = featureSummary();
-  if (feats.off.length) console.log(`   apagadas: ${feats.off.join(", ")}`);
   console.log(`   embeddings: ${EMB.provider} (${EMB.dims}d → ${EMB.col})`);
   // La política de modelos, explícita: qué rol usa qué. Sin esto, saber por
   // qué un turno salió caro obliga a leer el .env y tres archivos.

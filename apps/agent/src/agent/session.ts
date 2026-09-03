@@ -1,17 +1,13 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
 import type { ChatToolStep, HermesTask } from "@hermes/shared";
 import { env } from "../env.js";
 import { emit } from "../events.js";
-import { notifyMac } from "../notify.js";
 import { setPresence } from "../presence.js";
 import { supabase } from "../supabase.js";
 import { buildTurnContext, systemPromptFor } from "./system-prompt.js";
 import { checkTool } from "./guardrails.js";
 import { hermesMcpServer, HERMES_TOOL_NAMES } from "./tools.js";
-import { ensureCdpChrome, CDP_URL } from "../browser.js";
 import {
   TIERS,
   capEffort,
@@ -26,38 +22,6 @@ import {
 import { currentProfile } from "./budget.js";
 import { subagentsEnabled } from "./models.js";
 import { attachmentPreamble } from "../chat-attachments.js";
-
-/**
- * MCP de chrome-devtools (navegación web agéntica). Stdio local: el node del
- * agente + el bin del paquete por ruta ABSOLUTA (launchd no tiene npx/PATH).
- * Con --browserUrl el MCP solo se CONECTA al Chrome CDP dedicado que maneja
- * browser.ts (ensureCdpChrome) — nunca lanza Chrome él mismo, así N sesiones
- * SDK concurrentes comparten la misma instancia visible.
- */
-const localRequire = createRequire(import.meta.url);
-let chromeMcpBin: string | null | undefined;
-function resolveChromeMcpBin(): string | null {
-  if (chromeMcpBin !== undefined) return chromeMcpBin;
-  try {
-    const pkgPath = localRequire.resolve("chrome-devtools-mcp/package.json");
-    const pkg = localRequire("chrome-devtools-mcp/package.json") as {
-      bin?: Record<string, string>;
-    };
-    const rel = pkg.bin?.["chrome-devtools-mcp"];
-    chromeMcpBin = rel ? resolve(dirname(pkgPath), rel) : null;
-  } catch {
-    chromeMcpBin = null;
-  }
-  return chromeMcpBin;
-}
-
-function chromeMcpServer(bin: string) {
-  return {
-    type: "stdio" as const,
-    command: process.execPath,
-    args: [bin, `--browserUrl=${CDP_URL}`],
-  };
-}
 
 /**
  * Corre UN turno agéntico con el Claude Agent SDK.
@@ -306,16 +270,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         settingSources: [],
         resume: opts.resumeSessionId,
         ...(opts.abortController ? { abortController: opts.abortController } : {}),
-        // En modo magro solo va `hermes`, que es en-proceso y gratis. El de
-        // chrome-devtools se paga EN CADA TURNO antes de la primera palabra
-        // (levanta un proceso nuevo) — para una pregunta de reloj no aporta
-        // nada y cuesta segundos.
-        mcpServers: {
-          hermes: hermesMcpServer,
-          ...(!opts.magro && env.BROWSER_AGENT_ENABLED && resolveChromeMcpBin()
-            ? { "chrome-devtools": chromeMcpServer(resolveChromeMcpBin()!) }
-            : {}),
-        },
+        mcpServers: { hermes: hermesMcpServer },
         // Subagentes: delegar lo MECÁNICO a haiku. Leer archivos y buscar no
         // requiere el modelo caro, y cada delegación saca ese trabajo del
         // contexto del hilo principal — que es donde el costo se acumula turno
@@ -380,17 +335,6 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         ],
         permissionMode: "default",
         canUseTool: async (toolName, input) => {
-          // Tools del navegador: NO van en allowedTools a propósito — pasar
-          // por aquí garantiza el Chrome CDP dedicado ANTES de cada uso (el
-          // MCP solo se conecta; si el Chrome no está, el tool fallaría).
-          if (toolName.startsWith("mcp__chrome-devtools__")) {
-            const chrome = await ensureCdpChrome();
-            if (!chrome.ok) {
-              emit({ kind: "error", taskId: opts.taskId, toolName, detail: chrome.error });
-              return { behavior: "deny", message: chrome.error ?? "Chrome CDP no disponible" };
-            }
-            return { behavior: "allow", updatedInput: input };
-          }
           const verdict = checkTool(toolName, input as Record<string, unknown>);
           if (!verdict.allowed) {
             emit({
@@ -652,12 +596,6 @@ export function startTask(prompt: string): HermesTask {
       taskId: task.id,
       detail: (result.finalText || "").slice(0, 300),
     });
-    notifyMac(
-      "tarea",
-      result.isError
-        ? `❌ falló: ${prompt.slice(0, 80)}`
-        : `✅ terminó: ${prompt.slice(0, 80)}`,
-    );
   })();
 
   return task;

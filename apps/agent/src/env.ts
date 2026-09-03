@@ -1,18 +1,11 @@
 import { config } from "dotenv";
-import { homedir, platform } from "node:os";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // El .env vive en la raíz del monorepo para compartirlo entre apps.
 const root = resolve(fileURLToPath(import.meta.url), "../../../..");
 config({ path: resolve(root, ".env") });
-
-/**
- * ¿Corremos en macOS? Varias features son CGEvents u osascript y no existen
- * fuera de ahí. server-os corre en Linux: en vez de fallar al usarlas, se
- * apagan de entrada para que `capabilities` diga la verdad.
- */
-export const IS_MAC = platform() === "darwin";
 
 export const env = {
   PORT: Number(process.env.HERMES_PORT || 8642),
@@ -48,35 +41,6 @@ export const env = {
   // Whisper de fallback. Ponlo en "whisper" si ElevenLabs se queda sin
   // créditos para no gastar la llamada fallida a Scribe.
   STT_PROVIDER: (process.env.HERMES_STT || "").toLowerCase(),
-  // Junta EN VIVO: STT streaming con diarización (AssemblyAI Universal-Streaming).
-  ASSEMBLYAI_API_KEY: process.env.ASSEMBLYAI_API_KEY || "",
-  // Provider del STT en vivo: "assemblyai" | "fake" (guion de prueba, sin gastar).
-  LIVE_STT_PROVIDER: (process.env.HERMES_LIVE_STT || "assemblyai").toLowerCase(),
-  // Capa RÁPIDA del copiloto de juntas (sugerencias streaming tras una pregunta).
-  // Corre con la suscripción de Claude Code (sesión persistente del Agent SDK),
-  // no requiere API key. "" = activada | "fake" (respuesta enlatada, e2e sin
-  // gastar) | "off" (solo queda el loop estratégico de 20-45 s).
-  COPILOT_PROVIDER: (process.env.HERMES_COPILOT || "").toLowerCase(),
-  COPILOT_MODEL: process.env.HERMES_COPILOT_MODEL || "claude-haiku-4-5",
-  // Navegación profunda por voz (chrome-devtools-mcp sobre un Chrome CDP
-  // dedicado). "off" no registra el MCP ni expone /browser/navigate.
-  // También mac-only: ensureCdpChrome() lanza Chrome con `open -a`.
-  BROWSER_AGENT_ENABLED:
-    IS_MAC && (process.env.HERMES_BROWSER_AGENT || "").toLowerCase() !== "off",
-  // Linear (manejo de tareas). Personal API key (Settings → API en Linear).
-  // Sin key, las tools de Linear responden con el CTA de configuración.
-  LINEAR_API_KEY: process.env.LINEAR_API_KEY || "",
-  // Team por defecto para issues nuevos (key tipo "RUL"). Sin él, el primer team.
-  LINEAR_TEAM_KEY: process.env.LINEAR_TEAM_KEY || "",
-  // Edición automática de piezas del Estudio: repo local de OpenMontage
-  // (agent-first — su CLAUDE.md/AGENT_GUIDE dirigen el pipeline). Si la ruta
-  // no existe, el botón de la UI lo dice y las rutas responden 503.
-  VIDEO_EDIT_PATH: process.env.VIDEO_EDIT_PATH || resolve(homedir(), "dev/video-edit"),
-  // Carpeta madre del material del Estudio (p.ej. un disco extraíble): cada
-  // pieza vive en <root>/<slug>/{crudos,assets,exports}. Vacío = sin disco
-  // configurado; si no está montado, la UI lo dice y el checklist queda en
-  // modo solo-nombres (fallback local en ~/Movies/estudio).
-  ESTUDIO_MEDIA_ROOT: process.env.ESTUDIO_MEDIA_ROOT || "",
   // Grafo de código (graphify). launchd corre con PATH mínimo (sin ~/.local/bin),
   // por eso el binario se resuelve por ruta absoluta.
   GRAPHIFY_BIN: process.env.GRAPHIFY_BIN || resolve(homedir(), ".local/bin/graphify"),

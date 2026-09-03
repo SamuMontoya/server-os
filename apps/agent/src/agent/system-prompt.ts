@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { env, IS_MAC } from "../env.js";
+import { env } from "../env.js";
 import { readProjects } from "../vault/projects.js";
 import { listPreferences, recentMemories } from "../memory.js";
 import { searchKnowledge } from "../knowledge.js";
@@ -75,17 +75,9 @@ Reglas:
 - NUNCA termines tu respuesta diciendo que "avisas cuando esté listo", "te aviso en un momento" o algo similar y te quedes ahí sin hacer nada más: no existe un "después" en el que vuelvas a escribir solo — este turno es tu única oportunidad de trabajar. Si la tarea implica varios pasos (leer, buscar, ejecutar, escribir), HAZLOS ahora mismo, uno tras otro, en este mismo turno, y usa las tools de verdad (no solo lo digas). Si de verdad no te alcanza el turno para terminar, el sistema te deja continuar solo automáticamente — pero eso pasa por seguir llamando tools, nunca por prometer que ibas a hacerlo.`);
 
 
-  // Estas líneas describen tools que solo existen si su feature está encendida.
-  // Dejarlas fijas costaba ~500 tokens por TURNO enseñándole al modelo a llamar
-  // herramientas no registradas — gasto y alucinación a la vez.
-  const toolDocs: string[] = [
-    "  - query_code_graph: preguntas sobre la estructura del código de hermes-os (qué depende de qué, dónde vive un módulo, cómo se conectan dos partes). Prefiérela sobre leer archivos a ciegas.",
-  ];
-  if (IS_MAC && env.BROWSER_AGENT_ENABLED)
-    toolDocs.push(
-      `  - mcp__chrome-devtools__* (si están disponibles): NAVEGAR la web de verdad en un Chrome dedicado VISIBLE (perfil "Hermes", con sesiones persistidas). Flujo: navega a la página → toma un snapshot para ver los elementos y sus uids → interactúa (click/llenar) con esos uids → verifica con otro snapshot. ${OWNER} está VIENDO esa ventana: no cierres pestañas que no abriste. Si un sitio pide login, no intentes credenciales — reporta que ${OWNER} inicie sesión una vez en ese perfil.`,
-    );
-  if (toolDocs.length) parts.push(`Tools adicionales disponibles:\n${toolDocs.join("\n")}`);
+  parts.push(
+    "Tools adicionales disponibles:\n  - query_code_graph: preguntas sobre la estructura del código de hermes-os (qué depende de qué, dónde vive un módulo, cómo se conectan dos partes). Prefiérela sobre leer archivos a ciegas.",
+  );
 
   // Persona y preferencias del dueño (SOUL.md, fuera del repo)
   const soul = soulPromptBlock();
