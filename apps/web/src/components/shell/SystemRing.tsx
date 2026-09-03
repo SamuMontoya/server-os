@@ -1,8 +1,8 @@
 "use client";
 
 // Anillo "SISTEMA" del header (referencia): porcentaje de checks REALES
-// pasados — agente local vivo, Supabase sync, SSE conectado y voz
-// configurada. Nada de 100% fingido; el tooltip desglosa qué falla.
+// pasados — agente local vivo, Supabase sync y SSE conectado. Nada de 100%
+// fingido; el tooltip desglosa qué falla.
 
 import { useHermesData } from "@/hooks/useHermesData";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
@@ -11,13 +11,11 @@ import { RadialGauge } from "@/components/ui/RadialGauge";
 export function SystemRing() {
   const { stats, online } = useHermesData();
   const { connected } = useAgentEvents();
-  const voiceConfigured = Boolean(process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID);
 
   const checks: { label: string; ok: boolean }[] = [
     { label: "agente local", ok: online },
     { label: "supabase sync", ok: Boolean(stats?.supabase) },
     { label: "eventos en vivo (SSE)", ok: connected },
-    { label: "voz configurada", ok: voiceConfigured },
   ];
   const passed = checks.filter((c) => c.ok).length;
   const pct = Math.round((passed / checks.length) * 100);
