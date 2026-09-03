@@ -49,11 +49,6 @@ export const env = {
   // Whisper de fallback. Ponlo en "whisper" si ElevenLabs se queda sin
   // créditos para no gastar la llamada fallida a Scribe.
   STT_PROVIDER: (process.env.HERMES_STT || "").toLowerCase(),
-  // Grafo de código (graphify). launchd corre con PATH mínimo (sin ~/.local/bin),
-  // por eso el binario se resuelve por ruta absoluta.
-  GRAPHIFY_BIN: process.env.GRAPHIFY_BIN || resolve(homedir(), ".local/bin/graphify"),
-  // Repo indexado que responde query_code_graph (piloto: este monorepo).
-  CODE_GRAPH_ROOT: process.env.CODE_GRAPH_ROOT || root,
 };
 
 export const REPO_ROOT = root;

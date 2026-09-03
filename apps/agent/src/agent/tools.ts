@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { env } from "../env.js";
-import { queryCodeGraph } from "../code-graph.js";
 import { saveMemory, searchMemory, savePreference } from "../memory.js";
 import { searchKnowledge, knowledgeToText } from "../knowledge.js";
 import { readProjects } from "../vault/projects.js";
@@ -194,23 +193,6 @@ const getRecentActivityTool = tool(
 );
 
 
-const queryCodeGraphTool = tool(
-  "query_code_graph",
-  `Responde preguntas sobre la ESTRUCTURA del código de los proyectos de ${OWNER} usando su grafo de dependencias (graphify, local). Por defecto consulta hermes-os; pasa 'project' (slug del vault: zylen, ternium, careways, teker, video-edit…) para consultar otro. mode=query: pregunta libre ('¿qué conecta el checkout con el pago?'); mode=explain: explica un símbolo/módulo y sus conexiones ('explícame registerJob'); mode=path: ruta de dependencias entre dos símbolos/archivos (requiere target). Úsala para '¿dónde vive X?', '¿qué depende de Y?', '¿cómo se conectan A y B?' — nunca adivines arquitectura.`,
-  {
-    mode: z.enum(["query", "path", "explain"]).describe("query=pregunta libre, explain=explicar un símbolo, path=ruta entre dos nodos"),
-    query: z.string().describe("La pregunta (query), el símbolo a explicar (explain) o el nodo origen (path)"),
-    target: z.string().optional().describe("Solo para mode=path: nodo destino"),
-    project: z.string().optional().describe("Slug del proyecto a consultar (ej: zylen, ternium, careways). Omitir = hermes-os (este dashboard)."),
-  },
-  async ({ mode, query, target, project }) => {
-    if (mode === "path" && !target) return text("mode=path requiere 'target' (nodo destino).");
-    return text(await queryCodeGraph(mode, query, target, project));
-  },
-);
-
-
-
 // El tipo sale de la firma del propio SDK: cada tool tiene su schema y
 // tiparlas con el de UNA sola las hace incompatibles entre sí.
 // `tools` es opcional en la firma, de ahí el NonNullable antes de indexar.
@@ -235,7 +217,6 @@ const ACTIVE_TOOLS: AnyTool[] = [
   searchVaultTool,
   captureIdeaTool,
   getRecentActivityTool,
-  queryCodeGraphTool,
 ];
 
 export const hermesMcpServer = createSdkMcpServer({

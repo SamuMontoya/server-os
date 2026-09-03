@@ -493,8 +493,6 @@ export interface MachineCapabilities {
   vault: boolean;
   /** Ejecuta `claude` (runs, tareas, chat con memoria de sesión). */
   runs: boolean;
-  /** Grafo de código (binario de graphify presente). */
-  codeGraph: boolean;
 }
 
 /** Conteos del tracker por estado (header del tablero). */

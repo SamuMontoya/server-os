@@ -12,7 +12,6 @@ import { hasSupabase } from "./memory.js";
 import { syncVaultKnowledge } from "./vault/knowledge-sync.js";
 import { startSystemSampler } from "./system.js";
 import { registerJob } from "./jobs.js";
-import { updateCodeGraph } from "./code-graph.js";
 import { reconcileRunningTasks } from "./tasks/store.js";
 import { relojRapido } from "./watch/rapido.js";
 import { registerChatRoutes } from "./routes/chat.js";
@@ -144,13 +143,6 @@ registerJob("presence-heartbeat", 30_000, pushPresence, () =>
 registerJob("vault-knowledge-sync", 10 * 60_000, syncVaultKnowledge, (r) =>
   r ? `${r.indexed} notas vectorizadas, ${r.removed} eliminadas (${r.scanned} escaneadas)` : null,
 );
-// Grafo de código (graphify): refresca hermes-os + proyectos activos con repo git.
-registerJob("code-graph-update", 6 * 60 * 60_000, updateCodeGraph, (r) =>
-  r
-    ? `${r.total} repos: ${r.updated} actualizados, ${r.built} nuevos${r.failed ? `, ${r.failed} con error` : ""}`
-    : null,
-);
-
 // Bind explícito: sin API key SOLO loopback (antes escuchaba en todas las
 // interfaces con la LAN sin auth); con key se abre a 0.0.0.0 para que otra
 // Mac llegue por Tailscale con Bearer/?key=.

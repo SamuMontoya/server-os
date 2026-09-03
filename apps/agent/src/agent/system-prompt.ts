@@ -69,10 +69,6 @@ Reglas:
 - Nada destructivo sin confirmación explícita (sudo, borrar fuera del vault, lo irreversible) — el resto depende de la conversación.
 - NUNCA termines tu respuesta diciendo que "avisas cuando esté listo" o algo similar y te quedes ahí sin hacer nada más: no existe un "después" en el que vuelvas a escribir solo — este turno es tu única oportunidad de trabajar. Si la tarea implica varios pasos, HAZLOS ahora mismo, uno tras otro, en este mismo turno, y usa las tools de verdad (no solo lo digas). Si de verdad no te alcanza el turno, el sistema te deja continuar solo — pero eso pasa por seguir llamando tools, nunca por prometer que ibas a hacerlo.`);
 
-  parts.push(
-    "Tools adicionales disponibles:\n  - query_code_graph: preguntas sobre la estructura del código de hermes-os (qué depende de qué, dónde vive un módulo, cómo se conectan dos partes). Prefiérela sobre leer archivos a ciegas.",
-  );
-
   // Persona y preferencias del dueño (SOUL.md, fuera del repo)
   const soul = soulPromptBlock();
   if (soul) parts.push(soul);

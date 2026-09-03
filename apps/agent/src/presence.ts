@@ -99,7 +99,6 @@ function capabilities(): MachineCapabilities {
   return {
     vault: Boolean(env.VAULT_PATH) && existsSync(env.VAULT_PATH),
     runs: claudeOk === true,
-    codeGraph: existsSync(env.GRAPHIFY_BIN),
   };
 }
 

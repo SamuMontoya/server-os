@@ -32,7 +32,6 @@ const VERB: Record<string, string> = {
   get_recent_activity: "Leyó la actividad reciente",
   search_meetings: "Buscó en reuniones",
   analyze_youtube: "Analizó un video",
-  query_code_graph: "Consultó el grafo de código",
   log_transaction: "Registró una transacción",
   list_transactions: "Listó transacciones",
   get_finance_summary: "Leyó el resumen financiero",
@@ -76,7 +75,6 @@ const VERB_LIVE: Record<string, string> = {
   get_recent_activity: "Leyendo la actividad reciente",
   search_meetings: "Buscando en reuniones",
   analyze_youtube: "Analizando un video",
-  query_code_graph: "Consultando el grafo de código",
 };
 
 // Glifo por familia de tool (mismo vocabulario que la Actividad en vivo).
