@@ -101,6 +101,17 @@ const CODE_MARKERS =
 const DEEP_REASONING = /\b(analiz|audit|investig|compar|planific|resuelv)/i;
 
 /**
+ * Orquestación: correr comandos, git, deploy, instalar dependencias. NO es
+ * autoría de código (por eso CODE_WORK los excluye a propósito — ver su
+ * comentario), pero tampoco es charla: sigue siendo trabajo real sobre el
+ * sistema, y el dueño pidió explícitamente que esto se quede en sonnet, no
+ * que caiga a haiku por no ser "código". Esfuerzo bajo, no alto: ejecutar y
+ * leer el resultado de un comando pide menos vueltas que escribir/editar.
+ */
+const ORCHESTRATION =
+  /\b(commit|push|pull request|deploy(a|ar)?|despliegu|pnpm|npm|yarn|reinicia|restart|instala|systemctl|journalctl)\b|\bgit\b/i;
+
+/**
  * Charla y continuaciones: saludos, gracias, confirmaciones, "sigue", "TLDR".
  *
  * Incluye las continuaciones porque son la mitad de lo que se escribe en un
@@ -113,9 +124,6 @@ const CHITCHAT =
 const STATUS_Q =
   /^(qu[eé] (tengo|hay|falta|sigue|ponemos|sub)|c[oó]mo (va|voy|est[aá])|cu[aá]l(es)? (es|son)|cu[aá]nto|d[oó]nde est[aá]|resumen|recu[eé]rdame|ya est[aá]|con el \d|mis (tareas|h[aá]bitos|notas))/i;
 
-/** Por debajo de esta cantidad de palabras, un pedido sin más señal es "bajo". */
-const PALABRAS_BAJO = 15;
-
 export interface RouteDecision {
   tier: Tier;
   reason: string;
@@ -124,6 +132,15 @@ export interface RouteDecision {
 /**
  * Clasifica un mensaje. El orden importa: las señales fuertes de trabajo ganan
  * sobre la forma superficial del texto (una pregunta corta puede ser dura).
+ *
+ * Filosofía (pedido explícito del dueño): HAIKU es el default para charla —
+ * respuestas cortas, directas, al estilo TLDR que ya prefiere. SONNET (con su
+ * escalera de esfuerzo bajo/medio/alto) es solo para código, orquestación
+ * (correr comandos, deploy, git) y razonamiento pesado (auditar, investigar,
+ * analizar) — el trabajo real sobre el sistema, no la conversación alrededor.
+ * Antes el "caso general" (búsquedas, redacción, pedidos largos sin más
+ * señal) caía en sonnet/medio por defecto; ahora cae en trivial salvo que
+ * dispare una de las señales de abajo.
  */
 export function classify(prompt: string): RouteDecision {
   // Se quitan los signos de apertura: "¿qué tengo hoy?" tiene que matchear los
@@ -142,10 +159,12 @@ export function classify(prompt: string): RouteDecision {
   if (CODE_MARKERS.test(p)) return { tier: "alto", reason: "código o ruta de fuente" };
   if (CODE_WORK.test(p)) return { tier: "alto", reason: "verbo de modificar código" };
   if (DEEP_REASONING.test(p)) return { tier: "alto", reason: "auditoría, investigación o análisis" };
+  if (ORCHESTRATION.test(p))
+    return { tier: "bajo", reason: "orquestación: correr comandos, no autoría de código" };
 
-  if (words <= PALABRAS_BAJO) return { tier: "bajo", reason: "pedido corto, baja ambigüedad" };
-
-  return { tier: "medio", reason: "caso general" };
+  // Todo lo demás es charla, preguntas o redacción sin trabajo real de por
+  // medio: Haiku responde corto y directo, que es justo lo que se pidió.
+  return { tier: "trivial", reason: "charla o pregunta general — sonnet no hace falta" };
 }
 
 // ── Fijación por sesión ───────────────────────────────────────────────

@@ -84,17 +84,36 @@ test("auditorías, investigación y análisis van a esfuerzo alto (sobre sonnet,
   }
 });
 
-test("un pedido corto sin más señal es esfuerzo bajo, no medio", () => {
+test("un pedido corto sin más señal es trivial (haiku): no es código ni orquestación", () => {
   for (const m of ["cámbialo a azul", "pon el título más grande", "hazlo más corto por favor"]) {
-    assert.equal(classify(m).tier, "bajo", `"${m}" debería ser bajo`);
+    assert.equal(classify(m).tier, "trivial", `"${m}" debería ser trivial`);
   }
 });
 
-test("el caso general (búsquedas, redacción, pedidos largos) es esfuerzo medio", () => {
+test("el caso general (búsquedas, redacción, pedidos largos) es trivial: haiku responde corto", () => {
+  // Pedido explícito del dueño: charla y redacción sin señal de código u
+  // orquestación va a haiku por defecto, no a sonnet — antes esto caía en
+  // 'medio' por ser largo; ahora la longitud sola ya no sube el esfuerzo.
   const largo =
     "Necesito que me ayudes a pensar en cómo estructurar la propuesta para el cliente, " +
     "incluyendo qué secciones debería tener y en qué orden presentarlas para que quede clara.";
-  assert.equal(classify(largo).tier, "medio");
+  assert.equal(classify(largo).tier, "trivial");
+});
+
+test("orquestar (commit, push, deploy, pnpm) se queda en sonnet, no baja a haiku", () => {
+  // El pedido explícito: 'el código y la orquestación lo hace con sonnet'.
+  // Antes esto caía en el mismo 'caso general' que la charla (esfuerzo
+  // medio); con haiku como default para charla hacía falta una señal propia
+  // para que orquestar NO se fuera a trivial junto con todo lo demás.
+  for (const m of [
+    "commit y push en samuel",
+    "corre pnpm test",
+    "haz el deploy",
+    "reinicia el servicio",
+    "instala las dependencias",
+  ]) {
+    assert.equal(classify(m).tier, "bajo", `"${m}" debería quedarse en sonnet (bajo)`);
+  }
 });
 
 test("el markdown del vault NO es señal de código", () => {
