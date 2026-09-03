@@ -44,6 +44,17 @@ export interface TurnHandlers {
   onDisconnected?: (lastSeq: number) => void;
 }
 
+/**
+ * Reintentos SOLO para el fallo de red (fetch() tira, DNS caído, WiFi
+ * cambiando de red, "Load failed" de Safari) — un blip común en celular
+ * que antes tumbaba el envío entero al primer intento, con el mensaje crudo
+ * del navegador en la burbuja de error ("Load failed" a secas, sin
+ * traducir ni reintentar). Un 4xx/5xx del SERVIDOR (rechazo real: auth,
+ * body inválido) NO se reintenta acá — eso es una respuesta válida, no una
+ * red caída, y reintentarla a ciegas podría duplicar el turno.
+ */
+const START_TURN_RETRY_MS = [400, 1200, 2500];
+
 export async function startTurn(input: {
   message: string;
   sessionKey: string;
@@ -58,23 +69,42 @@ export async function startTurn(input: {
    */
   attachments?: string[];
 }): Promise<string> {
-  const res = await hermesFetch("/chat/turns", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message: input.message,
-      session_key: input.sessionKey,
-      project: input.project ?? undefined,
-      resume: input.resume ?? undefined,
-      attachments: input.attachments?.length ? input.attachments : undefined,
-    }),
+  const body = JSON.stringify({
+    message: input.message,
+    session_key: input.sessionKey,
+    project: input.project ?? undefined,
+    resume: input.resume ?? undefined,
+    attachments: input.attachments?.length ? input.attachments : undefined,
   });
-  if (!res.ok) {
-    throw new Error(`OS no aceptó el turno (${res.status}). ¿El agente está arriba?`);
+
+  let lastNetworkError: unknown;
+  for (let i = 0; i <= START_TURN_RETRY_MS.length; i++) {
+    let res: Response;
+    try {
+      res = await hermesFetch("/chat/turns", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+    } catch (err) {
+      lastNetworkError = err;
+      if (i < START_TURN_RETRY_MS.length) {
+        await new Promise((r) => setTimeout(r, START_TURN_RETRY_MS[i]));
+        continue;
+      }
+      throw new Error("No se pudo conectar con OS. Revisá tu conexión e intentá de nuevo.");
+    }
+    if (!res.ok) {
+      throw new Error(`OS no aceptó el turno (${res.status}). ¿El agente está arriba?`);
+    }
+    const data = (await res.json()) as { turn_id?: string; error?: string };
+    if (!data.turn_id) throw new Error(data.error || "el agente no devolvió turno");
+    return data.turn_id;
   }
-  const data = (await res.json()) as { turn_id?: string; error?: string };
-  if (!data.turn_id) throw new Error(data.error || "el agente no devolvió turno");
-  return data.turn_id;
+  // Inalcanzable (el loop siempre retorna o tira arriba); solo para el tipo.
+  throw lastNetworkError instanceof Error
+    ? lastNetworkError
+    : new Error("No se pudo conectar con OS.");
 }
 
 /**
