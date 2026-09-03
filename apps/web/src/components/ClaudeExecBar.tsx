@@ -30,7 +30,7 @@ export const CLAUDE_PERMISSIONS = [
 ] as const;
 
 export const DEFAULT_CLAUDE_CONFIG: ClaudeExecConfig = {
-  model: "claude-opus-5",
+  model: "claude-sonnet-5",
   effort: "high",
   permissionMode: "acceptEdits",
 };
