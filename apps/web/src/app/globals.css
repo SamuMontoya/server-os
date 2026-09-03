@@ -475,8 +475,8 @@ body::after {
   right: 8px;
   padding: 1px 6px;
   border-radius: 3px;
-  background: var(--violet);
-  color: #fff;
+  background: transparent;
+  color: var(--text);
   font-size: 10px;
   line-height: 1.6;
   font-family: var(--font-sans, inherit);
