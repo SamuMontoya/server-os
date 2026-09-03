@@ -36,7 +36,7 @@ const mono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "HERMES OS",
+  title: "OS",
   description: "AI Operating System personal de RuloCode",
   // Instalado en la pantalla de inicio del iPhone, el dashboard se abre en
   // modo app (sin barra de Safari). `appleWebApp` es lo que iOS mira: sin él
@@ -49,7 +49,7 @@ export const metadata: Metadata = {
   // sólida y el layout viewport arranca abajo de ella, así que ningún
   // ícono ni texto puede quedar por detrás nunca, pase lo que pase con el
   // contenido de la página.
-  appleWebApp: { capable: true, statusBarStyle: "black", title: "Hermes" },
+  appleWebApp: { capable: true, statusBarStyle: "black", title: "OS" },
   icons: {
     icon: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],

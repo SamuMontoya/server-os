@@ -354,7 +354,7 @@ export function KnowledgeGraph({
         return node;
       };
 
-      addNode("core", "core", [0, 0, 0], 0.15, COLOR.core, 0.85, null, "HERMES");
+      addNode("core", "core", [0, 0, 0], 0.15, COLOR.core, 0.85, null, "OS");
 
       const active = projs.filter((p) => p.estado === "activo");
       const projDir = new Map<string, [number, number, number]>();

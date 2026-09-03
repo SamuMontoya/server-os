@@ -36,7 +36,7 @@ export default async function LoginPage({
     <main className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <h1 className="text-xs font-semibold tracking-hero uppercase">
-          Hermes<span className="text-violet"> OS</span>
+          <span className="text-violet">OS</span>
         </h1>
         <p className="mt-6 text-base text-text-dim">
           Hola, {OWNER}. Entra para abrir tu consola.

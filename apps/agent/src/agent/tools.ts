@@ -117,7 +117,7 @@ const updateProjectNoteTool = tool(
     const notePath = join(env.VAULT_PATH, "projects", p.slug, `${p.name}.md`);
     const raw = await readFile(notePath, "utf8");
     const today = new Date().toISOString().slice(0, 10);
-    const entry = `\n> [!note] Hermes · ${today}\n> ${content.replace(/\n/g, "\n> ")}\n`;
+    const entry = `\n> [!note] OS · ${today}\n> ${content.replace(/\n/g, "\n> ")}\n`;
     // Insertar justo después del header "Estado Actual"
     const lines = raw.split("\n");
     const idx = lines.findIndex((l) => /^#{1,3}\s*.*Estado Actual/i.test(l));

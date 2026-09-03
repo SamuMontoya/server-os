@@ -19,7 +19,7 @@ export function Pensando({ label = "Pensando", dot = 4, className = "" }: Props)
     <span
       role="status"
       aria-live="polite"
-      aria-label={`Hermes está ${label.toLowerCase()}`}
+      aria-label={`OS está ${label.toLowerCase()}`}
       className={`inline-flex items-center gap-1.5 align-middle ${className}`}
     >
       <span className="thinking-text">{label}</span>

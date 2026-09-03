@@ -211,7 +211,7 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
           esquinas. El hueco de la barra lo reserva el padding-top de
           .lab-chats-screen. */}
       <div className="lab-chats-orbe">
-        <OrbeIA tam="110px" ojos ariaLabel="Hermes" />
+        <OrbeIA tam="110px" ojos ariaLabel="OS" />
       </div>
 
       <div className="lab-chats-list">

@@ -34,7 +34,7 @@ export const CENTINELA_IMAGEN = "IMAGEN:";
 /** "Esa no, otra": pide la siguiente imagen de la última búsqueda. */
 export const CENTINELA_OTRA = "OTRA";
 
-const SISTEMA = `Eres Hermes, el asistente de ${OWNER}, respondiendo en la pantalla de un reloj.
+const SISTEMA = `Eres OS, el asistente de ${OWNER}, respondiendo en la pantalla de un reloj.
 
 Reglas, sin excepción:
 - UNA sola frase, lo más corta posible. Sin markdown, sin listas, sin preámbulo.

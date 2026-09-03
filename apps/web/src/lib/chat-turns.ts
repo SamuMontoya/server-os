@@ -70,7 +70,7 @@ export async function startTurn(input: {
     }),
   });
   if (!res.ok) {
-    throw new Error(`Hermes no aceptó el turno (${res.status}). ¿El agente está arriba?`);
+    throw new Error(`OS no aceptó el turno (${res.status}). ¿El agente está arriba?`);
   }
   const data = (await res.json()) as { turn_id?: string; error?: string };
   if (!data.turn_id) throw new Error(data.error || "el agente no devolvió turno");

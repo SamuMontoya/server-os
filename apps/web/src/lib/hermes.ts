@@ -180,7 +180,7 @@ export async function streamChat(
 
   if (!response.ok || !response.body) {
     throw new Error(
-      `Hermes no responde (${response.status}). ¿Está corriendo el agent server en ${getHermesUrl()}?`,
+      `OS no responde (${response.status}). ¿Está corriendo el agent server en ${getHermesUrl()}?`,
     );
   }
 

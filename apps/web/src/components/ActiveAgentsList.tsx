@@ -39,7 +39,7 @@ export function ActiveAgentsList({ stats, online }: { stats: Stats | null; onlin
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <p className="font-display text-xs font-semibold tracking-label text-text uppercase">
-              Hermes
+              OS
             </p>
             <p className="truncate text-2xs text-text-dim">
               {!online

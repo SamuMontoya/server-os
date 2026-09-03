@@ -770,7 +770,7 @@ export function ChatPanel({
             <div className="fixed inset-0 z-10" onClick={() => setHistOpen(false)} />
             <div className="absolute top-8 left-0 z-20 max-h-80 w-[26rem] max-w-full overflow-y-auto rounded-sm border border-line-2 bg-panel-2 p-1 backdrop-blur-md">
               <p className="px-2 pt-1 pb-1.5 text-2xs tracking-label text-text-dim uppercase">
-                Sesiones de {selectedProject ? (projectName ?? selectedProject) : "Hermes (vault)"} · ~/.claude
+                Sesiones de {selectedProject ? (projectName ?? selectedProject) : "OS (vault)"} · ~/.claude
               </p>
               {histError ? (
                 <PanelState kind="error" compact title="No se pudo leer el historial" />
@@ -857,7 +857,7 @@ export function ChatPanel({
           return (
             <div key={i} className="flex flex-col gap-2.5">
               <span className="text-2xs tracking-title text-text-faint uppercase">
-                <b className="font-normal text-violet">Hermes</b>
+                <b className="font-normal text-violet">OS</b>
               </span>
               {/* Pasos del turno ANTES del texto: el trabajo se ve mientras
                   ocurre y la respuesta aterriza debajo (patrón Replit). */}
@@ -974,7 +974,7 @@ export function ChatPanel({
           }}
           placeholder={
             active.busy
-              ? "Hermes está trabajando… (podés escribir en otro tab)"
+              ? "OS está trabajando… (podés escribir en otro tab)"
               : listening
                 ? "Escuchando… habla ahora"
                 : selectedProject

@@ -14,8 +14,8 @@ import type { MetadataRoute } from "next";
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "HERMES OS",
-    short_name: "Hermes",
+    name: "OS",
+    short_name: "OS",
     description: "AI Operating System personal de RuloCode",
     // Abre en el Laboratorio, igual que "/" (que redirige ahí). Se pone
     // explícito para que el icono de la pantalla de inicio del iPhone no

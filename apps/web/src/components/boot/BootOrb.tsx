@@ -45,7 +45,7 @@ export function BootOrb({ progress, finish, onDone }: BootOrbProps) {
 
   return (
     <div
-      aria-label="Arranque de Hermes OS"
+      aria-label="Arranque de OS"
       style={{
         position: "fixed",
         inset: 0,
@@ -58,7 +58,7 @@ export function BootOrb({ progress, finish, onDone }: BootOrbProps) {
         pointerEvents: saliendo ? "none" : "auto",
       }}
     >
-      <OrbeIA tam="min(38vmin, 220px)" ariaLabel="Hermes está arrancando" />
+      <OrbeIA tam="min(38vmin, 220px)" ariaLabel="OS está arrancando" />
       {/* Progreso real, solo para lectores de pantalla: la pantalla visible
           es nada más el orbe, sin número ni barra. */}
       <span
@@ -72,7 +72,7 @@ export function BootOrb({ progress, finish, onDone }: BootOrbProps) {
           clip: "rect(0 0 0 0)",
         }}
       >
-        {`Cargando Hermes, ${pct}%`}
+        {`Cargando OS, ${pct}%`}
       </span>
     </div>
   );

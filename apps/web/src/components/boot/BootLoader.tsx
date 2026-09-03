@@ -255,11 +255,11 @@ export function BootLoader({ progress, finish, labels, onDone }: BootLoaderProps
 
     /* ---------- boot log ---------- */
     const BOOT = [
-      { at: 4,   txt: "INICIANDO NÚCLEO HERMES",            st: "OK", ok: false },
+      { at: 4,   txt: "INICIANDO NÚCLEO OS",                st: "OK", ok: false },
       { at: 22,  txt: "MONTANDO RED DE AGENTES",            st: "OK", ok: false },
       { at: 45,  txt: "SINCRONIZANDO MEMORIA · 609 NODOS",  st: "OK", ok: false },
       { at: 62,  txt: "ENLAZANDO PROYECTOS · 12 ACTIVOS",   st: "OK", ok: false },
-      { at: 80,  txt: "CALIBRANDO CANAL DE VOZ",            st: "OK", ok: false },
+      { at: 80,  txt: "INDEXANDO GRAFO DE CÓDIGO",          st: "OK", ok: false },
       { at: 100, txt: "SISTEMA ONLINE",                     st: "●",  ok: true },
     ];
 
@@ -483,14 +483,14 @@ export function BootLoader({ progress, finish, labels, onDone }: BootLoaderProps
   }, [finish]);
 
   return (
-    <div className="hermes-boot" ref={rootRef} aria-label="Arranque de Hermes OS">
+    <div className="hermes-boot" ref={rootRef} aria-label="Arranque de OS">
       <style>{CSS}</style>
       <div className="grid-bg" />
       <div className="vignette" />
 
       <div className="stage" data-boot="stage">
         <div className="hud-top">
-          <b>HERMES <span>OS</span></b>
+          <b><span>OS</span></b>
           <span>BOOT SEQ · v5.0</span>
         </div>
 

@@ -44,7 +44,7 @@ export function TopBar() {
     <header className="flex h-13 shrink-0 items-center justify-between border-b border-line px-5">
       <div className="flex items-center gap-3">
         <h1 className="text-xs font-semibold tracking-hero uppercase">
-          Hermes<span className="text-violet"> OS</span>
+          <span className="text-violet">OS</span>
         </h1>
         <span className="flex items-center gap-1.5 text-2xs tracking-label text-text-dim uppercase">
           <span

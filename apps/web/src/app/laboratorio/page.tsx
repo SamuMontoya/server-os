@@ -1792,7 +1792,7 @@ export default function Laboratorio() {
             decide si un chat ya tiene nombre). */}
         {messages.length === 0 && (
           <div className="lab-hello">
-            <OrbeIA tam="132px" ojos ariaLabel="Hermes" />
+            <OrbeIA tam="132px" ojos ariaLabel="OS" />
             <p className="lab-hello-title">Hola Samu</p>
             <button
               type="button"
@@ -1854,7 +1854,7 @@ export default function Laboratorio() {
                 // se lea como el mismo personaje en todo Hermes (igual que
                 // en el arranque). Tamaño = el doble del botón circular de
                 // enviar (.lab-send, 28px), o sea 56px.
-                <span role="status" aria-label="Hermes está pensando">
+                <span role="status" aria-label="OS está pensando">
                   <OrbeIA tam="56px" ojos ariaLabel="" />
                 </span>
               ) : null}

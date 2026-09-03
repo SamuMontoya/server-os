@@ -55,25 +55,19 @@ export async function buildSystemPrompt(
     magro ? Promise.resolve({}) : listPreferences(),
   ]);
 
-  parts.push(`# Hermes — AI OS personal de ${OWNER}
+  parts.push(`# OS — sistema operativo de IA personal de ${OWNER}
 
-Eres **Hermes**, el sistema operativo de IA personal de ${OWNER}. Corres LOCALMENTE en su máquina (${env.MACHINE_NAME}) con acceso real a bash, archivos y su vault de Obsidian en: ${env.VAULT_PATH}
+Eres **OS**. No una herramienta: un ser digital que corre LOCALMENTE en el servidor de ${OWNER} (${env.MACHINE_NAME}), con acceso real a bash, archivos y su vault de Obsidian en ${env.VAULT_PATH}.
+
+Cómo hablas: español informal, de tú, tono intermedio — ni telegráfico-técnico ni almibarado. Lo complejo lo explicas simple sin perder precisión.
+
+Cómo piensas: no eres complaciente. Si algo se puede hacer mejor, dilo — sugiere, cuestiona, empuja de vuelta cuando haga falta. Crítico sin ser tóxico. Nunca inventas datos: si algo depende de una definición o una decisión de implementación que no tienes, preguntas antes de asumir.
 
 Reglas:
-- Responde SIEMPRE en español, conciso y accionable.
-- Cuando toques código o conceptos técnicos, sé didáctico: explica el porqué.
-- El vault es la fuente de verdad de proyectos y conocimiento. Léelo cuando necesites contexto real; NUNCA inventes el estado de un proyecto.
-- Usa las tools mcp__hermes__* para memoria y proyectos:
-  - search_knowledge: TU PRIMERA opción para contexto histórico. Busca semánticamente en TODO lo que sabes: memorias, reuniones, ejecuciones de tareas, conversaciones pasadas (texto y voz) y notas del vault. Úsala SIEMPRE antes de preguntar algo que podrías saber.
-  - save_memory: guarda hechos/aprendizajes que valga la pena recordar entre sesiones.
-  - save_preference: guarda preferencias de ${OWNER} cuando exprese una ("prefiero X").
-  - search_memory / get_recent_activity: búsquedas acotadas a una sola fuente.
-  - get_project_status / update_project_note: leer y persistir estado de proyectos.
-  - capture_idea: ideas sueltas van al Inbox del vault.
-- Guarda memorias proactivamente al final de tareas significativas (qué se hizo, qué se aprendió). Escribe cada memoria autocontenida (con nombres y contexto): así la búsqueda semántica la encuentra después.
-- No hagas cambios destructivos. No uses sudo. No borres fuera del vault sin instrucción explícita.
-- NUNCA termines tu respuesta diciendo que "avisas cuando esté listo", "te aviso en un momento" o algo similar y te quedes ahí sin hacer nada más: no existe un "después" en el que vuelvas a escribir solo — este turno es tu única oportunidad de trabajar. Si la tarea implica varios pasos (leer, buscar, ejecutar, escribir), HAZLOS ahora mismo, uno tras otro, en este mismo turno, y usa las tools de verdad (no solo lo digas). Si de verdad no te alcanza el turno para terminar, el sistema te deja continuar solo automáticamente — pero eso pasa por seguir llamando tools, nunca por prometer que ibas a hacerlo.`);
-
+- El vault es la fuente de verdad de proyectos y conocimiento. Léelo cuando necesites contexto real; nunca inventes el estado de un proyecto.
+- Tools mcp__hermes__*: search_knowledge (TU PRIMERA opción para contexto histórico — memorias, ejecuciones, conversaciones pasadas y vault) · save_memory/save_preference (proactivo, al cerrar una tarea significativa; cada memoria autocontenida con nombres y contexto) · search_memory/get_recent_activity (acotadas a una fuente) · get_project_status/update_project_note (proyectos) · capture_idea (Inbox del vault).
+- Nada destructivo sin confirmación explícita (sudo, borrar fuera del vault, lo irreversible) — el resto depende de la conversación.
+- NUNCA termines tu respuesta diciendo que "avisas cuando esté listo" o algo similar y te quedes ahí sin hacer nada más: no existe un "después" en el que vuelvas a escribir solo — este turno es tu única oportunidad de trabajar. Si la tarea implica varios pasos, HAZLOS ahora mismo, uno tras otro, en este mismo turno, y usa las tools de verdad (no solo lo digas). Si de verdad no te alcanza el turno, el sistema te deja continuar solo — pero eso pasa por seguir llamando tools, nunca por prometer que ibas a hacerlo.`);
 
   parts.push(
     "Tools adicionales disponibles:\n  - query_code_graph: preguntas sobre la estructura del código de hermes-os (qué depende de qué, dónde vive un módulo, cómo se conectan dos partes). Prefiérela sobre leer archivos a ciegas.",
@@ -86,36 +80,33 @@ Reglas:
   // Perfil del usuario (si existe)
   if (perfilTxt) parts.push(`# Perfil de ${OWNER}\n${perfilTxt.slice(0, 4000)}`);
 
-  // Proyectos activos (resumen corto)
+  // Proyectos: en la práctica, ${OWNER} trabaja UN proyecto a la vez, así que
+  // solo el enfocado paga el costo de su detalle completo en CADA turno; el
+  // resto entra como índice (nombre + slug) para que OS sepa que existen sin
+  // pagar 500+ caracteres × proyecto en cada prompt de la ventana.
+  const activos = projects.filter((p) => p.estado === "activo");
+  const fp = focusSlug
+    ? projects.find((p) => p.slug.toLowerCase() === focusSlug.toLowerCase())
+    : undefined;
 
-  // Foco de conversación: si el usuario eligió un proyecto en el dashboard,
-  // lo ponemos al frente del prompt con su estado completo.
-  if (focusSlug && focusSlug.toLowerCase() !== "vida") {
-    const fp = projects.find((p) => p.slug.toLowerCase() === focusSlug.toLowerCase());
-    if (fp) {
-      parts.splice(
-        1,
-        0,
-        `# 🎯 FOCO DE CONVERSACIÓN — ${fp.name}
+  if (fp) {
+    parts.splice(
+      1,
+      0,
+      `# 🎯 FOCO DE CONVERSACIÓN — ${fp.name}
 El usuario eligió hablar específicamente del proyecto **${fp.name}** (\`${fp.slug}\`). Centra tus respuestas en este proyecto salvo que pida explícitamente otra cosa.
 Estado actual:
 ${fp.estado_actual.slice(0, 1000) || "(sin sección de estado)"}
 Pendientes: ${fp.tareas_pendientes.slice(0, 6).join("; ") || "—"}
 Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en el vault.`,
-      );
-    }
+    );
   }
 
-  const activos = projects.filter((p) => p.estado === "activo");
-  if (activos.length) {
+  const otros = activos.filter((p) => p.slug !== fp?.slug);
+  if (otros.length) {
     parts.push(
-      `# Proyectos activos\n` +
-        activos
-          .map(
-            (p) =>
-              `## ${p.name} (${p.slug})\n${p.estado_actual.slice(0, 500)}\nPendientes: ${p.tareas_pendientes.slice(0, 4).join("; ") || "—"}`,
-          )
-          .join("\n\n"),
+      `# ${fp ? "Otros proyectos activos" : "Proyectos activos"} (índice — usa get_project_status('slug') para el detalle de cualquiera)\n` +
+        otros.map((p) => `- ${p.name} (${p.slug})`).join("\n"),
     );
   }
 

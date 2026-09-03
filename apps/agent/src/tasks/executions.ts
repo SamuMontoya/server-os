@@ -28,7 +28,6 @@ import { embed, EMB } from "../embeddings.js";
 import { safeName } from "../conversations.js";
 import { extractSection, readProjects } from "../vault/projects.js";
 import type { ClaudeLine } from "../agent/claude-cli.js";
-import { OWNER } from "../owner.js";
 import { optionsFor } from "../agent/models.js";
 
 // ── Entrada desde el punto de captura (launch en tasks/store.ts) ────────
@@ -171,9 +170,9 @@ async function narrateExecution(input: {
     tools: [recordTool],
   });
 
-  const systemPrompt = `# Hermes — Analista de ejecuciones
+  const systemPrompt = `# OS — Analista de ejecuciones
 
-Eres **Hermes**, el AI OS de ${OWNER}. Acabas de ejecutar una tarea con Claude Code en el repo del proyecto **${input.projectSlug}** y debes documentar QUÉ pasó, para dejar memoria de la ejecución.
+Eres **OS**. Acabas de ejecutar una tarea con Claude Code en el repo del proyecto **${input.projectSlug}** y debes documentar QUÉ pasó, para dejar memoria de la ejecución.
 
 La ejecución terminó con estado: **${input.status === "done" ? "éxito" : "error/fallo"}**.
 
