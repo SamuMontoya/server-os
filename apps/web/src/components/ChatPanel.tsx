@@ -479,7 +479,12 @@ export function ChatPanel({
         schedulePersist();
       },
       // Se acabaron las reconexiones. El turno sigue vivo en el servidor: se
-      // conserva `pendingTurn` para reengancharse al volver.
+      // conserva `pendingTurn` para reengancharse — y se reintenta YA, no solo
+      // al volver de segundo plano. Antes esto dejaba la consola colgada en
+      // "sin conexión" indefinidamente si la pestaña seguía visible y con red
+      // del sistema operativo intacta (el evento `online` del browser no se
+      // entera de que el AGENTE cayó, solo de la interfaz de red) — /laboratorio
+      // ya se autorrecupera así; a la consola le faltaba este mismo llamado.
       onDisconnected: (lastSeq) => {
         followers.current.delete(tabKey);
         updateTab(tabKey, (t) => ({
@@ -488,6 +493,7 @@ export function ChatPanel({
           pendingTurn: { id: turnId, seq: lastSeq },
         }));
         schedulePersist();
+        resumePendingTurns();
       },
     });
     followers.current.set(tabKey, close);
