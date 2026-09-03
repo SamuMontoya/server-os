@@ -18,6 +18,7 @@ import {
   type TurnRunnerArgs,
   type TurnRunnerResult,
 } from "./chat-turns.js";
+import { routeTurn } from "./router.js";
 
 /** Motor con reloj y esperas de mentira; `run` lo define cada test. */
 function engineWith(run: (args: TurnRunnerArgs, attempt: number) => Promise<TurnRunnerResult>) {
@@ -263,13 +264,39 @@ test("una continuación que no converge acaba cerrando en error, no en bucle", a
     args.onSession("sdk-viva");
     return { finalText: "sigo sin acabar", isError: true, errorSubtype: "error_max_turns" };
   });
-  const turn = h.engine.start({ prompt: "bucle", sessionKey: "tab-1" });
+  const turn = h.engine.start({ prompt: "bucle", sessionKey: "tab-2-no-converge" });
   await settle();
   await settle();
   const snap = h.engine.snapshot(turn.id)!;
   assert.equal(snap.status, "error");
   // 1 intento original + MAX_CONTINUATIONS continuaciones.
   assert.equal(h.attempts(), 1 + MAX_CONTINUATIONS);
+  // El mensaje final es en español y accionable, no el string crudo que el
+  // SDK arma para su propia excepción interna (lo que `finalText` traía acá).
+  assert.match(snap.error ?? "", /presupuesto de turnos/i);
+  assert.doesNotMatch(snap.error ?? "", /sigo sin acabar/);
+});
+
+test("error_max_turns SUBE de nivel la sesión al continuar, no repite el mismo techo", async () => {
+  // El bug real: una pregunta de estado ("dame el estado de X") sin más señal
+  // cae en trivial/haiku (maxTurns:6, ver TIERS en router.ts) pero puede
+  // resultar una investigación de 19 pasos. Antes la auto-continuación
+  // reusaba el MISMO nivel pinneado, así que solo compraba 6 turnos más y
+  // volvía a chocar. Ahora escala la sesión un nivel antes de continuar.
+  const sessionKey = `tab-escala-${Date.now()}`;
+  const h = engineWith(async (args) => {
+    args.onSession("sdk-viva");
+    return { finalText: "", isError: true, errorSubtype: "error_max_turns" };
+  });
+  // Fija la sesión en trivial (como haría el router real al clasificar una
+  // pregunta de estado sin más señal).
+  const before = routeTurn("dame el estado de x", sessionKey);
+  assert.equal(before.tier, "trivial");
+  h.engine.start({ prompt: "dame el estado de x", sessionKey });
+  await settle();
+  await settle();
+  const after = routeTurn("cualquier cosa", sessionKey);
+  assert.equal(after.tier, "bajo", "la sesión debe quedar en el nivel siguiente, no en trivial");
 });
 
 test("un 429 servido como 'success' con is_error se trata como error real", async () => {

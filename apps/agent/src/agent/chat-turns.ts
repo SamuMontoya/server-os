@@ -19,7 +19,7 @@
  * para poder testear reintentos, replay y cancelación sin SDK ni red.
  */
 import { randomUUID } from "node:crypto";
-import type { Tier } from "./router.js";
+import { escalateSession, nextTier, routeTurn, type Tier } from "./router.js";
 import type { ChatToolStep } from "@hermes/shared";
 import { runAgentTurn, saveSdkSession } from "./session.js";
 import { appendTurn } from "../conversations.js";
@@ -471,10 +471,25 @@ export function createTurnEngine(deps: TurnEngineDeps) {
         // antes obligaba a Samu a escribir "continúa" a mano.
         if (errorSubtype === "error_max_turns" && resume && continuations < MAX_CONTINUATIONS) {
           continuations += 1;
+          // Antes esto SOLO continuaba en el mismo nivel — funciona cuando el
+          // trabajo iba bien y nomás faltaba tiempo, pero si el router clasificó
+          // corto de entrada (una "pregunta de estado" que resultó ser una
+          // investigación de verdad en trivial/haiku, maxTurns:6) continuar en
+          // el MISMO nivel solo compra 6 turnos más y choca otra vez — visto en
+          // producción con una tarea de 19 pasos. Al escalar la sesión un nivel
+          // (misma infraestructura que el escalado de session.ts ante fallos
+          // reales, ver su comentario) la continuación corre con más
+          // capacidad Y más presupuesto de turnos, en vez de repetir el mismo
+          // techo que ya se demostró insuficiente.
+          const currentTier = routeTurn(promptForRun, input.sessionKey).tier;
+          const up = nextTier(currentTier);
+          if (up) escalateSession(input.sessionKey, up);
           emitEvent(turn.id, {
             kind: "retry",
             attempt: continuations,
-            text: "se acabó el presupuesto de turnos — continuando solo…",
+            text: up
+              ? `se acabó el presupuesto de turnos — subo a ${up} y sigo…`
+              : "se acabó el presupuesto de turnos — continuando solo…",
           });
           promptForRun = CONTINUE_PROMPT;
           continue;
@@ -492,7 +507,18 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             ? isRetryable(failure ?? "")
             : errorSubtype === "api_error";
         if (last || partial || !transitorio) {
-          return close(turn, "error", failure ?? "error desconocido");
+          // Con error_max_turns y sin texto que mostrar, `finalText` suele ser
+          // el string crudo que el SDK arma para su PROPIA excepción interna
+          // ("Claude Code returned an error result: Reached maximum number of
+          // turns (N)") — nada que Samu pueda accionar. Si ya se gastó la
+          // continuación (ver arriba) y sigue sin alcanzar, decirlo en
+          // español y con una salida real es mejor que reenviar el texto
+          // interno del SDK tal cual.
+          const failureMsg =
+            errorSubtype === "error_max_turns"
+              ? "Se me acabó el presupuesto de turnos investigando esto — probá pedirlo más acotado (un archivo o proyecto puntual en vez de todo)."
+              : (failure ?? "error desconocido");
+          return close(turn, "error", failureMsg);
         }
         emitEvent(turn.id, { kind: "retry", attempt: attempt + 1, text: failure ?? "" });
         await deps.sleep(BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1]);
