@@ -78,10 +78,28 @@ echo "hermes-tunnel: arrancando quick tunnel → localhost:$AGENT_PORT"
 # cloudflared imprime la URL asignada en stderr como parte de una tabla ASCII
 # ("|  https://algo.trycloudflare.com  |"); se lee línea a línea y se publica
 # apenas aparece, sin esperar a que el proceso termine (corre indefinidamente).
+#
+# BUG encontrado y corregido (2026-09-03): el match original era
+# `[[ "$line" == *"trycloudflare.com"* ]]` a secas — y cloudflared TAMBIÉN
+# loguea esa misma URL en cada línea de acceso normal (`dest=https://…
+# trycloudflare.com/...`, una por cada request que pasa por el túnel). Con
+# tráfico real llegando, eso republicaba la URL una y otra vez indefinidamente
+# — inofensivo mientras la URL no cambiaba, PERO significaba que un cambio
+# MANUAL de remote_config (para probar otro transporte, por ejemplo) se
+# pisaba solo en cuanto llegaba la siguiente request. Ahora solo publica UNA
+# vez por arranque del proceso (nunca vuelve a cambiar mientras viva), y solo
+# ante la línea real del banner ("Your quick Tunnel has been created"), no
+# ante cualquier mención suelta de la URL.
+published=0
 "$CLOUDFLARED" tunnel --url "http://localhost:$AGENT_PORT" 2>&1 | while IFS= read -r line; do
   echo "$line"
-  if [[ "$line" == *"trycloudflare.com"* ]]; then
+  if [[ "$published" == "0" && "$line" == *"Your quick Tunnel has been created"* ]]; then
+    published=1
+  elif [[ "$published" == "1" && "$line" == *"trycloudflare.com"* ]]; then
     url="$(echo "$line" | grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com')"
-    [[ -n "$url" ]] && publish_url "$url"
+    if [[ -n "$url" ]]; then
+      publish_url "$url"
+      published=2
+    fi
   fi
 done
