@@ -65,6 +65,15 @@ export async function fetchRemoteThread(id: string): Promise<LabThread | null> {
 }
 
 export function pushRemoteThread(project: string, thread: LabThread): void {
+  // Un chat sin NINGÚN mensaje enviado no debe existir del otro lado — sin
+  // esto, crear un chat nuevo (o abrir la app y que quede uno en blanco
+  // activo) ya lo mandaba al agente, y aparecía como una entrada fantasma
+  // "Chat nuevo" en la lista de otro dispositivo antes de que Samu escribiera
+  // una palabra. A diferencia de `worthKeeping` en lab-persist.ts (que SÍ
+  // guarda un borrador sin enviar, para no perderlo en ESTE navegador), acá
+  // el criterio es más estricto a propósito: lo que se sincroniza entre
+  // dispositivos es la CONVERSACIÓN, no el borrador de nadie.
+  if (thread.messages.length === 0) return;
   void hermesFetch(`/chat/threads/${encodeURIComponent(thread.id)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

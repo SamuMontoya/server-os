@@ -659,7 +659,11 @@ export default function Laboratorio() {
    *  Lee `chatsRef` + (si es el proyecto en foco) el estado de arriba. */
   const listChatsForProject = (pk: string): LabChatSummary[] => {
     const out: LabChatSummary[] = [];
-    if (pk === projKey) {
+    // Un chat sin NINGÚN mensaje enviado no aparece en la lista — sin esto,
+    // crear un chat nuevo (o dejarlo abierto sin escribir) lo dejaba
+    // rondando como una entrada fantasma "Chat nuevo" mientras durara la
+    // pestaña, aunque nunca se llegara a usar.
+    if (pk === projKey && messagesRef.current.length > 0) {
       out.push({
         id: activeChatIdRef.current,
         title: titleRef.current || deriveTitle(messagesRef.current),
@@ -670,6 +674,7 @@ export default function Laboratorio() {
     }
     for (const [key, t] of chatsRef.current) {
       if (!key.startsWith(`${pk}::`)) continue;
+      if (t.messages.length === 0) continue;
       out.push({
         id: t.id,
         title: t.title || deriveTitle(t.messages),
@@ -706,6 +711,16 @@ export default function Laboratorio() {
     setWatchLinked(false);
     setTitleMenuOpen(false);
     setRenaming(false);
+    // El pin de lectura y el ancla son del chat que se está DEJANDO — si
+    // Samu había scrolleado arriba ahí, no debe heredarlo el que abre ahora.
+    userPinnedRef.current = false;
+    anchorKeyRef.current = null;
+    // Abrir un chat va al FONDO (lo último dicho), no al tope de la
+    // conversación entera — `anchorTo`/`scrollAnchorToTop` son para el
+    // turno EN VIVO (dejan aire debajo del ancla a propósito) y no aplican
+    // acá. Si el turno resucita (`resumePendingRef` de abajo), su propio
+    // streaming vuelve a anclar normalmente en cuanto llegue un bloque.
+    scrollToBottomRef.current();
     // Si el chat que se abre tenía un turno vivo, intenta reengancharse.
     resumePendingRef.current();
   };
@@ -773,6 +788,11 @@ export default function Laboratorio() {
    * archivo — se asigna la función real más abajo, en cada render.
    */
   const resumePendingRef = useRef<() => void>(() => {});
+  /** Mismo truco de ref indirecto: `scrollToBottomNow` vive junto a los
+   *  demás helpers de scroll (más abajo, ya que usan `listRef`/`anchorGap`),
+   *  pero `loadChatIntoState` (definida antes) necesita poder llamarla al
+   *  abrir un chat. */
+  const scrollToBottomRef = useRef<() => void>(() => {});
   /** true = ya hay un reintento acotado de `resumePending` agendado (ver
    *  fetchTurnResilient devolviendo null): evita apilar varios si visible +
    *  online se disparan casi juntos al volver de segundo plano. */
@@ -1058,6 +1078,25 @@ export default function Laboratorio() {
     if (!list || top === null) return;
     list.scrollTo({ top: Math.max(0, top - anchorGap()), behavior: "smooth" });
   };
+
+  /**
+   * Salto (sin animación) al fondo real de la conversación — lo que se
+   * espera al ABRIR un chat ya existente: ver lo último dicho, no releer
+   * desde el principio. Dos rAF, mismo motivo que `anchorTo`: el mensaje
+   * recién cargado por `setMessages` todavía no está en el DOM en el mismo
+   * tick, y hace falta el layout final (con el colchón puesto) para que
+   * `scrollHeight` sea el real.
+   */
+  const scrollToBottomNow = () => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const list = listRef.current;
+        if (!list) return;
+        list.scrollTop = list.scrollHeight;
+      });
+    });
+  };
+  scrollToBottomRef.current = scrollToBottomNow;
 
   /**
    * Ancla `key` arriba. Dos rAF antes de medir: el primero espera al commit de
@@ -1468,6 +1507,10 @@ export default function Laboratorio() {
   useEffect(() => {
     resumePending();
     void syncThreadsFromServer();
+    // El hilo inicial (hidratado de localStorage antes del primer render, ver
+    // `initRef`) nunca pasa por `loadChatIntoState` — sin esto, reabrir la
+    // app con una conversación larga arrancaba en el tope en vez del fondo.
+    scrollToBottomRef.current();
     return () => unfollowRef.current?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
