@@ -734,7 +734,7 @@ const TOOL_FEATURE: [AnyTool, Feature | null][] = [
   [getRecentActivityTool, null],
   [searchMeetingsTool, "juntas"],
   [analyzeYouTubeTool, "estudio"],
-  [queryCodeGraphTool, "codegraph"],
+  [queryCodeGraphTool, null],
   [createLinearIssueTool, "linear"],
   [listLinearIssuesTool, "linear"],
   [logTransactionTool, "vida"],

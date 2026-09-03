@@ -132,10 +132,9 @@ Reglas:
   // herramientas no registradas — gasto y alucinación a la vez.
   const toolDocs: string[] = [];
   if (isEnabled("juntas")) toolDocs.push("  - search_meetings: busca en actas de reuniones pasadas.");
-  if (isEnabled("codegraph"))
-    toolDocs.push(
-      "  - query_code_graph: preguntas sobre la estructura del código de hermes-os (qué depende de qué, dónde vive un módulo, cómo se conectan dos partes). Prefiérela sobre leer archivos a ciegas.",
-    );
+  toolDocs.push(
+    "  - query_code_graph: preguntas sobre la estructura del código de hermes-os (qué depende de qué, dónde vive un módulo, cómo se conectan dos partes). Prefiérela sobre leer archivos a ciegas.",
+  );
   if (isEnabled("linear"))
     toolDocs.push(
       '  - create_linear_issue / list_linear_issues: manejo de tareas en Linear. Al crear un issue, PRIMERO junta contexto real (get_project_status, search_knowledge, query_code_graph) y luego redacta: título imperativo específico; description en markdown con qué/por qué, archivos o rutas relevantes y criterios de aceptación; y prompt = un prompt AUTOCONTENIDO listo para copiar-pegar en Claude Code (ruta local del repo, instrucciones concretas, criterios de aceptación y cómo verificar) — se publica al final del issue como bloque "Copy prompt". Lista antes de crear si sospechas duplicado; pasa project (slug del vault) para que quede etiquetado.',

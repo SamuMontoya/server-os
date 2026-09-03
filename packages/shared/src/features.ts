@@ -7,7 +7,7 @@
  * pidan; apagarlo deja el código listo y el arranque limpio.
  *
  * Fuente única: la variable `HERMES_DISABLED`, una lista separada por comas.
- *   HERMES_DISABLED=estudio,juntas,ingles,voz,linear,agenda,vida,codegraph
+ *   HERMES_DISABLED=estudio,juntas,ingles,voz,linear,vida
  *
  * El dashboard NO usa esto para decidir qué compilar: webpack no puede
  * eliminar una rama que depende de parsear un string en runtime. Para eso
@@ -21,10 +21,7 @@ export const FEATURES = [
   "ingles", // tutor por voz, sesiones, vocabulario
   "voz", // ElevenLabs (agente de voz y tutor)
   "linear", // tablero e issues
-  "agenda", // Google Calendar + clima
   "vida", // hábitos, metas, finanzas
-  "codegraph", // graphify: indexado de repos
-  "gestos", // control por gestos y manos sobre la UI (mac-only de todos modos)
 ] as const;
 
 export type Feature = (typeof FEATURES)[number];

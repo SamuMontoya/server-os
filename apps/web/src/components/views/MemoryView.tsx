@@ -3,7 +3,6 @@
 // Tab MEMORIA: búsqueda unificada sobre TODO lo que Hermes sabe (memorias,
 // reuniones, ejecuciones, chats de texto/voz y vault) + conteos reales +
 // memorias recientes. Los resultados del vault abren en el DocViewer.
-// Segundo modo: GRAFO 3D del código (graphify) — se monta solo al activarlo.
 
 import { useEffect, useRef, useState } from "react";
 import type { KnowledgeHit, KnowledgeSource, KnowledgeStats, Memory } from "@hermes/shared";
@@ -13,7 +12,6 @@ import { Badge } from "@/components/ui/Badge";
 import { PanelState } from "@/components/ui/PanelState";
 import { SectionTitle } from "@/components/ui/SectionTitle";
 import { RecentInsights } from "@/components/RecentInsights";
-import { CodeGraph3D } from "@/components/CodeGraph3D";
 import type { Tone } from "@/components/ui/tones";
 
 const SOURCE_META: Record<KnowledgeSource, { label: string; tone: Tone }> = {
@@ -26,7 +24,6 @@ const SOURCE_META: Record<KnowledgeSource, { label: string; tone: Tone }> = {
 
 export function MemoryView({ memories, online }: { memories: Memory[]; online: boolean }) {
   const openDoc = useDocViewer();
-  const [mode, setMode] = useState<"buscar" | "grafo">("buscar");
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<KnowledgeHit[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -69,40 +66,7 @@ export function MemoryView({ memories, online }: { memories: Memory[]; online: b
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      {/* Modo: búsqueda de conocimiento o grafo 3D del código */}
-      <div className="flex shrink-0 items-center gap-1">
-        {(
-          [
-            ["buscar", "Conocimiento"],
-            ["grafo", "Grafo de código 3D"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setMode(id)}
-            className={`border px-3 py-1 text-2xs tracking-label uppercase transition-colors ${
-              mode === id
-                ? "border-violet text-violet"
-                : "border-line text-text-dim hover:border-line-2 hover:text-text"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {mode === "grafo" ? (
-        <div className="min-h-0 flex-1 border border-line">
-          {online ? (
-            <CodeGraph3D />
-          ) : (
-            <PanelState kind="offline" hint="El agente local no responde" />
-          )}
-        </div>
-      ) : (
-        <>
-          {/* Búsqueda unificada */}
+      {/* Búsqueda unificada */}
           <form
             className="flex shrink-0 gap-2"
             onSubmit={(e) => {
@@ -206,8 +170,6 @@ export function MemoryView({ memories, online }: { memories: Memory[]; online: b
               </div>
             )}
           </div>
-        </>
-      )}
     </div>
   );
 }

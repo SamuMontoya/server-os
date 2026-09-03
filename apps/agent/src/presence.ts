@@ -100,8 +100,7 @@ function capabilities(): MachineCapabilities {
   return {
     vault: Boolean(env.VAULT_PATH) && existsSync(env.VAULT_PATH),
     runs: claudeOk === true,
-    // Gestos y control de navegador son CGEvent/AppleScript: solo macOS.
-    gestures: mac && env.GESTURES_ENABLED,
+    // Control de navegador es AppleScript: solo macOS.
     browser: mac,
     liveMeetings: Boolean(env.ASSEMBLYAI_API_KEY) || env.LIVE_STT_PROVIDER === "fake",
     estudioMedia: !!env.ESTUDIO_MEDIA_ROOT && existsSync(env.ESTUDIO_MEDIA_ROOT),

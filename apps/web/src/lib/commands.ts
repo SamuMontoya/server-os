@@ -9,8 +9,6 @@ import { hermesPost } from "@/lib/hermes";
 import { useVoiceConnect } from "@/hooks/useVoiceConnect";
 import { useWorkspace, type CenterTab } from "@/state/WorkspaceContext";
 import { useLiveMeeting } from "@/state/LiveMeetingProvider";
-import { useGestureControl } from "@/state/GestureControlProvider";
-import { useUiHands } from "@/state/UiHandsProvider";
 import { useEstudioContext } from "@/state/EstudioProvider";
 
 export interface CommandContext {
@@ -32,14 +30,6 @@ export interface CommandContext {
   startEnglishPractice: () => void;
   /** Entrada canónica a la voz: navega a Voz en vivo y conecta si hace falta. */
   startVoiceCall: () => void;
-  /** Control por gestos activo (cambia el label del comando a "apagar"). */
-  gesturesActive: boolean;
-  /** Enciende/apaga el control por gestos (webcam → cursor del sistema). */
-  toggleGestures: () => void;
-  /** Manos sobre la UI activas (cursor de mano + clic + scroll en la web). */
-  uiHandsActive: boolean;
-  /** Enciende/apaga las manos sobre la UI. */
-  toggleUiHands: () => void;
   /** Navega a una ruta del workspace (/finanzas, /habitos, /ingles…). */
   navigate: (path: string) => void;
   /** Abre el teleprompter de la pieza que toca grabar (o la seleccionada). */
@@ -171,20 +161,6 @@ export const COMMANDS: HermesCommand[] = [
     run: (ctx) => ctx.startRecording(),
   },
   {
-    id: "control-gestos",
-    label: "Control por gestos",
-    slash: "/gestos",
-    hint: "Mueve el cursor con la mano vía webcam (pinza = click) — toggle",
-    run: (ctx) => ctx.toggleGestures(),
-  },
-  {
-    id: "manos-ui",
-    label: "Manos sobre la UI",
-    slash: "/manos",
-    hint: "Cursor de mano en el dashboard: pinza = clic, agarrar = scroll — toggle",
-    run: (ctx) => ctx.toggleUiHands(),
-  },
-  {
     id: "analizar-proyecto",
     label: "Analizar proyecto",
     slash: "/analizar proyecto",
@@ -267,8 +243,6 @@ export function useCommandContext(): CommandContext {
   const ws = useWorkspace();
   const live = useLiveMeeting();
   const voice = useVoiceConnect();
-  const gestures = useGestureControl();
-  const uiHands = useUiHands();
   const estudio = useEstudioContext();
   const router = useRouter();
   return {
@@ -280,16 +254,6 @@ export function useCommandContext(): CommandContext {
       const target =
         estudio.board.pieces.find((p) => p.status === "grabacion") ?? estudio.selected;
       if (target) estudio.setRecording(target.id);
-    },
-    gesturesActive: gestures.active,
-    toggleGestures: () => {
-      if (gestures.active) gestures.stop();
-      else void gestures.start();
-    },
-    uiHandsActive: uiHands.active,
-    toggleUiHands: () => {
-      if (uiHands.active) uiHands.stop();
-      else void uiHands.start();
     },
     selectedProject: ws.selectedProject,
     showPanel: ws.showPanel,

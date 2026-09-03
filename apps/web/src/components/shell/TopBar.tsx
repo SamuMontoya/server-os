@@ -14,8 +14,6 @@ import { useWorkspace } from "@/state/WorkspaceContext";
 import { useOrbState } from "@/components/voice/orbState";
 import { Clock } from "@/components/Clock";
 import { LiveMeetingChip } from "./LiveMeetingChip";
-import { GestureChip } from "./GestureChip";
-import { UiHandsChip } from "./UiHandsChip";
 import { SpeakToggle } from "./SpeakToggle";
 // El selector solo tiene sentido si el dashboard puede apuntar a otro agente.
 // Con NEXT_PUBLIC_HERMES_PIN_AGENT=1 la condición es un literal inlineado y
@@ -69,14 +67,6 @@ export function TopBar() {
         <SpeakToggle />
         <div className="empty:hidden">
           <LiveMeetingChip />
-        </div>
-        {/* Control por gestos: cámara moviendo el cursor = SIEMPRE visible */}
-        <div className="empty:hidden">
-          <GestureChip />
-        </div>
-        {/* Manos sobre la UI: misma regla — cámara encendida, chip visible */}
-        <div className="empty:hidden">
-          <UiHandsChip />
         </div>
       </div>
 

@@ -261,7 +261,6 @@ export interface AgentActivityEvent {
     | "error"
     | "session_start"
     | "meeting_live"
-    | "gestures"
     | "browser"
     | "lights";
   taskId?: string;
@@ -876,41 +875,6 @@ export interface KnowledgeStats {
   conversationVoice: number;
 }
 
-/** Un nodo del grafo de código de graphify (recortado para el render 3D). */
-export interface CodeGraphNode {
-  id: string;
-  label: string;
-  /** code | document | concept | rationale (file_type de graphify). */
-  kind: string;
-  /** Comunidad Louvain de graphify; -1 = sin comunidad. */
-  community: number;
-  /** Grado (número de aristas): dimensiona el nodo en 3D. */
-  degree: number;
-  /** Archivo de origen (tooltip). */
-  file: string | null;
-}
-
-/** Una arista del grafo de código. Índices contra el array `nodes`. */
-export interface CodeGraphLink {
-  s: number;
-  t: number;
-  /** contains | imports | calls | … */
-  relation: string;
-}
-
-/** Grafo de código completo de un repo, listo para el render 3D. */
-export interface CodeGraph3D {
-  /** false = graphify aún no indexó este repo (nodes/links vacíos). */
-  available: boolean;
-  project: string;
-  /** Commit en el que se construyó el grafo (graph.json). */
-  builtAtCommit: string | null;
-  nodes: CodeGraphNode[];
-  links: CodeGraphLink[];
-  /** Nombres de comunidades (graphify label): id → nombre legible. */
-  communities: Record<string, string>;
-}
-
 export type JobResult = "ok" | "error" | "skipped";
 
 /** Estado de un job periódico del agente (panel AUTOMATIZACIONES). */
@@ -964,8 +928,6 @@ export interface MachineCapabilities {
   vault: boolean;
   /** Ejecuta `claude` (runs, tareas, chat con memoria de sesión). */
   runs: boolean;
-  /** Control por gestos / cursor del sistema (robotjs + macOS). */
-  gestures: boolean;
   /** Control del navegador (AppleScript de Chrome). */
   browser: boolean;
   /** Juntas EN VIVO (STT streaming configurado). */

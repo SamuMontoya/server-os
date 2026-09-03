@@ -30,7 +30,7 @@ import { syncVaultKnowledge } from "./vault/knowledge-sync.js";
 import { syncVoiceTranscripts } from "./voice-transcripts.js";
 import { startSystemSampler, getSystemMetrics } from "./system.js";
 import { registerJob, listJobs } from "./jobs.js";
-import { readCodeGraph3D, updateCodeGraph } from "./code-graph.js";
+import { updateCodeGraph } from "./code-graph.js";
 import { getSdkSession, getTask, listTasks, startTask } from "./agent/session.js";
 import {
   openClaudeTerminal,
@@ -88,13 +88,6 @@ import {
   LiveConflictError,
   LiveNotConfiguredError,
 } from "./meetings/live.js";
-import {
-  attachGestureClient,
-  detachGestureClient,
-  handleGestureMessage,
-} from "./input/gestures.js";
-import { mouseStatus } from "./input/mouse.js";
-import { pointerContext, teleportWindowUnderCursor } from "./input/windows.js";
 import {
   openInBrowser,
   listTabs,
@@ -335,9 +328,7 @@ const FEATURE_PREFIX: [string, Feature][] = [
   ["/habits", "vida"],
   ["/finance", "vida"],
   ["/goals", "vida"],
-  ["/code-graph", "codegraph"],
   ["/elevenlabs", "voz"],
-  ["/input", "gestos"],
 ];
 
 app.use("*", async (c, next) => {
@@ -1227,55 +1218,6 @@ app.get(
       },
     };
   }),
-);
-
-// ── Control por gestos (mano → cursor) ─────────────────────────────────
-// El browser corre MediaPipe con la webcam y manda posiciones/pinza por WS;
-// el agente inyecta CGEvents vía robotjs. Requiere permiso de Accessibility
-// para el node del LaunchAgent (el status lo dice — sin permiso los eventos
-// se descartan EN SILENCIO, por eso el check es empírico y no un flag).
-
-app.get("/input/gestures/status", async (c) => {
-  if (!env.GESTURES_ENABLED) return c.json({ enabled: false });
-  return c.json({ enabled: true, ...(await mouseStatus()) });
-});
-
-// Deixis: dónde está el cursor y qué ventana/app hay debajo. Es lo que hace
-// resolvibles los "esto"/"esta ventana" de la voz (tool get_pointer_context).
-app.get("/input/pointer", async (c) => {
-  if (!env.GESTURES_ENABLED) return c.json({ error: "gestos desactivados" }, 404);
-  return c.json(await pointerContext());
-});
-
-// Teletransporta la ventana bajo el cursor al siguiente display (helper AX).
-// El cursor gestual salta con ella.
-app.post("/input/windows/teleport", async (c) => {
-  if (!env.GESTURES_ENABLED) return c.json({ error: "gestos desactivados" }, 404);
-  const result = await teleportWindowUnderCursor();
-  if ("error" in result) return c.json(result, 409);
-  emit({ kind: "gestures", detail: `ventana de ${result.app} → display ${result.display}` });
-  return c.json(result);
-});
-
-// WS de control: JSON ↑ (arm/disarm/move/pinch/scroll/key) · JSON ↓ (hello/status/ping).
-// Auth global en el upgrade (?key=, igual que la junta). Cliente único.
-app.get(
-  "/input/gestures/ws",
-  upgradeWebSocket(() => ({
-    onOpen(_evt, ws) {
-      if (!env.GESTURES_ENABLED) {
-        ws.close(4403, "control por gestos desactivado (HERMES_GESTURES=off)");
-        return;
-      }
-      void attachGestureClient(ws);
-    },
-    onMessage(evt, ws) {
-      if (typeof evt.data === "string") void handleGestureMessage(ws, evt.data);
-    },
-    onClose(_evt, ws) {
-      detachGestureClient(ws);
-    },
-  })),
 );
 
 // ── Control del navegador por voz (Chrome real vía AppleScript) ────────
@@ -2873,11 +2815,6 @@ app.get("/machines", async (c) => c.json({ machines: await listPresence() }));
 
 // Conteos reales de la base de conocimiento (panel MEMORIA ACTIVA).
 app.get("/knowledge/stats", async (c) => c.json(await knowledgeStats()));
-
-// Grafo de código de graphify listo para el render 3D (tab MEMORIA).
-app.get("/code-graph/graph", async (c) =>
-  c.json(await readCodeGraph3D(c.req.query("project") || undefined)),
-);
 
 // Conteos del tracker por estado (+ ?project= y ?byProject=1).
 app.get("/tracker/summary", async (c) =>

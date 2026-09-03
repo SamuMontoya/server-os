@@ -10,8 +10,6 @@ import { WorkspaceProvider } from "@/state/WorkspaceContext";
 import { VidaProvider } from "@/state/VidaProvider";
 import { EstudioProvider } from "@/state/EstudioProvider";
 import { LiveMeetingProvider } from "@/state/LiveMeetingProvider";
-import { GestureControlProvider } from "@/state/GestureControlProvider";
-import { UiHandsProvider } from "@/state/UiHandsProvider";
 import { DocViewerProvider } from "@/components/DocViewer";
 import { AppShell } from "@/components/shell/AppShell";
 import { BootGate } from "@/components/boot/BootGate";
@@ -29,8 +27,6 @@ import { iniciarTokenSync } from "@/lib/auth/token";
  *  - VidaProvider          → poll único de finanzas+hábitos (Finanzas·Hábitos·Inglés)
  *  - EstudioProvider       → poll único del pipeline de contenido (ESTUDIO)
  *  - LiveMeetingProvider   → junta EN VIVO (mic + WS): sobrevive a navegar
- *  - GestureControlProvider→ control por gestos (webcam → cursor del sistema)
- *  - UiHandsProvider       → manos sobre la UI (cursor de mano + clic + scroll)
  *  - DocViewerProvider     → visor global de docs .md del vault
  *  - BootGate              → cortina de arranque (BootLoader) sobre el AppShell;
  *                            lee online/snapshot/connected y se desmonta al cargar
@@ -60,15 +56,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
                   <VidaProvider>
                     <EstudioProvider>
                     <LiveMeetingProvider>
-                      <GestureControlProvider>
-                        <UiHandsProvider>
-                          <DocViewerProvider>
-                            <BootGate>
-                              <AppShell>{children}</AppShell>
-                            </BootGate>
-                          </DocViewerProvider>
-                        </UiHandsProvider>
-                      </GestureControlProvider>
+                      <DocViewerProvider>
+                        <BootGate>
+                          <AppShell>{children}</AppShell>
+                        </BootGate>
+                      </DocViewerProvider>
                     </LiveMeetingProvider>
                     </EstudioProvider>
                   </VidaProvider>

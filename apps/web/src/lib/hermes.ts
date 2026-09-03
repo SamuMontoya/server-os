@@ -685,32 +685,6 @@ export function liveMeetingWsUrl(id: string): string {
   return sseUrl(`/meetings/live/${encodeURIComponent(id)}/ws`).replace(/^http/, "ws");
 }
 
-// ── Control por gestos (mano → cursor) ─────────────────────────────────
-
-export interface GestureAgentStatus {
-  enabled: boolean;
-  available?: boolean;
-  error?: string | null;
-  /** null = robotjs no cargó; false = falta permiso Accessibility para node. */
-  accessibility?: boolean | null;
-  screen?: { width: number; height: number } | null;
-}
-
-export async function getGestureStatus(): Promise<GestureAgentStatus | null> {
-  try {
-    const res = await hermesFetch("/input/gestures/status");
-    if (!res.ok) return null;
-    return (await res.json()) as GestureAgentStatus;
-  } catch {
-    return null;
-  }
-}
-
-/** WS del control por gestos (JSON en ambos sentidos). Mismo ?key= que SSE. */
-export function gesturesWsUrl(): string {
-  return sseUrl("/input/gestures/ws").replace(/^http/, "ws");
-}
-
 // ── Tracker de tareas por proyecto ─────────────────────────────────────
 
 export interface RunRef {
@@ -1209,19 +1183,12 @@ export async function hermesPatch<T>(path: string, body?: unknown): Promise<T> {
 
 // ── Capa de datos del rediseño (dashboard/strip + memoria) ─────────────
 import type {
-  CodeGraph3D,
   DashboardSnapshot,
   KnowledgeHit,
   KnowledgeSource,
   KnowledgeStats,
   TrackerSummary,
 } from "@hermes/shared";
-
-/** Grafo de código de graphify (nodos+aristas+comunidades) para el render 3D. */
-export function getCodeGraph3D(project?: string): Promise<CodeGraph3D> {
-  const q = project ? `?project=${encodeURIComponent(project)}` : "";
-  return hermesGet<CodeGraph3D>(`/code-graph/graph${q}`);
-}
 
 /** Búsqueda semántica unificada (memorias+reuniones+ejecuciones+chats+vault). */
 export function searchKnowledge(

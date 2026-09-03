@@ -22,10 +22,8 @@ export const FEAT = {
   estudio: process.env.NEXT_PUBLIC_FEATURE_ESTUDIO !== "0",
   ingles: process.env.NEXT_PUBLIC_FEATURE_INGLES !== "0",
   vida: process.env.NEXT_PUBLIC_FEATURE_VIDA !== "0",
-  agenda: process.env.NEXT_PUBLIC_FEATURE_AGENDA !== "0",
   voz: process.env.NEXT_PUBLIC_FEATURE_VOZ !== "0",
   juntas: process.env.NEXT_PUBLIC_FEATURE_JUNTAS !== "0",
-  gestos: process.env.NEXT_PUBLIC_FEATURE_GESTOS !== "0",
 } as const;
 
 export type WebFeature = keyof typeof FEAT;

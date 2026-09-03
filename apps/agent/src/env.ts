@@ -71,13 +71,6 @@ export const env = {
   // Puerto del loopback para el consentimiento OAuth una sola vez (debe
   // coincidir con el redirect URI autorizado en el cliente OAuth de Google).
   GOOGLE_OAUTH_PORT: Number(process.env.GOOGLE_OAUTH_PORT || 8788),
-  // Control por gestos (mano → cursor vía webcam + robotjs). "off" desactiva
-  // las rutas /input/gestures por completo.
-  // Fuera de macOS se apaga SIEMPRE: robotjs inyecta CGEvents y no existe en
-  // Linux. Antes dependía solo de que el require() fallara, y hasta entonces
-  // el agente anunciaba una capacidad que no tiene.
-  GESTURES_ENABLED:
-    IS_MAC && (process.env.HERMES_GESTURES || "").toLowerCase() !== "off",
   // Navegación profunda por voz (chrome-devtools-mcp sobre un Chrome CDP
   // dedicado). "off" no registra el MCP ni expone /browser/navigate.
   // También mac-only: ensureCdpChrome() lanza Chrome con `open -a`.

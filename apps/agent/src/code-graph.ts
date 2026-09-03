@@ -1,8 +1,7 @@
 import { execFile } from "node:child_process";
-import { access, readFile, stat } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { CodeGraph3D, CodeGraphLink, CodeGraphNode } from "@hermes/shared";
 import { env } from "./env.js";
 import { readProjects, resolveProjectRoot } from "./vault/projects.js";
 
@@ -113,100 +112,6 @@ export async function queryCodeGraph(mode: GraphMode, query: string, target?: st
   }
 }
 
-// ── Grafo 3D (tab MEMORIA) ──────────────────────────────────────────────────
-
-// Formato crudo del graph.json de graphify (node-link de networkx).
-interface RawGraph {
-  nodes: Array<{
-    id: string;
-    label?: string;
-    file_type?: string;
-    community?: number;
-    source_file?: string;
-  }>;
-  links: Array<{ source: string; target: string; relation?: string }>;
-  built_at_commit?: string;
-}
-
-const EMPTY_GRAPH = (project: string): CodeGraph3D => ({
-  available: false,
-  project,
-  builtAtCommit: null,
-  nodes: [],
-  links: [],
-  communities: {},
-});
-
-// Cache por repo, invalidado por mtime del graph.json (el job de 6h lo rota).
-const graph3dCache = new Map<string, { mtimeMs: number; payload: CodeGraph3D }>();
-
-/**
- * Grafo de código de un repo recortado para el render 3D del dashboard:
- * nodos {id,label,kind,community,degree,file} + aristas por índice + nombres
- * de comunidades. `available:false` (sin lanzar) cuando el grafo no existe.
- */
-export async function readCodeGraph3D(project?: string): Promise<CodeGraph3D> {
-  const slug = project?.trim() || SELF_SLUG;
-  const { root, error } = await resolveRoot(project);
-  if (error || !root) return EMPTY_GRAPH(slug);
-  const gj = graphJson(root);
-  let mtimeMs: number;
-  try {
-    mtimeMs = (await stat(gj)).mtimeMs;
-  } catch {
-    return EMPTY_GRAPH(slug);
-  }
-  const cached = graph3dCache.get(root);
-  if (cached && cached.mtimeMs === mtimeMs) return cached.payload;
-
-  const raw = JSON.parse(await readFile(gj, "utf8")) as RawGraph;
-  const labelsPath = join(root, "graphify-out", ".graphify_labels.json");
-  const communities = await readFile(labelsPath, "utf8")
-    .then((s) => JSON.parse(s) as Record<string, string>)
-    .catch(() => ({}) as Record<string, string>);
-
-  const degree = new Map<string, number>();
-  for (const l of raw.links) {
-    degree.set(l.source, (degree.get(l.source) ?? 0) + 1);
-    degree.set(l.target, (degree.get(l.target) ?? 0) + 1);
-  }
-  const index = new Map<string, number>();
-  const nodes: CodeGraphNode[] = raw.nodes.map((n, i) => {
-    index.set(n.id, i);
-    return {
-      id: n.id,
-      label: n.label ?? n.id,
-      kind: n.file_type ?? "code",
-      community: n.community ?? -1,
-      degree: degree.get(n.id) ?? 0,
-      file: n.source_file ?? null,
-    };
-  });
-  const links: CodeGraphLink[] = [];
-  for (const l of raw.links) {
-    const s = index.get(l.source);
-    const t = index.get(l.target);
-    if (s !== undefined && t !== undefined && s !== t) {
-      links.push({ s, t, relation: l.relation ?? "" });
-    }
-  }
-  const payload: CodeGraph3D = {
-    available: true,
-    project: slug,
-    builtAtCommit: raw.built_at_commit ?? null,
-    nodes,
-    links,
-    communities,
-  };
-  graph3dCache.set(root, { mtimeMs, payload });
-  return payload;
-}
-
-/**
- * Job periódico: refresca el grafo de TODOS los repos indexables. Incremental
- * (`update`) si ya hay grafo; construcción completa (`extract --code-only`) si
- * no. Un repo que falla no tumba a los demás. null → "skipped" (sin binario).
- */
 export async function updateCodeGraph(): Promise<{ total: number; updated: number; built: number; failed: number } | null> {
   if (!(await exists(env.GRAPHIFY_BIN))) return null; // sin binario instalado: skipped, no error
   const repos = await indexableRepos();
