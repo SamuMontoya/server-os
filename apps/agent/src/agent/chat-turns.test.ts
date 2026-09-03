@@ -295,8 +295,11 @@ test("error_max_turns SUBE de nivel la sesión al continuar, no repite el mismo 
   h.engine.start({ prompt: "dame el estado de x", sessionKey });
   await settle();
   await settle();
+  await settle();
+  await settle();
+  // MAX_CONTINUATIONS=2: dos escaladas de un nivel cada una → trivial→bajo→medio.
   const after = routeTurn("cualquier cosa", sessionKey);
-  assert.equal(after.tier, "bajo", "la sesión debe quedar en el nivel siguiente, no en trivial");
+  assert.equal(after.tier, "medio", "la sesión debe subir un nivel por cada continuación");
 });
 
 test("un 429 servido como 'success' con is_error se trata como error real", async () => {

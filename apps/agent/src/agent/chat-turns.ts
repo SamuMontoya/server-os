@@ -139,8 +139,20 @@ const BACKOFF_MS = [1000, 3000];
  * quedó corto por poco); las otras dos pagaban por un bucle. Si de verdad
  * falta trabajo, el turno cierra avisando y el humano decide si sigue — que es
  * más barato que adivinar tres veces.
+ *
+ * Subido de 1 a 2 (2026-09-03), pedido explícito del dueño tras un caso real:
+ * una tarea larga de verdad (instalar dependencias, esperar una descarga,
+ * depurar un puerto ocupado — "Autonomus qween") agotó la primera
+ * continuación YA escalada a `alto` (el techo más alto que existe, sin más
+ * nivel al que subir) y cerró en error a mitad del trabajo. Con solo 1
+ * continuación, tocar el techo de `alto` significaba SIEMPRE fallar sin
+ * alternativa — no había "dar una vuelta más" posible. La segunda
+ * continuación sigue subiendo de nivel si puede (ver el escalado más abajo),
+ * así que el costo extra es real pero acotado: solo se paga cuando la tarea
+ * genuinamente lo necesita, no en el caso general (saludo, pregunta corta),
+ * que sigue resolviéndose en la primera pasada.
  */
-export const MAX_CONTINUATIONS = 1;
+export const MAX_CONTINUATIONS = 2;
 const CONTINUE_PROMPT =
   "Se acabó el presupuesto de turnos antes de que terminaras. Continúa EXACTAMENTE donde te quedaste: no repitas lo ya hecho, no vuelvas a saludar ni a resumir la tarea, sigue la ejecución y ciérrala.";
 

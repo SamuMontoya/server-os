@@ -40,9 +40,16 @@ export type Tier = "trivial" | "bajo" | "medio" | "alto";
  * responde con una tool y una frase (6 sobra); una aclaración corta apenas
  * necesita tools (10); el grueso son búsquedas y redacción con varias tools
  * (16); el trabajo de código o de razonamiento de verdad lee, escribe y
- * verifica (28). Si un nivel se queda corto, el turno cierra con
- * `error_max_turns` y la auto-continuación lo retoma (chat-turns.ts) — el
- * trabajo no se pierde, solo se paga un techo en vez de una barra libre.
+ * verifica (44). Si un nivel se queda corto, el turno cierra con
+ * `error_max_turns` y la auto-continuación lo retoma ESCALANDO un nivel más
+ * (chat-turns.ts) — el trabajo no se pierde, solo se paga un techo en vez de
+ * una barra libre.
+ *
+ * `alto` subió de 28 a 44 (2026-09-03): es el TECHO de la escalera — cuando
+ * una tarea larga de verdad (instalar algo, esperar una descarga, depurar)
+ * llega hasta acá y se queda corta, ya no hay nivel siguiente al que subir,
+ * así que el único alivio posible es un techo más alto en este mismo nivel.
+ * Confirmado con un caso real que agotó `alto` incluso después de escalar.
  */
 export const TIERS: Record<Tier, { model: ModelAlias; effort?: Effort; maxTurns: number }> = {
   // Saludos, confirmaciones, preguntas de una línea sobre estado.
@@ -52,7 +59,7 @@ export const TIERS: Record<Tier, { model: ModelAlias; effort?: Effort; maxTurns:
   // El grueso: preguntas con contexto, búsquedas, redacción.
   medio: { model: "sonnet", effort: "medium", maxTurns: 16 },
   // Código y razonamiento de verdad: escribir/editar, auditorías, investigación.
-  alto: { model: "sonnet", effort: "high", maxTurns: 28 },
+  alto: { model: "sonnet", effort: "high", maxTurns: 44 },
 };
 
 // ── Señales ───────────────────────────────────────────────────────────

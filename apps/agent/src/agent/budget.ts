@@ -187,7 +187,13 @@ export const PROFILES: Record<PowerMode, PowerProfile> = {
   normal: {
     maxTier: "alto",
     maxEffort: "high",
-    maxTurns: 40,
+    // Sin techo real: se combina con TIERS[tier].maxTurns por Math.min (ver
+    // session.ts), así que este número solo importa si es MENOR al de algún
+    // nivel — 44 iguala el techo de `alto` (el más alto que existe) para que
+    // "modo normal" de verdad no recorte nada. Subir `alto` sin subir esto
+    // sería un bug silencioso: el Math.min lo taparía de vuelta al valor
+    // viejo sin ningún error visible.
+    maxTurns: 44,
     retrieval: { recent: 5, relevant: 8, chars: 300 },
     forceSubagents: false,
   },
