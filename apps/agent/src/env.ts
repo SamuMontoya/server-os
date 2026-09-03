@@ -1,4 +1,5 @@
 import { config } from "dotenv";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,9 +8,29 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(import.meta.url), "../../../..");
 config({ path: resolve(root, ".env") });
 
+/**
+ * Un VAULT_PATH que apunta a una carpeta que ya no existe (vault borrado o
+ * movido, .env copiado de otra máquina) es peor que uno vacío: sin esto
+ * quedaba "configurado" pero inválido, y `agent/session.ts`/`chat-history.ts`
+ * lo usan como `cwd` de CADA turno sin proyecto en foco — spawnear con un cwd
+ * que no existe hace fallar el `claude` nativo con ENOENT, con un mensaje que
+ * habla de compatibilidad de binario y no menciona el vault para nada. Se
+ * detectó así: TODO chat general se rompía en producción, reproducible hasta
+ * en un turno aislado, con el binario funcionando perfecto invocado a mano.
+ * Tratarlo como "" (sin vault) cae directo en el fallback ya existente
+ * (`env.VAULT_PATH || process.cwd()`) sin tocar cada call site.
+ */
+const rawVaultPath = process.env.VAULT_PATH || "";
+if (rawVaultPath && !existsSync(rawVaultPath)) {
+  console.warn(
+    `[env] VAULT_PATH="${rawVaultPath}" no existe — se trata como sin vault (cae a process.cwd()).`,
+  );
+}
+const vaultPath = rawVaultPath && existsSync(rawVaultPath) ? rawVaultPath : "";
+
 export const env = {
   PORT: Number(process.env.HERMES_PORT || 8642),
-  VAULT_PATH: process.env.VAULT_PATH || "",
+  VAULT_PATH: vaultPath,
   CLAWD_PATH: process.env.CLAWD_PATH || "",
   MACHINE_NAME: process.env.MACHINE_NAME || "local",
   HERMES_API_KEY: process.env.HERMES_API_KEY || "",

@@ -60,6 +60,21 @@ publish_url() {
 
 echo "hermes-tunnel: arrancando quick tunnel → localhost:$AGENT_PORT"
 
+# NOTA (2026-09-03): el quick tunnel (sin cuenta, *.trycloudflare.com) bufere
+# las respuestas SSE del chat COMPLETAS hasta que la conexión está por
+# cerrarse — confirmado con curl directo al túnel, con varias combinaciones
+# (--protocol http2, un comentario SSE de 8KB para forzar el primer flush,
+# las dos juntas): un turno real de ~5-10s con 6-7 eventos separados llegaba
+# ENTERO en una ventana de 60-140ms al final en TODOS los casos. La conexión
+# directa (Tailscale, sin Cloudflare de por medio) sí fluye evento a evento
+# en tiempo real con el mismo código — así que no es un bug del motor de
+# turnos ni del cliente, es el túnel gratuito. El chat sigue funcionando
+# (la respuesta completa igual llega), pero sin el efecto de "streaming en
+# vivo": se ve el orbe de "pensando" y de golpe aparece todo. Arreglo real
+# pendiente: un named tunnel (`cloudflared tunnel login`, pide cuenta +
+# dominio de Cloudflare) en vez de un quick tunnel — fuera de alcance sin
+# que Samuel decida la cuenta/dominio.
+#
 # cloudflared imprime la URL asignada en stderr como parte de una tabla ASCII
 # ("|  https://algo.trycloudflare.com  |"); se lee línea a línea y se publica
 # apenas aparece, sin esperar a que el proceso termine (corre indefinidamente).
