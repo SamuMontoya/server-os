@@ -17,6 +17,14 @@ export const env = {
   // agente. Sin ella se deriva de la IP LAN real (presence.ts) — se pone a
   // mano solo si hay un nombre/puerto de por medio (Tailscale, reverse proxy).
   PUBLIC_URL: (process.env.HERMES_PUBLIC_URL || "").replace(/\/$/, ""),
+  // Portal separado (Vercel u otro host público): orígenes EXACTOS admitidos
+  // por CORS además de la LAN/Tailscale (coma-separados — ej. el dominio de
+  // producción y el de cada preview que se quiera probar). Vacío = ningún
+  // origen público puede llamar al agente, solo la LAN.
+  PORTAL_ORIGINS: (process.env.HERMES_PORTAL_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""))
+    .filter(Boolean),
   // Raíz de los clones de código EN ESTA máquina. El vault guarda ruta_local
   // con las rutas de la Mac; en otro PC el mismo proyecto vive en otra parte,
   // así que los runs lo buscan aquí por nombre de carpeta antes de rendirse.

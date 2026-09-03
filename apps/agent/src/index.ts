@@ -116,6 +116,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const LAN_ORIGIN =
   /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}|(?:[a-z0-9-]+\.)+(?:local|ts\.net))(?::\d+)?$/i;
 
+// Portal separado en un host público (Vercel u otro): solo los orígenes
+// EXACTOS de HERMES_PORTAL_ORIGINS pasan — a diferencia de la LAN/Tailscale
+// de arriba, aquí no hay rango que reconocer, así que no se acepta por patrón.
+const PORTAL_ORIGINS = new Set(env.PORTAL_ORIGINS);
+
 // Private Network Access: Chrome exige que un preflight que va de una IP
 // privada a loopback lo autorice explícitamente. Se responde ANTES del cors
 // (que corta el OPTIONS) y se escribe sobre c.res, igual que hace el propio
@@ -130,7 +135,8 @@ app.use("*", async (c, next) => {
 app.use(
   "*",
   cors({
-    origin: (origin) => (!origin || LAN_ORIGIN.test(origin) ? origin : ""),
+    origin: (origin) =>
+      !origin || LAN_ORIGIN.test(origin) || PORTAL_ORIGINS.has(origin) ? origin : "",
     allowHeaders: [
       "Content-Type",
       "Authorization",
