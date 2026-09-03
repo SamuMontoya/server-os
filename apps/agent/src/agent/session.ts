@@ -315,6 +315,15 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
           "Glob",
           "Grep",
           "Bash",
+          // BashOutput/KillShell: la contraparte de `Bash` con
+          // `run_in_background: true` — sin ellas el modelo puede LANZAR un
+          // comando en background pero nunca vuelve a saber de él (ni
+          // revisar su salida, ni matarlo), así que "corriendo en
+          // background, aviso cuando esté listo" era una promesa que no
+          // podía cumplir: no tenía cómo. Faltaban del recorte de costos
+          // original (ver el comentario de arriba) sin querer.
+          "BashOutput",
+          "KillShell",
           "Write",
           "Edit",
           "WebSearch",
@@ -331,6 +340,11 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
           "WebSearch",
           "WebFetch",
           "TodoWrite",
+          // Revisar/matar un shell de background PROPIO (no arbitrario del
+          // sistema) es tan seguro como Read/Glob/Grep — no hay nada que
+          // vigilar del lado del guardrail.
+          "BashOutput",
+          "KillShell",
           ...HERMES_TOOL_NAMES,
         ],
         permissionMode: "default",
