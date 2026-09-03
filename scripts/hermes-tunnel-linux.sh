@@ -90,16 +90,45 @@ echo "hermes-tunnel: arrancando quick tunnel → localhost:$AGENT_PORT"
 # vez por arranque del proceso (nunca vuelve a cambiar mientras viva), y solo
 # ante la línea real del banner ("Your quick Tunnel has been created"), no
 # ante cualquier mención suelta de la URL.
+#
+# SEGUNDO bug encontrado el mismo día: cloudflared puede quedarse COLGADO
+# después del precheck de red, sin morir ni avanzar — visto en vivo, más de
+# 15 minutos sin una sola línea nueva. `Restart=always` de la unidad no sirve
+# para esto: el proceso sigue VIVO, solo no hace nada, y systemd no reinicia
+# nada que no haya salido. Por eso el vigilante de abajo: si a los
+# STARTUP_TIMEOUT_S segundos no se publicó ninguna URL, mata al proceso a
+# mano — ESO sí dispara el `Restart=always` de la unidad, que reintenta
+# desde cero (a veces basta para des-colgarlo).
+STARTUP_TIMEOUT_S=90
+published_flag="$(mktemp -u "/tmp/hermes-tunnel-published.XXXXXX")"
+trap 'rm -f "$published_flag"' EXIT
+
 published=0
-"$CLOUDFLARED" tunnel --url "http://localhost:$AGENT_PORT" 2>&1 | while IFS= read -r line; do
-  echo "$line"
-  if [[ "$published" == "0" && "$line" == *"Your quick Tunnel has been created"* ]]; then
-    published=1
-  elif [[ "$published" == "1" && "$line" == *"trycloudflare.com"* ]]; then
-    url="$(echo "$line" | grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com')"
-    if [[ -n "$url" ]]; then
-      publish_url "$url"
-      published=2
+"$CLOUDFLARED" tunnel --url "http://localhost:$AGENT_PORT" > >(
+  while IFS= read -r line; do
+    echo "$line"
+    if [[ "$published" == "0" && "$line" == *"Your quick Tunnel has been created"* ]]; then
+      published=1
+    elif [[ "$published" == "1" && "$line" == *"trycloudflare.com"* ]]; then
+      url="$(echo "$line" | grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com')"
+      if [[ -n "$url" ]]; then
+        publish_url "$url"
+        published=2
+        : > "$published_flag"
+      fi
     fi
+  done
+) 2>&1 &
+cf_pid=$!
+
+(
+  sleep "$STARTUP_TIMEOUT_S"
+  if [[ ! -f "$published_flag" ]] && kill -0 "$cf_pid" 2>/dev/null; then
+    echo "hermes-tunnel: sin URL publicada en ${STARTUP_TIMEOUT_S}s — cloudflared parece colgado, lo mato para que la unidad reintente"
+    kill "$cf_pid" 2>/dev/null
   fi
-done
+) &
+watcher_pid=$!
+
+wait "$cf_pid" 2>/dev/null
+kill "$watcher_pid" 2>/dev/null || true
