@@ -39,7 +39,7 @@ const KNOWLEDGE_SOURCES = ["memory", "meeting", "execution", "conversation", "va
 
 const searchKnowledgeTool = tool(
   "search_knowledge",
-  "Búsqueda semántica unificada en TODO lo que Hermes sabe: memorias, reuniones, ejecuciones de tareas, conversaciones pasadas (texto y voz) y notas del vault. Primera opción para '¿en qué quedamos?', '¿qué sabemos de X?' o cualquier contexto histórico.",
+  "Búsqueda semántica unificada en TODO lo que OS sabe: memorias, ejecuciones de tareas, conversaciones pasadas y notas del vault. Primera opción para '¿en qué quedamos?', '¿qué sabemos de X?' o cualquier contexto histórico.",
   {
     query: z.string().describe("Qué buscar, en lenguaje natural"),
     sources: z
@@ -166,7 +166,7 @@ const captureIdeaTool = tool(
     const file = join(inbox, `idea-${stamp}.md`);
     await appendFile(
       file,
-      `---\ncapturada: ${new Date().toISOString()}\ntags: [${(tags ?? []).join(", ")}]\norigen: hermes\n---\n\n${content}\n`,
+      `---\ncapturada: ${new Date().toISOString()}\ntags: [${(tags ?? []).join(", ")}]\norigen: os\n---\n\n${content}\n`,
     );
     await saveMemory({ content, type: "agent", tags: [...(tags ?? []), "idea"], source: "agent" });
     return text(`Idea capturada en ${file}`);
