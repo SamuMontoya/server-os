@@ -911,59 +911,6 @@ export interface CodeGraph3D {
   communities: Record<string, string>;
 }
 
-/** Un evento próximo del calendario (feed ICS privado de Google Calendar). */
-export interface CalendarEvent {
-  /** UID + fecha de la instancia (únicas también en eventos recurrentes). */
-  id: string;
-  title: string;
-  start: string;
-  end: string | null;
-  allDay: boolean;
-  location: string | null;
-  /** Notas del evento (DESCRIPTION del ICS); null si el evento no las trae. */
-  description: string | null;
-  /** Minutos hasta el inicio; negativo = ya empezó (en curso). */
-  startsInMin: number;
-}
-
-export interface UpcomingCalendar {
-  /** false = sin GOOGLE_CALENDAR_ICS_URL en .env (el panel muestra CTA). */
-  configured: boolean;
-  fetchedAt: string | null;
-  /** true = el último fetch falló y esto es cache viejo. */
-  stale: boolean;
-  events: CalendarEvent[];
-}
-
-/** Clima actual (Open-Meteo, códigos WMO; el front mapea a iconos). */
-export interface WeatherNow {
-  tempC: number;
-  feelsLikeC: number;
-  humidityPct: number;
-  precipitationMm: number;
-  windKmh: number;
-  weatherCode: number;
-}
-
-export interface WeatherDay {
-  /** YYYY-MM-DD. */
-  date: string;
-  minC: number;
-  maxC: number;
-  precipProbPct: number | null;
-  weatherCode: number;
-}
-
-export interface WeatherReport {
-  place: string;
-  fetchedAt: string;
-  /** true = el último fetch falló y esto es cache viejo. */
-  stale: boolean;
-  now: WeatherNow;
-  /** Hoy + 2 días. */
-  daily: WeatherDay[];
-}
-
 export type JobResult = "ok" | "error" | "skipped";
 
 /** Estado de un job periódico del agente (panel AUTOMATIZACIONES). */
@@ -1052,8 +999,6 @@ export interface DashboardSnapshot {
   tracker: TrackerSummary;
   jobs: JobStatus[];
   activity: ActivitySeries | null;
-  weather: WeatherReport | null;
-  calendar: UpcomingCalendar;
   usage: DailyRunUsage;
 }
 

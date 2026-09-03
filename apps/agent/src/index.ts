@@ -29,9 +29,6 @@ import { searchKnowledge, knowledgeStats } from "./knowledge.js";
 import { syncVaultKnowledge } from "./vault/knowledge-sync.js";
 import { syncVoiceTranscripts } from "./voice-transcripts.js";
 import { startSystemSampler, getSystemMetrics } from "./system.js";
-import { getWeather } from "./weather.js";
-import { getUpcomingCalendar, invalidateCalendarCache } from "./calendar.js";
-import * as gcal from "./google-calendar.js";
 import { registerJob, listJobs } from "./jobs.js";
 import { readCodeGraph3D, updateCodeGraph } from "./code-graph.js";
 import { getSdkSession, getTask, listTasks, startTask } from "./agent/session.js";
@@ -335,8 +332,6 @@ const FEATURE_PREFIX: [string, Feature][] = [
   ["/meetings", "juntas"],
   ["/english", "ingles"],
   ["/linear", "linear"],
-  ["/calendar", "agenda"],
-  ["/weather", "agenda"],
   ["/habits", "vida"],
   ["/finance", "vida"],
   ["/goals", "vida"],
@@ -2735,153 +2730,6 @@ app.post("/tools/update_goal", async (c) => {
   return c.json({ ok: true, confirmation });
 });
 
-// ── Calendario: crear / mover / borrar eventos por voz (Google Calendar API) ──
-// La voz confirma con el dueño ANTES de escribir (regla en el system prompt); estos
-// endpoints ejecutan y devuelven una confirmación hablada. Cada escritura
-// invalida el cache de lectura para que la agenda del dashboard salga fresca.
-const CAL_DT_FMT = new Intl.DateTimeFormat("es-CO", {
-  weekday: "long",
-  day: "numeric",
-  month: "long",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-  timeZone: env.GOOGLE_CALENDAR_TZ,
-});
-const CAL_DATE_FMT = new Intl.DateTimeFormat("es-CO", {
-  weekday: "long",
-  day: "numeric",
-  month: "long",
-  timeZone: env.GOOGLE_CALENDAR_TZ,
-});
-
-/** "el jueves 10 de julio a las 15:00" · "el jueves 10 de julio (todo el día)". */
-function describeWhen(ev: { start: string; allDay: boolean }): string {
-  const d = new Date(ev.start);
-  return ev.allDay ? `${CAL_DATE_FMT.format(d)} (todo el día)` : CAL_DT_FMT.format(d);
-}
-
-interface CreateEventBody {
-  title?: string;
-  start?: string;
-  end?: string;
-  duration_min?: number;
-  all_day?: boolean;
-  description?: string;
-  location?: string;
-}
-app.post("/tools/create_event", async (c) => {
-  if (!gcal.isConfigured())
-    return c.json({ ok: false, error: "Google Calendar no está conectado (falta el OAuth)." });
-  const b = await c.req.json<CreateEventBody>().catch(() => ({}) as CreateEventBody);
-  if (!b.title?.trim() || !b.start?.trim())
-    return c.json({ ok: false, error: "Necesito al menos un título y una fecha/hora." }, 400);
-  try {
-    const ev = await gcal.createEvent({
-      title: b.title,
-      start: b.start,
-      end: b.end,
-      durationMin: b.duration_min,
-      allDay: b.all_day,
-      description: b.description,
-      location: b.location,
-    });
-    invalidateCalendarCache();
-    const confirmation = `Listo, agendé «${ev.title}» ${describeWhen(ev)}.`;
-    emit({ kind: "tool_call", toolName: "create_event(voz)", detail: confirmation });
-    return c.json({ ok: true, event_id: ev.id, confirmation });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[hermes] create_event", msg);
-    return c.json({ ok: false, error: "No pude crear el evento en Google Calendar." });
-  }
-});
-
-interface UpdateEventBody {
-  event_id?: string;
-  title?: string;
-  start?: string;
-  end?: string;
-  duration_min?: number;
-  all_day?: boolean;
-  description?: string;
-  location?: string;
-}
-app.post("/tools/update_event", async (c) => {
-  if (!gcal.isConfigured())
-    return c.json({ ok: false, error: "Google Calendar no está conectado (falta el OAuth)." });
-  const b = await c.req.json<UpdateEventBody>().catch(() => ({}) as UpdateEventBody);
-  if (!b.event_id?.trim())
-    return c.json({ ok: false, error: "Falta el event_id (búscalo antes con find_events)." }, 400);
-  try {
-    const ev = await gcal.updateEvent(b.event_id, {
-      title: b.title,
-      start: b.start,
-      end: b.end,
-      durationMin: b.duration_min,
-      allDay: b.all_day,
-      description: b.description,
-      location: b.location,
-    });
-    invalidateCalendarCache();
-    const confirmation = `Actualicé «${ev.title}»: ahora es ${describeWhen(ev)}.`;
-    emit({ kind: "tool_call", toolName: "update_event(voz)", detail: confirmation });
-    return c.json({ ok: true, event_id: ev.id, confirmation });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[hermes] update_event", msg);
-    return c.json({ ok: false, error: "No pude modificar el evento." });
-  }
-});
-
-app.post("/tools/cancel_event", async (c) => {
-  if (!gcal.isConfigured())
-    return c.json({ ok: false, error: "Google Calendar no está conectado (falta el OAuth)." });
-  const b = await c.req
-    .json<{ event_id?: string; title?: string }>()
-    .catch(() => ({}) as { event_id?: string; title?: string });
-  if (!b.event_id?.trim())
-    return c.json({ ok: false, error: "Falta el event_id (búscalo antes con find_events)." }, 400);
-  try {
-    await gcal.deleteEvent(b.event_id);
-    invalidateCalendarCache();
-    const confirmation = b.title ? `Cancelé «${b.title}».` : "Evento cancelado.";
-    emit({ kind: "tool_call", toolName: "cancel_event(voz)", detail: confirmation });
-    return c.json({ ok: true, confirmation });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[hermes] cancel_event", msg);
-    return c.json({ ok: false, error: "No pude cancelar el evento." });
-  }
-});
-
-app.post("/tools/find_events", async (c) => {
-  if (!gcal.isConfigured())
-    return c.json({ ok: false, error: "Google Calendar no está conectado (falta el OAuth)." });
-  const b = await c.req
-    .json<{ query?: string; days_ahead?: number }>()
-    .catch(() => ({}) as { query?: string; days_ahead?: number });
-  try {
-    const daysAhead = b.days_ahead && b.days_ahead > 0 ? b.days_ahead : 30;
-    const events = await gcal.findEvents(b.query?.trim() ?? "", {
-      timeMax: new Date(Date.now() + daysAhead * 24 * 60 * 60_000),
-    });
-    return c.json({
-      ok: true,
-      count: events.length,
-      events: events.map((ev) => ({
-        event_id: ev.id,
-        title: ev.title,
-        when: describeWhen(ev),
-        location: ev.location ?? undefined,
-      })),
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[hermes] find_events", msg);
-    return c.json({ ok: false, error: "No pude buscar en el calendario." });
-  }
-});
 
 // ── Token efímero de ElevenLabs (app móvil) ────────────────────────────
 // La app React Native no puede tener la xi-api-key embebida; pide aquí un
@@ -3041,27 +2889,6 @@ app.get("/tracker/summary", async (c) =>
   ),
 );
 
-// Clima (Open-Meteo, cache 20 min). 503 solo si nunca hubo un fetch exitoso.
-app.get("/weather", async (c) => {
-  const report = await getWeather();
-  if (!report) return c.json({ error: "clima no disponible" }, 503);
-  return c.json(report);
-});
-
-// Próximas reuniones (feed ICS privado de Google Calendar, cache 5 min).
-// `back` (días hacia atrás) lo usa la página AGENDA para navegar a meses/
-// semanas pasadas; sin él, la ventana hacia atrás es el lookback corto de 6h.
-app.get("/calendar/upcoming", async (c) => {
-  const back = c.req.query("back");
-  return c.json(
-    await getUpcomingCalendar(
-      Number(c.req.query("days")) || 7,
-      Number(c.req.query("limit")) || 10,
-      back != null ? Number(back) : undefined,
-    ),
-  );
-});
-
 // Estado de los jobs periódicos (panel AUTOMATIZACIONES).
 app.get("/jobs", (c) => c.json(listJobs()));
 
@@ -3075,15 +2902,13 @@ app.get("/activity/hourly", async (c) =>
 // su fallback y el resto vive.
 app.get("/dashboard", async (c) => {
   const uptimeAgent = Math.floor((Date.now() - startedAt) / 1000);
-  const [system, presence, knowledge, tracker, activity, weather, calendar, usage] =
+  const [system, presence, knowledge, tracker, activity, usage] =
     await Promise.allSettled([
       getSystemMetrics(uptimeAgent),
       listPresence(),
       knowledgeStats(),
       trackerSummary(),
       activityHourly(24),
-      getWeather(),
-      getUpcomingCalendar(),
       getDailyUsage(),
     ]);
   const val = <T,>(r: PromiseSettledResult<T>, fallback: T): T =>
@@ -3123,8 +2948,6 @@ app.get("/dashboard", async (c) => {
     }),
     jobs: listJobs(),
     activity: val(activity, null),
-    weather: val(weather, null),
-    calendar: val(calendar, { configured: false, fetchedAt: null, stale: false, events: [] }),
     usage: val(usage, { costUsd: 0, runs: 0 }),
   });
 });

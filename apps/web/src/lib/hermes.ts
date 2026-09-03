@@ -1215,7 +1215,6 @@ import type {
   KnowledgeSource,
   KnowledgeStats,
   TrackerSummary,
-  UpcomingCalendar,
 } from "@hermes/shared";
 
 /** Grafo de código de graphify (nodos+aristas+comunidades) para el render 3D. */
@@ -1240,22 +1239,6 @@ export function getKnowledgeStats(): Promise<KnowledgeStats> {
 /** Snapshot único del dashboard (strip inferior + presencia + jobs + clima). */
 export function getDashboard(): Promise<DashboardSnapshot> {
   return hermesGet<DashboardSnapshot>("/dashboard");
-}
-
-/**
- * Feed ICS de Google Calendar para la página AGENDA. Ventana amplia hacia
- * atrás (mes/semana pasados navegables) y adelante para llenar las vistas de
- * calendario; el strip inferior sigue usando el snapshot de /dashboard con su
- * propia ventana corta.
- */
-export function getUpcomingCalendar(
-  days = 120,
-  limit = 1500,
-  back = 45,
-): Promise<UpcomingCalendar> {
-  return hermesGet<UpcomingCalendar>(
-    `/calendar/upcoming?days=${days}&limit=${limit}&back=${back}`,
-  );
 }
 
 /** Conteos del tracker por estado (progreso real de un proyecto). */

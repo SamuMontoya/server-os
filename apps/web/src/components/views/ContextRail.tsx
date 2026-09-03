@@ -78,8 +78,6 @@ export function ContextRail() {
     .map((p) => ({ ...p, pend: p.tareas_pendientes?.length ?? 0 }))
     .sort((a, b) => b.pend - a.pend);
 
-  const events = snapshot?.calendar?.configured ? (snapshot.calendar.events ?? []) : [];
-  const agenda = events.slice(0, 3);
   const jobs = (snapshot?.jobs ?? []).slice(0, 3);
   const k = snapshot?.knowledge;
 
@@ -94,33 +92,6 @@ export function ContextRail() {
   return (
     <ScrollArea rail fade="y" className="h-full px-5 py-5">
       <div className="flex flex-col gap-6">
-        {agenda.length > 0 && (
-          <section className="flex flex-col gap-2.5">
-            <Eyebrow>Ahora</Eyebrow>
-            <div>
-              {agenda.map((e) => {
-                // startsInMin negativo = en curso (contrato de UpcomingCalendar)
-                const enCurso = e.startsInMin < 0;
-                return (
-                  <Row
-                    key={e.id}
-                    title={e.title}
-                    sub={
-                      enCurso
-                        ? e.end
-                          ? `En curso · termina ${fmtHora(e.end)}`
-                          : "En curso"
-                        : fmtHora(e.start)
-                    }
-                    tone={enCurso ? "green" : "line"}
-                    value={enCurso ? <span className="text-green">●</span> : undefined}
-                  />
-                );
-              })}
-            </div>
-          </section>
-        )}
-
         {active.length > 0 && (
           <section className="flex flex-col gap-2.5">
             <Eyebrow>Proyectos · vault</Eyebrow>

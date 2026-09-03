@@ -62,24 +62,15 @@ export const env = {
   // gastar) | "off" (solo queda el loop estratégico de 20-45 s).
   COPILOT_PROVIDER: (process.env.HERMES_COPILOT || "").toLowerCase(),
   COPILOT_MODEL: process.env.HERMES_COPILOT_MODEL || "claude-haiku-4-5",
-  // Dashboard: calendario (URL iCal SECRETA de Google Calendar) y clima
-  // (Open-Meteo sin API key; defaults: Medellín).
-  GOOGLE_CALENDAR_ICS_URL: process.env.GOOGLE_CALENDAR_ICS_URL || "",
-  // Google Calendar API (escritura por voz: crear/mover/borrar eventos). OAuth2
-  // con refresh token; se obtiene una vez con `pnpm --filter @hermes/agent google:auth`.
-  // Si falta cualquiera de los tres, la escritura se desactiva y la lectura cae
-  // al feed ICS. GOOGLE_CALENDAR_ID: "primary" u otro id; TZ para eventos nuevos.
+  // OAuth de Google, COMPARTIDO: YouTube Analytics de Estudio y (si algún día
+  // vuelve) escritura de Calendar. Un solo consentimiento (`pnpm google:auth`)
+  // cubre ambos scopes — por eso vive aparte de cualquier feature concreta.
   GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID || "",
   GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET || "",
   GOOGLE_OAUTH_REFRESH_TOKEN: process.env.GOOGLE_OAUTH_REFRESH_TOKEN || "",
-  GOOGLE_CALENDAR_ID: process.env.GOOGLE_CALENDAR_ID || "primary",
-  GOOGLE_CALENDAR_TZ: process.env.GOOGLE_CALENDAR_TZ || "America/Bogota",
   // Puerto del loopback para el consentimiento OAuth una sola vez (debe
   // coincidir con el redirect URI autorizado en el cliente OAuth de Google).
   GOOGLE_OAUTH_PORT: Number(process.env.GOOGLE_OAUTH_PORT || 8788),
-  WEATHER_LAT: Number(process.env.WEATHER_LAT || 4.711),
-  WEATHER_LON: Number(process.env.WEATHER_LON || -74.0721),
-  WEATHER_PLACE: process.env.WEATHER_PLACE || "Bogotá",
   // Control por gestos (mano → cursor vía webcam + robotjs). "off" desactiva
   // las rutas /input/gestures por completo.
   // Fuera de macOS se apaga SIEMPRE: robotjs inyecta CGEvents y no existe en

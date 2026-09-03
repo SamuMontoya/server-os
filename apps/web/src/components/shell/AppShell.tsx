@@ -56,10 +56,6 @@ const InglesView =
   process.env.NEXT_PUBLIC_FEATURE_INGLES !== "0"
     ? dynamic(() => import("@/components/views/InglesView").then((m) => m.InglesView))
     : Nada;
-const AgendaView =
-  process.env.NEXT_PUBLIC_FEATURE_AGENDA !== "0"
-    ? dynamic(() => import("@/components/views/AgendaView").then((m) => m.AgendaView))
-    : Nada;
 const EstudioView =
   process.env.NEXT_PUBLIC_FEATURE_ESTUDIO !== "0"
     ? dynamic(() => import("@/components/views/EstudioView").then((m) => m.EstudioView))
@@ -85,7 +81,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     "/finanzas": "finanzas",
     "/habitos": "habitos",
     "/ingles": "ingles",
-    "/agenda": "agenda",
     "/estudio": "estudio",
   };
   const view = WORKSPACE_VIEWS[pathname];
@@ -129,9 +124,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
             <div className={`min-h-0 flex-1 ${view === "ingles" ? "flex flex-col" : "hidden"}`}>
               <InglesView />
-            </div>
-            <div className={`min-h-0 flex-1 ${view === "agenda" ? "flex flex-col" : "hidden"}`}>
-              <AgendaView />
             </div>
             <div className={`min-h-0 flex-1 ${view === "estudio" ? "flex flex-col" : "hidden"}`}>
               <EstudioView />
