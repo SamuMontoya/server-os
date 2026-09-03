@@ -1,4 +1,21 @@
+import type { Context } from "hono";
 import { supabase } from "./supabase.js";
+
+/**
+ * Variable de contexto de Hono que pone el middleware de index.ts cuando la
+ * credencial del request es un JWT de Supabase (no la HERMES_API_KEY estática
+ * de LAN). `app` se queda como `Hono` a secas (cambiar su tipo global rompe
+ * la asignabilidad de TODAS las funciones registerXRoutes(app: Hono) por la
+ * varianza de `Context#set`/`#get`) — en vez de eso, cada punto que necesita
+ * `userId` castea `c` puntualmente a este tipo.
+ */
+export type CtxWithUser = Context<{ Variables: { userId?: string } }>;
+
+/** El cast de arriba cruza dos tipos de Env que TS considera no solapados
+ *  (`BlankEnv` no declara `Variables`) — de ahí el paso por `unknown`. */
+export function withUser(c: Context): CtxWithUser {
+  return c as unknown as CtxWithUser;
+}
 
 /**
  * Verificación de JWTs de Supabase Auth (login email+contraseña del móvil).

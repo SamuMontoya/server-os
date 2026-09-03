@@ -5,7 +5,7 @@ import { env } from "./env.js";
 import { EMB } from "./embeddings.js";
 import { modelSummary } from "./agent/models.js";
 import { budgetState } from "./agent/budget.js";
-import { verifySupabaseToken } from "./auth.js";
+import { verifySupabaseToken, withUser } from "./auth.js";
 import { pushPresence } from "./presence.js";
 import { readProjects } from "./vault/projects.js";
 import { hasSupabase } from "./memory.js";
@@ -23,6 +23,7 @@ import { registerClaudeRunsRoutes } from "./routes/claude-runs.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { registerVaultRoutes } from "./routes/vault.js";
 import { registerSystemRoutes } from "./routes/system.js";
+import { registerChatThreadsRoutes } from "./routes/chat-threads.js";
 
 const app = new Hono();
 
@@ -99,8 +100,15 @@ app.use("*", async (c, next) => {
 // Bearer opcional: solo se exige si HERMES_API_KEY está configurada (multi-Mac
 // vía Tailscale). Los SSE usan EventSource, que no puede mandar headers → en
 // rutas GET se acepta también el token como query ?key=. Además del API key
-// estático se acepta un access token de Supabase Auth (login email+contraseña
-// de la app móvil, que llega por el túnel cloudflared).
+// estático se acepta un access token de Supabase Auth (login con Google del
+// portal en Vercel).
+//
+// Cuando la credencial es un JWT se guarda el userId en el contexto
+// (`c.set`) — antes se resolvía y se TIRABA, así que ninguna ruta sabía
+// quién hacía el request más allá de "alguien con una key válida". Lo usa
+// routes/chat-threads.ts para separar los chats de cada usuario; con la
+// HERMES_API_KEY estática (LAN sin login) no hay userId y esas rutas
+// simplemente no sincronizan nada (ver su comentario).
 app.use("*", async (c, next) => {
   if (env.HERMES_API_KEY && c.req.path !== "/health") {
     const auth = c.req.header("Authorization") ?? "";
@@ -110,6 +118,7 @@ app.use("*", async (c, next) => {
     if (!staticOk) {
       const userId = await verifySupabaseToken(bearer || queryKey);
       if (!userId) return c.json({ error: "unauthorized" }, 401);
+      withUser(c).set("userId", userId);
     }
   }
   await next();
@@ -129,6 +138,7 @@ registerTrackerRoutes(app); // /tracker/*
 registerClaudeRunsRoutes(app); // /claude/run*, /claude/sessions/*, /claude/limits, /claude/usage
 registerKnowledgeRoutes(app); // /knowledge/*, /memories/recent
 registerVaultRoutes(app); // /projects*, /vault/doc
+registerChatThreadsRoutes(app); // /chat/threads*, /chat/active — continuidad entre dispositivos
 
 // ── Boot ───────────────────────────────────────────────────────────────
 startSystemSampler(); // sampler de CPU (5s) para GET /system

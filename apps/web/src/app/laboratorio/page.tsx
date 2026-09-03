@@ -43,6 +43,13 @@ import {
   type LabThread,
   type PendingLabTurn,
 } from "@/lib/lab-persist";
+import {
+  fetchRemoteThreads,
+  fetchRemoteThread,
+  pushRemoteThread,
+  pushRemoteDelete,
+  pushRemoteActive,
+} from "@/lib/lab-sync";
 import { LabChatsScreen, type LabChatSummary } from "@/components/LabChatsScreen";
 
 /**
@@ -491,8 +498,14 @@ export default function Laboratorio() {
 
   const persistNow = () => {
     const byChat = Object.fromEntries(chatsRef.current);
-    byChat[chatStorageKey(projKey, activeChatIdRef.current)] = buildThread();
+    const activeThread = buildThread();
+    byChat[chatStorageKey(projKey, activeChatIdRef.current)] = activeThread;
     saveLab(byChat, activeByProjectRef.current);
+    // Espejo best-effort en el agente (chat-threads.ts): lo que permite abrir
+    // este chat desde otro dispositivo. Solo el ACTIVO — los demás se
+    // mandan cuando les toca ser el activo (switchToChat) o cuando cambian
+    // en segundo plano (nameChat).
+    pushRemoteThread(projKey, activeThread);
   };
   const persistNowRef = useRef(persistNow);
   persistNowRef.current = persistNow;
@@ -594,7 +607,9 @@ export default function Laboratorio() {
       } else {
         const saved = chatsRef.current.get(key);
         if (!saved || saved.title) return;
-        chatsRef.current.set(key, { ...saved, title });
+        const updated = { ...saved, title };
+        chatsRef.current.set(key, updated);
+        pushRemoteThread(projKey, updated);
       }
       bumpChatsVersion();
       schedulePersist();
@@ -714,15 +729,22 @@ export default function Laboratorio() {
       return;
     }
     saveActiveIntoMap();
+    const outgoing = chatsRef.current.get(chatStorageKey(projKey, activeChatIdRef.current));
+    if (outgoing) pushRemoteThread(projKey, outgoing);
     const thread = chatsRef.current.get(chatStorageKey(projKey, id)) ?? null;
     loadChatIntoState(id, thread);
+    pushRemoteActive(projKey, id);
     setShowChats(false);
     schedulePersist();
   };
 
   const createNewChat = () => {
     saveActiveIntoMap();
-    loadChatIntoState(uuid(), null);
+    const outgoing = chatsRef.current.get(chatStorageKey(projKey, activeChatIdRef.current));
+    if (outgoing) pushRemoteThread(projKey, outgoing);
+    const newId = uuid();
+    loadChatIntoState(newId, null);
+    pushRemoteActive(projKey, newId);
     setShowChats(false);
     schedulePersist();
   };
@@ -731,10 +753,12 @@ export default function Laboratorio() {
    *  seguía vivo (igual que cerrar un tab en ChatPanel) — solo se deja de
    *  escuchar y de guardar localmente. */
   const deleteChat = (id: string) => {
+    pushRemoteDelete(id);
     if (id === activeChatIdRef.current) {
       unfollowRef.current?.();
       unfollowRef.current = null;
       loadAnyOtherChat();
+      pushRemoteActive(projKey, activeChatIdRef.current);
     } else {
       chatsRef.current.delete(chatStorageKey(projKey, id));
     }
@@ -1371,12 +1395,66 @@ export default function Laboratorio() {
   };
   resumePendingRef.current = resumePending;
 
+  /**
+   * Trae los chats que OTRO dispositivo (misma cuenta) haya guardado en el
+   * agente y los mezcla con lo local: gana quien tenga `updatedAt` más
+   * reciente. Corre UNA sola vez al montar — es la ventana natural para
+   * adoptar el estado de otro dispositivo (abrir la web es, de por sí, un
+   * punto de partida limpio) sin arrancarle la pantalla a nadie a mitad de
+   * una conversación en curso. Best-effort: sin sesión (LAN sin login) o sin
+   * red, `fetchRemoteThreads` devuelve null y esto no hace nada — el
+   * laboratorio sigue 100% funcional solo con lo local, como siempre.
+   */
+  const syncThreadsFromServer = async () => {
+    const remote = await fetchRemoteThreads(projKey);
+    if (!remote) return;
+    const startedAsActiveId = activeChatIdRef.current;
+    const targetActiveId = remote.activeId || startedAsActiveId;
+
+    // Chats de fondo: se actualizan directo en chatsRef, nunca tocan la
+    // pantalla. El chat activo (targetActiveId) se maneja aparte más abajo.
+    for (const meta of remote.threads) {
+      if (meta.id === targetActiveId) continue;
+      const key = chatStorageKey(projKey, meta.id);
+      const local = chatsRef.current.get(key);
+      if (local && local.updatedAt >= meta.updatedAt) continue;
+      const full = await fetchRemoteThread(meta.id);
+      if (full) chatsRef.current.set(key, full);
+    }
+
+    if (targetActiveId === startedAsActiveId) {
+      // Mismo chat activo en ambos lados: solo se refresca si el servidor
+      // tiene una versión más nueva (p. ej. el turno siguió avanzando en
+      // el otro dispositivo mientras esta pestaña ni había cargado).
+      const remoteMeta = remote.threads.find((t) => t.id === targetActiveId);
+      const localUpdatedAt = initialThread?.id === targetActiveId ? initialThread.updatedAt : 0;
+      if (remoteMeta && remoteMeta.updatedAt > localUpdatedAt) {
+        const full = await fetchRemoteThread(targetActiveId);
+        if (full) loadChatIntoState(targetActiveId, full);
+      }
+    } else {
+      // El otro dispositivo dejó activo un chat distinto al que esta
+      // pestaña iba a abrir: se retoma ESE (es la esencia de "seguir el
+      // chat del Mac desde el iPhone").
+      const full = await fetchRemoteThread(targetActiveId);
+      if (full) {
+        saveActiveIntoMap();
+        chatsRef.current.delete(chatStorageKey(projKey, targetActiveId));
+        loadChatIntoState(targetActiveId, full);
+        activeByProjectRef.current[projKey] = targetActiveId;
+      }
+    }
+    bumpChatsVersion();
+    schedulePersist();
+  };
+
   // Al montar: recuperar lo que quedó corriendo (equivalente a lo que
   // ChatPanel hace al abrir el dashboard). Al desmontar se cierra el stream
   // (no se cancela el turno: sigue vivo en el servidor) para no seguir
   // escribiendo en un componente que ya no está.
   useEffect(() => {
     resumePending();
+    void syncThreadsFromServer();
     return () => unfollowRef.current?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1451,7 +1529,9 @@ export default function Laboratorio() {
       }
       nextId = nextThread?.id ?? null;
     }
-    loadChatIntoState(nextId ?? uuid(), nextThread);
+    const resolvedId = nextId ?? uuid();
+    loadChatIntoState(resolvedId, nextThread);
+    pushRemoteActive(projKey, resolvedId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projKey]);
 
