@@ -1,0 +1,27 @@
+[Unit]
+Description=server-os · túnel público (cloudflared quick tunnel) para el portal
+Documentation=https://github.com/SamuMontoya/server-os
+After=network-online.target hermes-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kreanding/os
+
+Environment=HOME=/home/kreanding
+Environment=PATH=/usr/bin:/home/kreanding/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+ExecStart=/home/kreanding/os/scripts/hermes-tunnel-linux.sh
+
+# La URL de un quick tunnel rota en cada arranque — reconectar es normal y
+# barato (unos segundos), así que reiniciar siempre es lo correcto. La nueva
+# URL se re-publica sola en remote_config apenas el tunnel vuelve a subir.
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=server-os-tunnel
+
+[Install]
+WantedBy=default.target

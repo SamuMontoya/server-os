@@ -1,20 +1,16 @@
 import { NextResponse } from "next/server";
 import type { ClaudeLimits } from "@hermes/shared";
+import { resolveAgentUrl } from "@/lib/agentUrl.server";
 
 /**
  * Proxy fino al agente: la lectura real de ~/.claude/* vive en
  * apps/agent/src/claude-limits.ts (GET /claude/limits), porque este route
  * handler puede correr en Vercel, sin ese disco. Aquí solo se reenvía.
  *
- * Base URL server-side, SIN localStorage (a diferencia de
- * apps/web/src/lib/hermes.ts, que es cliente y soporta el selector de
- * máquina): mismo default que ese archivo, resuelto una sola vez por env.
+ * Base URL resuelta por `resolveAgentUrl()` (remote_config, con
+ * NEXT_PUBLIC_HERMES_URL de respaldo) — ver el comentario de ese archivo:
+ * el quick tunnel del agente rota de URL en cada reinicio.
  */
-const HERMES_URL = (process.env.NEXT_PUBLIC_HERMES_URL || "http://localhost:8650").replace(
-  /\/$/,
-  "",
-);
-
 function authHeaders(): Record<string, string> {
   const key = process.env.HERMES_API_KEY;
   return key ? { Authorization: `Bearer ${key}` } : {};
@@ -25,7 +21,8 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const res = await fetch(`${HERMES_URL}/claude/limits`, {
+    const hermesUrl = await resolveAgentUrl();
+    const res = await fetch(`${hermesUrl}/claude/limits`, {
       headers: authHeaders(),
       cache: "no-store",
     });
