@@ -24,11 +24,6 @@ import { ScrollArea } from "@/components/ui/ScrollArea";
 import { Waveform } from "@/components/ui/Waveform";
 import { DonutChart, type DonutSlice } from "@/components/ui/DonutChart";
 import { CHART_OTHER, chartVar } from "@/components/ui/tones";
-import { CategoryIcon } from "@/components/vida/categories";
-import { LivePractice, type SessionWord } from "@/components/ingles/LivePractice";
-import { LiveWordBank } from "@/components/ingles/LiveWordBank";
-import { useVoice } from "@/components/VoiceBusyContext";
-import type { VocabEntry } from "@hermes/shared";
 
 const SPARK = [3, 5, 2, 8, 6, 9, 4, 7, 10, 6, 8, 12, 9, 11];
 const AREA = [0, 2, 1, 4, 8, 3, 2, 6, 12, 9, 4, 2, 1, 0, 3, 7, 14, 10, 6, 4, 2, 5, 8, 3];
@@ -45,7 +40,6 @@ const DONUT: DonutSlice[] = [
   label: String(cat),
   value: Number(value),
   color: chartVar(i),
-  icon: <CategoryIcon category={String(cat)} />,
   sub: String(sub),
 }));
 DONUT.push({
@@ -53,7 +47,6 @@ DONUT.push({
   label: "otras (3)",
   value: 90,
   color: CHART_OTHER,
-  icon: <CategoryIcon category="otros" />,
   sub: "5 movs",
 });
 
@@ -216,82 +209,6 @@ export default function UiGallery() {
           </ScrollArea>
         </div>
       </Panel>
-
-      <LivePracticeDemo />
     </main>
-  );
-}
-
-// QA de la práctica en vivo del tutor (/ingles): mismas líneas que produciría
-// la llamada real (pushLine del VoiceBusyContext), goteadas para ver el
-// autoscroll, el KARAOKE de la frase vigente (sin llamada real la animación
-// estimada corre sola) y el tap de palabras → banco de la sesión, sin
-// conectar ElevenLabs. Ojo: los taps sí hacen POST /english/vocab real.
-const DEMO_LINES: { who: "TÚ" | "TUTOR"; text: string }[] = [
-  { who: "TUTOR", text: "Hi! Great to see you again. Last time we worked on prepositions — ready to pick it up?" },
-  { who: "TÚ", text: "Yes, I want to talk about my project. I've been working on the memory system." },
-  { who: "TUTOR", text: "Nice — you said \"working on\", that's exactly the correction from last session. Tell me more: what makes the memory system hard?" },
-  { who: "TÚ", text: "The most important part is storing the conversations without losing information." },
-  { who: "TUTOR", text: "Excellent use of \"the most important\"! Let's push further: compare it with your previous approach using easier / harder — was it more cumbersome or more straightforward?" },
-];
-
-// Vocab de mentira: pinta el subrayado violeta de "ya en el banco" en el
-// transcript ("prepositions") y la cola "repasa hoy" del LiveWordBank.
-const DEMO_VOCAB: VocabEntry[] = [
-  {
-    id: 1,
-    term: "prepositions",
-    meaning_es: "preposiciones (in/on/at…)",
-    example: "I've been working ON this project.",
-    times_reviewed: 1,
-    last_reviewed_at: null,
-    learned: false,
-  },
-];
-
-function LivePracticeDemo() {
-  const { pushLine, clearTranscript } = useVoice();
-  const [running, setRunning] = useState(false);
-  const [words, setWords] = useState<SessionWord[]>([]);
-
-  const simulate = () => {
-    if (running) return;
-    setRunning(true);
-    clearTranscript();
-    setWords([]);
-    DEMO_LINES.forEach((l, i) =>
-      setTimeout(() => {
-        pushLine(l);
-        if (i === DEMO_LINES.length - 1) setRunning(false);
-      }, 1800 * (i + 1)),
-    );
-  };
-
-  return (
-    <Panel
-      title="LivePractice (práctica en vivo del tutor: karaoke + banco)"
-      delay={360}
-      className="h-[460px]"
-      right={
-        <CmdButton size="sm" onClick={simulate} disabled={running} loading={running}>
-          Simular conversación
-        </CmdButton>
-      }
-    >
-      <div className="grid h-full min-h-0 grid-cols-3 gap-3">
-        <div className="col-span-2 min-h-0">
-          <LivePractice
-            connecting={false}
-            vocab={DEMO_VOCAB}
-            onWordSaved={(w) =>
-              setWords((prev) => (prev.some((x) => x.term === w.term) ? prev : [w, ...prev]))
-            }
-          />
-        </div>
-        <div className="min-h-0 border-l border-line pl-3">
-          <LiveWordBank words={words} vocab={DEMO_VOCAB} onChanged={() => undefined} />
-        </div>
-      </div>
-    </Panel>
   );
 }

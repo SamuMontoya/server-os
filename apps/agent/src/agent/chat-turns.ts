@@ -43,7 +43,7 @@ export interface TurnEvent {
   text?: string;
   tool?: ChatToolStep;
   sessionId?: string;
-  /** En `model`: alias del modelo ("opus"|"sonnet"|"haiku") y su esfuerzo. */
+  /** En `model`: alias del modelo ("sonnet"|"haiku") y su esfuerzo. */
   model?: string;
   effort?: string;
   /** En `retry`: qué intento viene ahora (2 = el segundo). */

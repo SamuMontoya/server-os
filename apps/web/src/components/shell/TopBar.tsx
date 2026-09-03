@@ -11,23 +11,12 @@
 import { useDashboard } from "@/state/DashboardProvider";
 import { useHermesData } from "@/hooks/useHermesData";
 import { useWorkspace } from "@/state/WorkspaceContext";
-import { useOrbState } from "@/components/voice/orbState";
 import { Clock } from "@/components/Clock";
-import { LiveMeetingChip } from "./LiveMeetingChip";
 import { SpeakToggle } from "./SpeakToggle";
 // El selector solo tiene sentido si el dashboard puede apuntar a otro agente.
 // Con NEXT_PUBLIC_HERMES_PIN_AGENT=1 la condición es un literal inlineado y
 // webpack se lleva el componente entero del bundle.
 import { MachineSelector } from "@/components/MachineSelector";
-
-const ESTADO: Record<string, { txt: string; dot: string }> = {
-  na: { txt: "Voz N/A", dot: "bg-text-dim" },
-  off: { txt: "En reposo", dot: "bg-green shadow-[0_0_8px_var(--color-green)]" },
-  connecting: { txt: "Conectando", dot: "bg-amber shadow-[0_0_8px_var(--color-amber)]" },
-  listening: { txt: "Escuchando", dot: "bg-cyan shadow-[0_0_8px_var(--color-cyan)]" },
-  speaking: { txt: "Hablando", dot: "bg-violet shadow-[0_0_8px_var(--color-violet)]" },
-  exec: { txt: "Ejecutando", dot: "bg-cyan shadow-[0_0_8px_var(--color-cyan)]" },
-};
 
 function Vital({ label, pct }: { label: string; pct: number }) {
   const warn = pct >= 90;
@@ -49,9 +38,7 @@ export function TopBar() {
   const { snapshot } = useDashboard();
   const { online } = useHermesData();
   const ws = useWorkspace();
-  const { state } = useOrbState();
   const sys = snapshot?.system;
-  const e = ESTADO[state] ?? ESTADO.off;
 
   return (
     <header className="flex h-13 shrink-0 items-center justify-between border-b border-line px-5">
@@ -60,14 +47,12 @@ export function TopBar() {
           Hermes<span className="text-violet"> OS</span>
         </h1>
         <span className="flex items-center gap-1.5 text-2xs tracking-label text-text-dim uppercase">
-          <span className={`h-1.5 w-1.5 rounded-full ${online ? e.dot : "bg-red"}`} />
-          {online ? e.txt : "Desconectado"}
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${online ? "bg-green shadow-[0_0_8px_var(--color-green)]" : "bg-red"}`}
+          />
+          {online ? "En línea" : "Desconectado"}
         </span>
-        {/* Lectura en voz alta: junto al estado de voz, que es su vecindario. */}
         <SpeakToggle />
-        <div className="empty:hidden">
-          <LiveMeetingChip />
-        </div>
       </div>
 
       <div className="flex items-center gap-5">

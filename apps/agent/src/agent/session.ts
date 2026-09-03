@@ -11,7 +11,6 @@ import { supabase } from "../supabase.js";
 import { buildTurnContext, systemPromptFor } from "./system-prompt.js";
 import { checkTool } from "./guardrails.js";
 import { hermesMcpServer, HERMES_TOOL_NAMES } from "./tools.js";
-import { linearEnabled } from "../linear.js";
 import { ensureCdpChrome, CDP_URL } from "../browser.js";
 import {
   TIERS,
@@ -27,21 +26,6 @@ import {
 import { currentProfile } from "./budget.js";
 import { subagentsEnabled } from "./models.js";
 import { attachmentPreamble } from "../chat-attachments.js";
-
-/**
- * MCP oficial de Linear (remoto, hosteado por ellos). Auth headless: la misma
- * LINEAR_API_KEY como Bearer — sin flujo OAuth interactivo. Híbrido a
- * propósito: crear issues va por la tool custom create_linear_issue (formato
- * "Copy prompt" garantizado por código); el MCP aporta el resto del catálogo
- * (actualizar estados, comentar, buscar proyectos/ciclos…).
- */
-function linearMcpServer() {
-  return {
-    type: "http" as const,
-    url: "https://mcp.linear.app/mcp",
-    headers: { Authorization: `Bearer ${env.LINEAR_API_KEY}` },
-  };
-}
 
 /**
  * MCP de chrome-devtools (navegación web agéntica). Stdio local: el node del
@@ -135,7 +119,7 @@ export interface RunTurnOptions {
   /**
    * Avisa QUÉ modelo va a correr este turno, en cuanto el router lo decide.
    * Se dispara otra vez en el escalado (la recursión vuelve a pasar por aquí),
-   * así que el cliente ve el salto haiku→sonnet→opus tal como pasa de verdad.
+   * así que el cliente ve el salto de esfuerzo tal como pasa de verdad.
    */
   onModel?: (model: string, effort?: string) => void;
   /**
@@ -242,16 +226,16 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         opts.sessionKey ?? opts.resumeSessionId,
         attachments.length > 0 ? IMAGE_FLOOR_TIER : undefined,
       )
-    : { tier: "deep" as Tier, reason: "router desactivado", pinned: false };
+    : { tier: "alto" as Tier, reason: "router desactivado", pinned: false };
 
   // Modo de consumo: al pasar el umbral de la ventana de 5 h (o de noche) el
   // perfil BAJA el techo del turno. Solo restringe — nunca encarece un turno
   // que el router ya había clasificado como barato.
   const profile = _profile;
-  // Dos techos, y gana el más bajo: el del perfil (bajo consumo) y el que pide
-  // quien llama. El del reloj es este segundo: una pantalla de 40 mm con
-  // respuestas de una frase no gana nada con opus, y lo que sí pierde es lo
-  // único que ahí importa, que es el tiempo hasta la primera palabra.
+  // Dos techos, y gana el más bajo: el del perfil (modo de consumo) y el que
+  // pide quien llama. El del reloj es este segundo: una pantalla de 40 mm con
+  // respuestas de una frase no gana nada con más esfuerzo, y lo que sí pierde
+  // es lo único que ahí importa, que es el tiempo hasta la primera palabra.
   const techoLlamante = opts.maxTier ? capTier(route.tier, opts.maxTier) : route.tier;
   const tier = capTier(techoLlamante, profile.maxTier);
   const tierOpts = TIERS[tier];
@@ -271,8 +255,19 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     emit({
       kind: "text",
       taskId: opts.taskId,
-      detail: `[router] ${tier} (${tierOpts.model}${effort ? `/${effort}` : ""}) — ${route.reason}${profile.mode === "low" ? ` · BAJO CONSUMO: ${profile.reason}` : ""}`,
+      detail: `[router] ${tier} (${tierOpts.model}${effort ? `/${effort}` : ""}) — ${route.reason}${profile.mode !== "normal" ? ` · ${profile.mode.toUpperCase()}: ${profile.reason}` : ""}`,
     });
+  }
+  // Aviso EN EL CHAT (no solo en el feed de actividad, que el usuario no
+  // necesariamente está mirando): si la ventana está en modo crítico y el
+  // pedido pedía más de lo que ese modo permite, se lo decimos ANTES de que el
+  // modelo intente responder con una fracción de la capacidad que hacía falta.
+  // Fallar así es más barato que un intento a medias que hay que repetir
+  // cuando vuelva la ventana.
+  if (profile.mode === "critico" && techoLlamante !== tier) {
+    opts.onDelta?.(
+      `⚠️ La ventana de 5h está casi agotada — respondo con lo básico (haiku) hasta que se libere. Esto pedía más capacidad; si puede esperar, vuelve a intentarlo cuando se reinicie.\n\n`,
+    );
   }
   let sdkSessionId: string | undefined;
   let finalText = "";
@@ -311,14 +306,12 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         settingSources: [],
         resume: opts.resumeSessionId,
         ...(opts.abortController ? { abortController: opts.abortController } : {}),
-        // En modo magro solo va `hermes`, que es en-proceso y gratis. Los
-        // otros dos se pagan EN CADA TURNO antes de la primera palabra: el de
-        // Linear es un MCP REMOTO (apretón de manos por red contra
-        // mcp.linear.app) y el de chrome-devtools levanta un proceso nuevo.
-        // Para una pregunta de reloj no aportan nada y cuestan segundos.
+        // En modo magro solo va `hermes`, que es en-proceso y gratis. El de
+        // chrome-devtools se paga EN CADA TURNO antes de la primera palabra
+        // (levanta un proceso nuevo) — para una pregunta de reloj no aporta
+        // nada y cuesta segundos.
         mcpServers: {
           hermes: hermesMcpServer,
-          ...(!opts.magro && linearEnabled() ? { linear: linearMcpServer() } : {}),
           ...(!opts.magro && env.BROWSER_AGENT_ENABLED && resolveChromeMcpBin()
             ? { "chrome-devtools": chromeMcpServer(resolveChromeMcpBin()!) }
             : {}),
@@ -384,9 +377,6 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
           "WebFetch",
           "TodoWrite",
           ...HERMES_TOOL_NAMES,
-          // "mcp__linear" pelado = todas las tools del server (regla de permisos
-          // por prefijo). Son mutaciones de workspace, no de la máquina.
-          ...(linearEnabled() ? ["mcp__linear"] : []),
         ],
         permissionMode: "default",
         canUseTool: async (toolName, input) => {

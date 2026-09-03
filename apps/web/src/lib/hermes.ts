@@ -1,15 +1,4 @@
 import type {
-  Budget,
-  Currency,
-  EnglishSession,
-  FinanceSummary,
-  FxRate,
-  Goal,
-  GoalStatus,
-  Habit,
-  HabitCadence,
-  HabitCheckin,
-  HabitToday,
   ProjectContext,
   ChatSessionSummary,
   ChatSessionDetail,
@@ -26,11 +15,7 @@ import type {
   TaskState,
   TaskExecution,
   TaskExecutionSummary,
-  Transaction,
-  TransactionKind,
   VaultDoc,
-  VocabEntry,
-  Wallet,
 } from "@hermes/shared";
 import { downloadText } from "./download";
 import { uuid } from "./uuid";
@@ -885,30 +870,6 @@ export async function createLinearTask(
   }
 }
 
-// ── Práctica de inglés (página /ingles) ────────────────────────────────
-
-/** Sesión completa con transcript (GET /english/sessions/:id). */
-export async function getEnglishSessionDetail(
-  id: number,
-): Promise<(EnglishSession & { transcript: string | null }) | null> {
-  try {
-    return await hermesGet<EnglishSession & { transcript: string | null }>(
-      `/english/sessions/${id}`,
-    );
-  } catch {
-    return null;
-  }
-}
-
-/** Marca un término como repasado (≥3 repasos lo dan por aprendido). */
-export async function reviewVocabEntry(id: number): Promise<VocabEntry | null> {
-  try {
-    return await hermesPost<VocabEntry>(`/english/vocab/${id}/review`);
-  } catch {
-    return null;
-  }
-}
-
 /** Importa las "Tareas Pendientes" ya escritas en la nota del proyecto. */
 export async function importVaultTasks(project: string): Promise<{ imported: number }> {
   try {
@@ -947,198 +908,6 @@ export async function triageActionable(
       ? { runId: res.run_id, sessionId: res.session_id, slug: res.slug }
       : undefined;
   return { task: res.task, run, issue: res.issue };
-}
-
-// ── Finanzas personales ────────────────────────────────────────────────
-
-export async function listTransactions(
-  opts: { month?: string; category?: string; kind?: TransactionKind; currency?: Currency; limit?: number } = {},
-): Promise<Transaction[]> {
-  const q = new URLSearchParams();
-  if (opts.month) q.set("month", opts.month);
-  if (opts.category) q.set("category", opts.category);
-  if (opts.kind) q.set("kind", opts.kind);
-  if (opts.currency) q.set("currency", opts.currency);
-  if (opts.limit) q.set("limit", String(opts.limit));
-  const qs = q.toString();
-  try {
-    return await hermesGet<Transaction[]>(`/finance/transactions${qs ? `?${qs}` : ""}`);
-  } catch {
-    return [];
-  }
-}
-
-/** Crea un movimiento manual desde la web. deduped=true si ya existía hoy. */
-export async function createTransaction(input: {
-  kind: TransactionKind;
-  amount: number;
-  currency?: Currency;
-  category?: string;
-  account?: string;
-  note?: string;
-  occurred_on?: string;
-  allow_duplicate?: boolean;
-}): Promise<(Transaction & { deduped?: boolean }) | null> {
-  try {
-    return await hermesPost<Transaction & { deduped?: boolean }>("/finance/transactions", input);
-  } catch {
-    return null;
-  }
-}
-
-export async function updateTransaction(
-  id: number,
-  patch: Partial<Pick<Transaction, "amount" | "currency" | "category" | "note" | "occurred_on" | "kind">>,
-): Promise<Transaction | null> {
-  try {
-    return await hermesPost<Transaction>(`/finance/transactions/${id}`, patch);
-  } catch {
-    return null;
-  }
-}
-
-/** Anula (soft-delete) un movimiento. */
-export async function voidTransaction(id: number): Promise<boolean> {
-  try {
-    const res = await hermesFetch(`/finance/transactions/${id}`, { method: "DELETE" });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-export async function getFinanceSummary(
-  month?: string,
-  currency?: Currency,
-  combined?: boolean,
-): Promise<FinanceSummary | null> {
-  const q = new URLSearchParams();
-  if (month) q.set("month", month);
-  if (currency) q.set("currency", currency);
-  if (combined) q.set("combined", "1");
-  const qs = q.toString();
-  try {
-    return await hermesGet<FinanceSummary>(`/finance/summary${qs ? `?${qs}` : ""}`);
-  } catch {
-    return null;
-  }
-}
-
-export async function listBudgets(): Promise<Budget[]> {
-  try {
-    return await hermesGet<Budget[]>("/finance/budgets");
-  } catch {
-    return [];
-  }
-}
-
-export async function setBudget(category: string, monthlyLimit: number, currency?: Currency): Promise<Budget | null> {
-  try {
-    return await hermesPost<Budget>("/finance/budgets", { category, monthly_limit: monthlyLimit, currency });
-  } catch {
-    return null;
-  }
-}
-
-/** TRM vigente USD→COP; null si el agente nunca consiguió tasa. */
-export async function getFxRate(): Promise<FxRate | null> {
-  try {
-    return await hermesGet<FxRate | null>("/finance/fx");
-  } catch {
-    return null;
-  }
-}
-
-/** Billeteras con saldo actual (bancolombia, nu, nequi, ontop…). */
-export async function listWallets(): Promise<Wallet[]> {
-  try {
-    return await hermesGet<Wallet[]>("/finance/wallets");
-  } catch {
-    return [];
-  }
-}
-
-/** Fija (o crea) el saldo de una billetera — recalibre manual. */
-export async function setWallet(name: string, balance: number, currency?: Currency): Promise<Wallet | null> {
-  try {
-    return await hermesPost<Wallet>("/finance/wallets", { name, balance, currency });
-  } catch {
-    return null;
-  }
-}
-
-// ── Hábitos y metas ────────────────────────────────────────────────────
-
-export async function listHabitsToday(): Promise<HabitToday[]> {
-  try {
-    return await hermesGet<HabitToday[]>("/habits/today");
-  } catch {
-    return [];
-  }
-}
-
-export async function createHabit(input: {
-  name: string;
-  cadence?: HabitCadence;
-  times_per_week?: number;
-}): Promise<Habit | null> {
-  try {
-    return await hermesPost<Habit>("/habits", input);
-  } catch {
-    return null;
-  }
-}
-
-export async function archiveHabit(id: number): Promise<boolean> {
-  try {
-    await hermesPost(`/habits/${id}/archive`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Marca (o des-marca con done=false) el hábito hoy. */
-export async function checkinHabit(id: number, opts: { done?: boolean; note?: string } = {}): Promise<HabitCheckin | null> {
-  try {
-    return await hermesPost<HabitCheckin>(`/habits/${id}/checkin`, opts);
-  } catch {
-    return null;
-  }
-}
-
-export async function listGoals(status?: GoalStatus): Promise<Goal[]> {
-  try {
-    return await hermesGet<Goal[]>(`/goals${status ? `?status=${status}` : ""}`);
-  } catch {
-    return [];
-  }
-}
-
-export async function createGoal(input: {
-  title: string;
-  description?: string;
-  target_value?: number;
-  unit?: string;
-  milestones?: string[];
-  due_date?: string;
-}): Promise<Goal | null> {
-  try {
-    return await hermesPost<Goal>("/goals", input);
-  } catch {
-    return null;
-  }
-}
-
-export async function updateGoal(
-  id: number,
-  patch: { current_value?: number; delta?: number; status?: GoalStatus; milestone_done?: string },
-): Promise<Goal | null> {
-  try {
-    return await hermesPost<Goal>(`/goals/${id}`, patch);
-  } catch {
-    return null;
-  }
 }
 
 // Resuelve una referencia .md del vault (wikilink o ruta) para el visor Notion.

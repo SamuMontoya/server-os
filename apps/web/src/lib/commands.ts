@@ -6,10 +6,7 @@
 
 import { useRouter } from "next/navigation";
 import { hermesPost } from "@/lib/hermes";
-import { useVoiceConnect } from "@/hooks/useVoiceConnect";
 import { useWorkspace, type CenterTab } from "@/state/WorkspaceContext";
-import { useLiveMeeting } from "@/state/LiveMeetingProvider";
-import { useEstudioContext } from "@/state/EstudioProvider";
 
 export interface CommandContext {
   selectedProject: string | null;
@@ -20,20 +17,8 @@ export interface CommandContext {
   runTask: (prompt: string) => Promise<void>;
   /** Precarga el input de la consola y salta a ella. */
   insertConsolePrompt: (text: string) => void;
-  /** Hay una junta en vivo activa (habilita "terminar junta"). */
-  liveMeetingActive: boolean;
-  /** Inicia la junta en vivo del proyecto en foco (navega al tab reuniones). */
-  startLiveMeeting: () => void;
-  /** Abre la confirmación de cierre en la vista EN VIVO — NO corta en seco. */
-  stopLiveMeeting: () => void;
-  /** Conecta la voz con el tutor de inglés (corta la llamada Hermes si la hay). */
-  startEnglishPractice: () => void;
-  /** Entrada canónica a la voz: navega a Voz en vivo y conecta si hace falta. */
-  startVoiceCall: () => void;
-  /** Navega a una ruta del workspace (/finanzas, /habitos, /ingles…). */
+  /** Navega a una ruta del workspace. */
   navigate: (path: string) => void;
-  /** Abre el teleprompter de la pieza que toca grabar (o la seleccionada). */
-  startRecording: () => void;
 }
 
 export interface HermesCommand {
@@ -44,18 +29,10 @@ export interface HermesCommand {
   hint?: string;
   /** Deshabilitado sin proyecto en foco. */
   requiresProject?: boolean;
-  /** Deshabilitado sin junta en vivo activa. */
-  requiresLiveMeeting?: boolean;
   run: (ctx: CommandContext) => void | Promise<void>;
 }
 
 export const COMMANDS: HermesCommand[] = [
-  {
-    id: "hablar-hermes",
-    label: "Hablar con Hermes",
-    hint: "Llamada de voz en tiempo real",
-    run: (ctx) => ctx.startVoiceCall(),
-  },
   {
     id: "pulse-check",
     label: "Pulse Check",
@@ -92,73 +69,6 @@ export const COMMANDS: HermesCommand[] = [
       ctx.runTask(
         "Lee el estado de todos los proyectos del vault y actualiza la memoria con un snapshot del estado actual de cada proyecto activo.",
       ),
-  },
-  {
-    id: "nueva-tarea",
-    label: "Nueva tarea",
-    slash: "/crear tarea",
-    hint: "Abre el tablero de tareas para crear una",
-    run: (ctx) => ctx.showPanel("tareas"),
-  },
-  {
-    id: "nueva-reunion",
-    label: "Nueva reunión",
-    slash: "/nueva reunión",
-    hint: "Graba o sube el audio de una junta",
-    run: (ctx) => ctx.showPanel("reuniones"),
-  },
-  {
-    id: "junta-en-vivo",
-    label: "Iniciar junta en vivo",
-    slash: "/junta en vivo",
-    hint: "Copiloto en tiempo real de la junta del proyecto en foco",
-    requiresProject: true,
-    run: (ctx) => ctx.startLiveMeeting(),
-  },
-  {
-    id: "terminar-junta",
-    label: "Terminar junta en vivo",
-    hint: "Cierra la junta y procesa resumen + accionables",
-    requiresLiveMeeting: true,
-    run: (ctx) => ctx.stopLiveMeeting(),
-  },
-  {
-    id: "practicar-ingles",
-    label: "Practicar inglés",
-    slash: "/practicar inglés",
-    hint: "Sesión de conversación con el tutor de inglés por voz",
-    run: (ctx) => ctx.startEnglishPractice(),
-  },
-  {
-    id: "ver-finanzas",
-    label: "Ver finanzas",
-    hint: "Saldo, movimientos y asesor financiero",
-    run: (ctx) => ctx.navigate("/finanzas"),
-  },
-  {
-    id: "ver-habitos",
-    label: "Ver hábitos",
-    hint: "Hábitos de hoy, rachas y metas",
-    run: (ctx) => ctx.navigate("/habitos"),
-  },
-  {
-    id: "ver-ingles",
-    label: "Ver inglés",
-    hint: "Progreso de la práctica: reportes, drills, vocabulario y tareas",
-    run: (ctx) => ctx.navigate("/ingles"),
-  },
-  {
-    id: "ver-estudio",
-    label: "Estudio de contenido",
-    hint: "Pipeline de piezas RuloCode: guiones, tomas, edición y publicación",
-    run: (ctx) => ctx.navigate("/estudio"),
-  },
-  {
-    id: "modo-grabacion",
-    label: "Modo grabación",
-    slash: "/grabar",
-    hint: "Teleprompter: solo tus frases, el detalle de cada toma y el checklist del guion",
-    run: (ctx) => ctx.startRecording(),
   },
   {
     id: "analizar-proyecto",
@@ -216,12 +126,10 @@ export const COMMANDS: HermesCommand[] = [
   },
 ];
 
-/** Los 8 del grid 2×4 del Command Deck (orden de la referencia). */
+/** Grid del Command Deck (orden de la referencia). */
 export const DECK_IDS = [
   "pulse-check",
   "resumen-dia",
-  "nueva-tarea",
-  "nueva-reunion",
   "analizar-proyecto",
   "revisar-codigo",
   "destilar-memorias",
@@ -232,29 +140,16 @@ export const DECK_IDS = [
 export const CHIP_IDS = [
   "resumen-dia",
   "analizar-proyecto",
-  "nueva-tarea",
   "revisar-codigo",
   "planificar-dia",
-  "nueva-reunion",
 ];
 
 /** Arma el contexto de ejecución desde el workspace (hook de conveniencia). */
 export function useCommandContext(): CommandContext {
   const ws = useWorkspace();
-  const live = useLiveMeeting();
-  const voice = useVoiceConnect();
-  const estudio = useEstudioContext();
   const router = useRouter();
   return {
     navigate: (path) => router.push(path),
-    startRecording: () => {
-      // La etapa `grabacion` significa "esto es lo que toca grabar": esa pieza
-      // manda sobre la seleccionada. Sin ninguna, solo navega al Estudio.
-      router.push("/estudio");
-      const target =
-        estudio.board.pieces.find((p) => p.status === "grabacion") ?? estudio.selected;
-      if (target) estudio.setRecording(target.id);
-    },
     selectedProject: ws.selectedProject,
     showPanel: ws.showPanel,
     focusProject: ws.focusProject,
@@ -270,29 +165,6 @@ export function useCommandContext(): CommandContext {
     insertConsolePrompt: (text) => {
       ws.setConsoleDraft(text);
       ws.showPanel("consola");
-    },
-    liveMeetingActive: live.active,
-    startLiveMeeting: () => {
-      // Siempre navega al tab reuniones; si ya hay junta, el takeover es la vista.
-      ws.showPanel("reuniones");
-      if (!live.active && ws.selectedProject) {
-        void live.start({ project: ws.selectedProject });
-      }
-    },
-    stopLiveMeeting: () => {
-      if (!live.active) return;
-      ws.showPanel("reuniones");
-      live.requestStopConfirm();
-    },
-    startEnglishPractice: () => {
-      // La práctica vive en /ingles: transcripción en tiempo real en el centro
-      // (LivePractice) + drills y vocabulario a la mano.
-      router.push("/ingles");
-      void voice.switchToTutor();
-    },
-    startVoiceCall: () => {
-      ws.showPanel("voz");
-      if (!voice.connected && !voice.connecting) void voice.connect();
     },
   };
 }

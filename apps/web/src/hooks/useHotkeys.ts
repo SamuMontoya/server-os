@@ -1,20 +1,12 @@
 "use client";
 
-// Atajos globales del workspace: ⌘K palette · ⌘1..7 tabs · ⌘B sidebar · Esc.
+// Atajos globales del workspace: ⌘K palette · ⌘1..4 tabs · ⌘B sidebar · Esc.
 // En inputs/textareas solo funciona ⌘K (no robamos el teclado al escribir).
 
 import { useEffect } from "react";
 import { useWorkspace, type CenterTab } from "@/state/WorkspaceContext";
 
-const TAB_ORDER: CenterTab[] = [
-  "voz",
-  "consola",
-  "actividad",
-  "tareas",
-  "reuniones",
-  "memoria",
-  "claude",
-];
+const TAB_ORDER: CenterTab[] = ["consola", "actividad", "memoria", "claude"];
 
 export function useHotkeys() {
   const ws = useWorkspace();
@@ -47,7 +39,7 @@ export function useHotkeys() {
         return;
       }
 
-      if ((e.metaKey || e.ctrlKey) && e.key >= "1" && e.key <= "7") {
+      if ((e.metaKey || e.ctrlKey) && e.key >= "1" && e.key <= "4") {
         e.preventDefault();
         ws.showPanel(TAB_ORDER[Number(e.key) - 1]);
         return;

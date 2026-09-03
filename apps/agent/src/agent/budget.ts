@@ -9,7 +9,7 @@ import { join } from "node:path";
 const execFileAsync = promisify(execFile);
 
 /**
- * Modo de bajo consumo.
+ * Modo de consumo, en TRES escalones — no es un interruptor, es una rampa.
  *
  * El plan no se mide en dólares sino en ventanas de uso: una de 5 h (la
  * "sesión") y varias semanales. Anthropic las expone en el endpoint privado
@@ -17,26 +17,33 @@ const execFileAsync = promisify(execFile);
  * del dashboard. Aquí se lee desde el AGENTE, para que la decisión no dependa
  * de que la web esté arriba (el loop desatendido corre sin nadie mirando).
  *
- * Se activa de dos formas y ninguna es por horario: automáticamente al pasar el
- * umbral de la ventana de 5 h, o a mano con HERMES_LOW_POWER=1.
+ * Los tres escalones:
  *
- * Qué hace el modo bajo, y por qué cada cosa (la idea es máximo rendimiento por
- * token, no "responder peor"):
+ *  - `normal` (0-70%): rango completo del router, sin techo.
+ *  - `bajo` (70-90%): techo en `bajo` (sonnet, esfuerzo low). Lo que el router
+ *    ya clasificaba como trivial se queda en haiku sin cambios — el techo solo
+ *    tira hacia abajo lo que iba a `medio`/`alto`. Mismo modelo, mismas
+ *    capacidades, más barato: la idea es prolongar la ventana, no responder
+ *    peor.
+ *  - `critico` (90%+): techo en `trivial` (solo haiku). Aquí sí se nota: es la
+ *    última reserva antes de quedarse sin ventana, y session.ts se lo dice al
+ *    usuario en vez de intentar una tarea compleja con una fracción de la
+ *    capacidad que necesita.
  *
- *  - Techo de nivel: el router no pasa de `standard`. El trabajo duro se sigue
- *    haciendo, en sonnet en vez de opus.
- *  - Esfuerzo `low`: es la primera palanca que canjea calidad por gasto dentro
- *    de un mismo modelo, y en tareas rutinarias casi no se nota.
+ * Se activa por umbral automáticamente, o a mano con HERMES_LOW_POWER=1
+ * (fuerza `bajo`) — nunca por horario.
+ *
+ * El resto de palancas del modo restringido (aparte del techo de nivel):
  *  - Menos turnos: un techo bajo corta la exploración perezosa, que es donde se
  *    va el gasto cuando el modelo "da vueltas".
  *  - Retrieval mínimo: el prompt precarga memorias y conocimiento en CADA turno
- *    se usen o no. En modo bajo se precarga poco y el agente amplía con
+ *    se usen o no. En modo restringido se precarga poco y el agente amplía con
  *    search_knowledge SOLO si lo necesita. Es la diferencia entre pagar por
  *    contexto especulativo y pagar por contexto pedido.
  *  - Subagentes forzados: lo mecánico se va a haiku en su propio contexto.
  */
 
-export type PowerMode = "normal" | "low";
+export type PowerMode = "normal" | "bajo" | "critico";
 
 export interface BudgetState {
   mode: PowerMode;
@@ -46,8 +53,9 @@ export interface BudgetState {
 }
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-/** Umbral por defecto: a partir de aquí se baja el consumo. */
-const DEFAULT_THRESHOLD = 70;
+/** Umbrales por defecto de los dos escalones (0-100). */
+const DEFAULT_THRESHOLD_BAJO = 70;
+const DEFAULT_THRESHOLD_CRITICO = 90;
 // El endpoint tiene rate limit propio: consultarlo por turno lo tumbaría.
 const TTL_MS = 5 * 60_000;
 // Los fallos se reintentan RÁPIDO al principio y se van espaciando. Con un TTL
@@ -61,9 +69,14 @@ const FAIL_BACKOFF_MS = [15_000, 60_000, 5 * 60_000, 15 * 60_000];
 let cache: { at: number; ttl: number; state: BudgetState } | null = null;
 let consecutiveFailures = 0;
 
-function threshold(): number {
+function thresholdBajo(): number {
   const n = Number(process.env.HERMES_LOW_POWER_AT);
-  return Number.isFinite(n) && n > 0 && n <= 100 ? n : DEFAULT_THRESHOLD;
+  return Number.isFinite(n) && n > 0 && n <= 100 ? n : DEFAULT_THRESHOLD_BAJO;
+}
+
+function thresholdCritico(): number {
+  const n = Number(process.env.HERMES_CRITICAL_AT);
+  return Number.isFinite(n) && n > 0 && n <= 100 ? n : DEFAULT_THRESHOLD_CRITICO;
 }
 
 async function readToken(): Promise<string | null> {
@@ -152,7 +165,7 @@ async function fetchUtilization(): Promise<number | null> {
 export async function budgetState(): Promise<BudgetState> {
   const forced = (process.env.HERMES_LOW_POWER || "").toLowerCase();
   if (forced === "1" || forced === "on")
-    return { mode: "low", sessionUtilization: null, reason: "forzado por HERMES_LOW_POWER" };
+    return { mode: "bajo", sessionUtilization: null, reason: "forzado por HERMES_LOW_POWER" };
   if (forced === "off")
     return { mode: "normal", sessionUtilization: null, reason: "desactivado por HERMES_LOW_POWER=off" };
 
@@ -164,9 +177,11 @@ export async function budgetState(): Promise<BudgetState> {
   const state: BudgetState =
     util === null
       ? { mode: "normal", sessionUtilization: null, reason: "uso no disponible — se asume normal" }
-      : util >= threshold()
-        ? { mode: "low", sessionUtilization: util, reason: `sesión al ${util}% (umbral ${threshold()}%)` }
-        : { mode: "normal", sessionUtilization: util, reason: `sesión al ${util}%` };
+      : util >= thresholdCritico()
+        ? { mode: "critico", sessionUtilization: util, reason: `sesión al ${util}% (umbral crítico ${thresholdCritico()}%)` }
+        : util >= thresholdBajo()
+          ? { mode: "bajo", sessionUtilization: util, reason: `sesión al ${util}% (umbral ${thresholdBajo()}%)` }
+          : { mode: "normal", sessionUtilization: util, reason: `sesión al ${util}%` };
 
   if (util === null) {
     const ttl = FAIL_BACKOFF_MS[Math.min(consecutiveFailures, FAIL_BACKOFF_MS.length - 1)];
@@ -182,31 +197,45 @@ export async function budgetState(): Promise<BudgetState> {
 /** Perfil de ejecución que aplica cada modo. Un solo sitio para los números. */
 export interface PowerProfile {
   /** El router no puede superar este nivel. */
-  maxTier: "light" | "standard" | "deep";
-  /** Esfuerzo máximo permitido. */
-  maxEffort: "low" | "medium" | "high" | "xhigh" | "max";
+  maxTier: "trivial" | "bajo" | "medio" | "alto";
+  /** Esfuerzo máximo permitido (para sonnet; haiku no lo usa). */
+  maxEffort: "low" | "medium" | "high";
   maxTurns: number;
   /** Cuánto contexto se PRECARGA en el prompt (lo demás lo pide el agente). */
   retrieval: { recent: number; relevant: number; chars: number };
-  /** En modo bajo los subagentes dejan de ser opcionales. */
+  /** Fuera de `normal` los subagentes dejan de ser opcionales. */
   forceSubagents: boolean;
 }
 
 export const PROFILES: Record<PowerMode, PowerProfile> = {
   normal: {
-    maxTier: "deep",
-    maxEffort: "xhigh",
+    maxTier: "alto",
+    maxEffort: "high",
     maxTurns: 40,
     retrieval: { recent: 5, relevant: 8, chars: 300 },
     forceSubagents: false,
   },
-  low: {
-    maxTier: "standard",
+  bajo: {
+    // Sonnet con esfuerzo bajo, no haiku: mismas capacidades, más barato. Ver
+    // el comentario grande de arriba — el router ya manda lo trivial a haiku
+    // por su cuenta, este techo solo tira hacia abajo lo que iba a costar más.
+    maxTier: "bajo",
     maxEffort: "low",
     maxTurns: 15,
     // ~975 tokens de precarga por turno bajan a ~200. El agente sigue teniendo
     // search_knowledge para traer lo que de verdad necesite.
     retrieval: { recent: 2, relevant: 3, chars: 160 },
+    forceSubagents: true,
+  },
+  critico: {
+    // Última reserva antes de quedarse sin ventana: SOLO haiku. session.ts
+    // detecta cuándo esto degradó un pedido que pedía más y lo dice, en vez de
+    // intentar una tarea compleja con una fracción de la capacidad que
+    // necesita — eso sale peor que negarse y esperar el reset.
+    maxTier: "trivial",
+    maxEffort: "low",
+    maxTurns: 8,
+    retrieval: { recent: 1, relevant: 2, chars: 120 },
     forceSubagents: true,
   },
 };

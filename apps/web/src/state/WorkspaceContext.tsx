@@ -21,14 +21,7 @@ import { DEFAULT_CLAUDE_CONFIG } from "@/components/ClaudeExecBar";
 import type { DetailTarget } from "@/components/TaskDetail";
 import { useHermesDataContext } from "./HermesDataProvider";
 
-export type CenterTab =
-  | "voz"
-  | "consola"
-  | "actividad"
-  | "tareas"
-  | "reuniones"
-  | "memoria"
-  | "claude";
+export type CenterTab = "consola" | "actividad" | "memoria" | "claude";
 
 interface Workspace {
   // Tab central (los paneles quedan montados y se alternan con hidden).

@@ -20,7 +20,6 @@ import {
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { beginSpeechTurn, feedSpeech } from "@/hooks/useSpeech";
 import { SpeechHighlight } from "./SpeechHighlight";
-import { useVoiceConnect } from "@/hooks/useVoiceConnect";
 import { useWorkspace } from "@/state/WorkspaceContext";
 import { ClaudeExecBar, claudeModelLabel } from "./ClaudeExecBar";
 import { AgentSteps } from "./AgentSteps";
@@ -128,7 +127,6 @@ export function ChatPanel({
 
   // Entrada CANÓNICA a la voz (patrón ChatGPT/Pi: la llamada vive en el
   // composer). El orbe del header queda como indicador de estado.
-  const voice = useVoiceConnect();
   const ws = useWorkspace();
 
   // Tabs por proyecto: al cambiar el foco se guardan y restauran.
@@ -994,43 +992,6 @@ export function ChatPanel({
           className="chat-textarea max-h-[120px] flex-1 resize-none bg-transparent text-base leading-snug outline-none placeholder:opacity-40 break-words"
           disabled={active.busy}
         />
-
-        {/* Llamada de voz con Hermes (entrada canónica; conectada = ir a Voz) */}
-        {voice.configured && (
-          <button
-            type="button"
-            title={
-              voice.connected
-                ? "Colgar la llamada"
-                : voice.connecting
-                  ? "Conectando la llamada…"
-                  : "Hablar con Hermes (llamada de voz)"
-            }
-            aria-label={voice.connected ? "Colgar la llamada" : "Hablar con Hermes"}
-            onClick={() => {
-              // No navega: la llamada ocurre aquí mismo. Conectado = colgar.
-              if (voice.connected) void voice.disconnect();
-              else if (!voice.connecting) void voice.connect();
-            }}
-            className={`grid h-6 w-6 shrink-0 place-items-center rounded-full transition-colors ${
-              voice.connected
-                ? "bg-green/10 text-green"
-                : voice.connecting
-                  ? "animate-pulse text-amber"
-                  : "text-violet"
-            }`}
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M4 13a8 8 0 0 1 16 0M4 13v4a2 2 0 0 0 2 2h1v-6H6a2 2 0 0 0-2 2Zm16 0v4a2 2 0 0 1-2 2h-1v-6h1a2 2 0 0 1 2 2Z"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-        )}
 
         {/* Micrófono (dictado voz → texto) */}
         {micSupported && (

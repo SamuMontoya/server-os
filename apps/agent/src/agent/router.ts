@@ -2,10 +2,14 @@ import "../env.js";
 import type { Effort, ModelAlias } from "./models.js";
 
 /**
- * Enrutamiento dinámico del turno de la consola.
+ * Enrutamiento dinámico del turno del chat.
  *
- * Antes la consola usaba opus/high para TODO: un "hola" costaba lo mismo que
- * "refactoriza este módulo". Aquí se clasifica el mensaje y se elige el nivel.
+ * Antes esto elegía MODELO (haiku/sonnet/opus) y opus costaba mucho: un
+ * "hola" no debía costar lo mismo que un refactor, pero tampoco valía la pena
+ * pagar un modelo aparte para el trabajo difícil. Ahora sonnet es el modelo
+ * PRINCIPAL para todo lo que no es trivial, y lo que varía es el ESFUERZO
+ * (bajo/medio/alto) — la misma idea de "no todo cuesta igual", pero sin el
+ * salto de precio de cambiar de modelo. Opus no se usa en ningún nivel.
  *
  * Dos decisiones de diseño que son el corazón de esto:
  *
@@ -15,88 +19,92 @@ import type { Effort, ModelAlias } from "./models.js";
  *    eso está el escalado.
  *
  * 2. El nivel se decide UNA VEZ por sesión y queda fijo. El caché de prompt es
- *    por modelo: cambiar de modelo a mitad de un hilo tira el prefijo cacheado
- *    y re-cachear un hilo largo cuesta más que lo ahorrado. Por eso se enruta
- *    al ABRIR la conversación, nunca dentro.
+ *    por modelo Y por esfuerzo (son parámetros distintos de la misma llamada):
+ *    cambiar a mitad de un hilo tira el prefijo cacheado y re-cachear un hilo
+ *    largo cuesta más que lo ahorrado. Por eso se enruta al ABRIR la
+ *    conversación, nunca dentro.
  */
 
-export type Tier = "light" | "standard" | "deep";
+export type Tier = "trivial" | "bajo" | "medio" | "alto";
 
 /**
  * `maxTurns` es por NIVEL, no global, y es un techo de COSTO, no de capacidad.
  *
  * Cada "turno" del SDK es una llamada al modelo que re-manda el historial
- * completo. Con un techo único de 40 para todo, "¿ya está todo arriba?" tenía
- * el mismo presupuesto de exploración que un refactor: el modelo no gasta los
- * 40 si no los necesita, pero cuando se enreda —y se enreda— los gasta, y
- * cuesta lo mismo enredarse en una pregunta trivial que en una difícil.
+ * completo. Con un techo único para todo, "¿ya está todo arriba?" tenía el
+ * mismo presupuesto de exploración que un refactor: el modelo no gasta los 28
+ * si no los necesita, pero cuando se enreda —y se enreda— los gasta, y cuesta
+ * lo mismo enredarse en una pregunta trivial que en una difícil.
  *
  * Los números salen de para qué sirve cada nivel: una pregunta de estado se
- * responde con una tool y una frase (6 sobra); el grueso son búsquedas y
- * redacción con varias tools (16); el trabajo de código de verdad lee, escribe
- * y verifica (28). Si un nivel se queda corto, el turno cierra con
+ * responde con una tool y una frase (6 sobra); una aclaración corta apenas
+ * necesita tools (10); el grueso son búsquedas y redacción con varias tools
+ * (16); el trabajo de código o de razonamiento de verdad lee, escribe y
+ * verifica (28). Si un nivel se queda corto, el turno cierra con
  * `error_max_turns` y la auto-continuación lo retoma (chat-turns.ts) — el
  * trabajo no se pierde, solo se paga un techo en vez de una barra libre.
  */
 export const TIERS: Record<Tier, { model: ModelAlias; effort?: Effort; maxTurns: number }> = {
   // Saludos, confirmaciones, preguntas de una línea sobre estado.
-  light: { model: "haiku", maxTurns: 6 },
+  trivial: { model: "haiku", maxTurns: 6 },
+  // Aclaraciones y pedidos cortos y de baja ambigüedad.
+  bajo: { model: "sonnet", effort: "low", maxTurns: 10 },
   // El grueso: preguntas con contexto, búsquedas, redacción.
-  standard: { model: "sonnet", effort: "medium", maxTurns: 16 },
-  // Código: leer, escribir, verificar.
-  deep: { model: "opus", effort: "high", maxTurns: 28 },
+  medio: { model: "sonnet", effort: "medium", maxTurns: 16 },
+  // Código y razonamiento de verdad: escribir/editar, auditorías, investigación.
+  alto: { model: "sonnet", effort: "high", maxTurns: 28 },
 };
 
 // ── Señales ───────────────────────────────────────────────────────────
 // Todo lo que se puede saber sin gastar un token.
 
 /**
- * Verbos que implican MODIFICAR CÓDIGO. Solo estos justifican opus.
- *
- * La lista se recortó a la mitad a propósito. Antes incluía
- * `analiz|audit|investig|compar|planific|resuelv|dise[ñn]` y esos no son
- * escribir código: son consulta, orquestación y coordinación entre tools —
- * trabajo de sonnet. Medido contra 37 mensajes reales del dueño, esos siete
- * verbos eran 4 de los 5 turnos que abrían en opus/high ("auditate a ti
- * mismo…", "Investiga en las carpetas…", "Analiza el repo…"): consultas, no
- * refactors.
+ * Verbos que implican MODIFICAR CÓDIGO. Van a esfuerzo alto.
  *
  * Tres exclusiones que parecen inconsistentes y no lo son:
  * - `migr`: "solo hicimos la migración, no?" es PREGUNTAR por una migración.
  *   El límite de palabra no distingue eso de "migra la tabla", y preguntar es
  *   el caso frecuente.
- * - `commit`/`pnpm`/`git`: correr comandos es orquestación, no autoría. Es
- *   literalmente el caso que pidió mover a sonnet.
- * - `program` → `programa`: `program` también matcheaba "programado",
- *   "programación" y el nombre de etapa del Estudio.
+ * - `commit`/`pnpm`/`git`: correr comandos es orquestación, no autoría —
+ *   cae en el caso general (esfuerzo medio), no en este.
+ * - `program` → `programa`: `program` también matcheaba "programado" y
+ *   "programación".
  *
- * Si sonnet no da, el escalado sube el hilo a opus y ahí se queda. El costo de
- * equivocarse por abajo es un turno; por arriba, la ventana de 5 h.
+ * Si el esfuerzo asignado no da, el escalado sube un nivel y ahí se queda. El
+ * costo de equivocarse por abajo es un turno; por arriba, la ventana de 5 h.
  */
 const CODE_WORK =
   /\b(refactoriz|implement|programa|arregl|corrig|soluciona|depur|debug|arquitect|optimiz|reescrib|automatiz)/i;
 
 /**
- * Marcadores de código: fences, archivos FUENTE y rutas de fuente.
+ * Marcadores de código: fences, archivos FUENTE y rutas de fuente. Van a
+ * esfuerzo alto igual que CODE_WORK.
  *
- * Dos cambios contra la versión anterior, los dos por falsos positivos que se
- * disparaban con el lenguaje normal del producto:
+ * Dos cosas a propósito:
  * - Fuera `md` (y `json`): el markdown es el formato NATIVO del vault, así que
- *   "resume mi nota de perfil.md" caía en opus. Y como el nivel queda FIJO por
- *   sesión, UNA mención de un .md dejaba el hilo entero en opus/high.
- * - La ruta ahora pide TRES segmentos (`apps/agent/src`), no dos: con dos,
- *   "mira el video que subí a /descargas/reunion" era "código".
+ *   "resume mi nota de perfil.md" no debe subir de nivel. Y como el nivel
+ *   queda FIJO por sesión, UNA mención de un .md dejaba el hilo entero caro.
+ * - La ruta pide TRES segmentos (`apps/agent/src`), no dos: con dos, "mira el
+ *   video que subí a /descargas/reunion" contaba como "código".
  */
 const CODE_MARKERS =
   /```|\b[\w.-]+\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|swift|sql|sh|zsh|css|html|yaml|yml|toml)\b|\b[\w.-]+\/[\w.-]+\/[\w.-]+|\$\(|=>/i;
 
 /**
+ * Verbos de razonamiento pesado: auditorías, investigación, análisis. No son
+ * escribir código, pero SÍ son "pensar y razonar" de verdad — van a esfuerzo
+ * alto igual que el código, solo que en vez de tools de escritura usan
+ * búsqueda y síntesis. Antes de tener niveles de esfuerzo, esto era el
+ * dilema: mandarlos a opus (caro) o aplanarlos al caso general (subestimar la
+ * tarea). Con esfuerzo alto sobre sonnet no hace falta elegir.
+ */
+const DEEP_REASONING = /\b(analiz|audit|investig|compar|planific|resuelv)/i;
+
+/**
  * Charla y continuaciones: saludos, gracias, confirmaciones, "sigue", "TLDR".
  *
  * Incluye las continuaciones porque son la mitad de lo que se escribe en un
- * hilo vivo y no traen trabajo nuevo. Antes `light` no se disparaba NUNCA
- * (0 de 37 mensajes reales): el nivel barato existía en la tabla y estaba
- * muerto en la práctica.
+ * hilo vivo y no traen trabajo nuevo.
  */
 const CHITCHAT =
   /^(hola|buenas|buenos d[ií]as|buenas tardes|buenas noches|hey|qu[eé] tal|gracias|listo|ok|okay|dale|perfecto|s[ií]|no|entendido|vale|sigue|contin[uú]a|tldr)\b[\s!.,]*$/i;
@@ -104,6 +112,9 @@ const CHITCHAT =
 /** Preguntas de estado que se responden con una tool y una frase. */
 const STATUS_Q =
   /^(qu[eé] (tengo|hay|falta|sigue|ponemos|sub)|c[oó]mo (va|voy|est[aá])|cu[aá]l(es)? (es|son)|cu[aá]nto|d[oó]nde est[aá]|resumen|recu[eé]rdame|ya est[aá]|con el \d|mis (tareas|h[aá]bitos|notas))/i;
+
+/** Por debajo de esta cantidad de palabras, un pedido sin más señal es "bajo". */
+const PALABRAS_BAJO = 15;
 
 export interface RouteDecision {
   tier: Tier;
@@ -122,28 +133,24 @@ export function classify(prompt: string): RouteDecision {
 
   // Lo barato se decide PRIMERO. Antes iba al final y por eso no se alcanzaba
   // casi nunca: cualquier verbo de la lista larga lo adelantaba por izquierda.
-  if (CHITCHAT.test(p)) return { tier: "light", reason: "saludo o continuación" };
+  if (CHITCHAT.test(p)) return { tier: "trivial", reason: "saludo o continuación" };
   // 10 y no 8: "Que sub carpetas tienes? TLDR" son 5 pero "ya está todo arriba
   // en el repo de kreanding?" son 9 y sigue siendo una pregunta de una frase.
   if (words <= 10 && STATUS_Q.test(p))
-    return { tier: "light", reason: "pregunta de estado corta" };
+    return { tier: "trivial", reason: "pregunta de estado corta" };
 
-  if (CODE_MARKERS.test(p)) return { tier: "deep", reason: "código o ruta de fuente" };
-  if (CODE_WORK.test(p)) return { tier: "deep", reason: "verbo de modificar código" };
+  if (CODE_MARKERS.test(p)) return { tier: "alto", reason: "código o ruta de fuente" };
+  if (CODE_WORK.test(p)) return { tier: "alto", reason: "verbo de modificar código" };
+  if (DEEP_REASONING.test(p)) return { tier: "alto", reason: "auditoría, investigación o análisis" };
 
-  // Ya NO existe la regla "mensaje largo (>60 palabras) → deep". Era una
-  // proxy mala: el dueño escribe pidiendo las cosas en párrafos largos y
-  // discursivos, y la longitud medía su estilo de escritura, no la dificultad
-  // de la tarea. Este mismo encargo ("arregla el consumo… audita… corre 5
-  // veces…") pasa las 60 palabras y es coordinación, no un refactor. Un
-  // mensaje largo sin verbo de código ni ruta de fuente cae en sonnet, que es
-  // donde el dueño pidió que viviera la orquestación.
-  return { tier: "standard", reason: "caso general" };
+  if (words <= PALABRAS_BAJO) return { tier: "bajo", reason: "pedido corto, baja ambigüedad" };
+
+  return { tier: "medio", reason: "caso general" };
 }
 
 // ── Fijación por sesión ───────────────────────────────────────────────
 // sessionId → nivel. Sin esto, el segundo mensaje de un hilo podría caer en
-// otro modelo y tirar el caché del primero.
+// otro nivel y tirar el caché del primero.
 
 const pinned = new Map<string, Tier>();
 // Cota simple: un dashboard abierto meses acumularía sesiones muertas.
@@ -152,7 +159,7 @@ const MAX_PINNED = 500;
 /**
  * `floor` sube el nivel de ESTE turno si la clasificación (o el pin de la
  * sesión) se queda por debajo. Existe para las señales que no están en el
- * texto: hoy, imágenes adjuntas.
+ * texto: imágenes adjuntas.
  *
  * Por qué el piso gana también al pin: el pin protege el caché de prompt, pero
  * un turno con imagen ya no puede reusar el prefijo cacheado del turno anterior
@@ -192,18 +199,19 @@ export function escalateSession(sessionId: string | undefined, to: Tier): void {
   if (sessionId) pinned.set(sessionId, to);
 }
 
+const ORDER: Tier[] = ["trivial", "bajo", "medio", "alto"];
+
 export function nextTier(t: Tier): Tier | null {
-  return t === "light" ? "standard" : t === "standard" ? "deep" : null;
+  const i = ORDER.indexOf(t);
+  return i === -1 || i === ORDER.length - 1 ? null : ORDER[i + 1];
 }
 
-/** `HERMES_ROUTER=off` deja todo en el nivel `deep` (comportamiento anterior). */
+/** `HERMES_ROUTER=off` deja todo en el nivel `alto` (comportamiento anterior). */
 export function routerEnabled(): boolean {
   return (process.env.HERMES_ROUTER || "").toLowerCase() !== "off";
 }
 
 // ── Techo por modo de consumo ─────────────────────────────────────────
-
-const ORDER: Tier[] = ["light", "standard", "deep"];
 
 /**
  * Baja el nivel si supera el techo del perfil activo. Nunca lo SUBE: el modo
@@ -219,8 +227,8 @@ export function capTier(tier: Tier, max: Tier): Tier {
  *
  * Ojo al orden en el que se aplican los dos en session.ts: primero el piso
  * (dentro de routeTurn), después el techo del perfil (capTier). El techo gana
- * a propósito — en modo bajo consumo una imagen se analiza con haiku, que
- * también ve imágenes, antes que romper el límite de la ventana de 5 h.
+ * a propósito — en modo bajo consumo una imagen se analiza con el techo del
+ * perfil, antes que romper el límite de la ventana de 5 h.
  */
 export function raiseTier(tier: Tier, floor?: Tier): Tier {
   if (!floor) return tier;
@@ -228,23 +236,21 @@ export function raiseTier(tier: Tier, floor?: Tier): Tier {
 }
 
 /**
- * Nivel mínimo para un turno con imágenes: `standard` → sonnet.
+ * Nivel mínimo para un turno con imágenes: `medio` → sonnet con esfuerzo real.
  *
- * Por qué no `light` (haiku, que es el más barato de los tres y también ve
- * imágenes): el caso de uso real es "mira este bug visual" — márgenes de
- * pocos píxeles, alineaciones, contraste. Ahí haiku-4.5 falla en el detalle
- * fino y responde de forma genérica, y un análisis visual equivocado sale más
- * caro que el turno que se ahorró (hay que repetirlo, y encima con la imagen
- * otra vez). Sonnet es el punto donde la lectura de UI ya es fiable.
+ * Por qué no `trivial` (haiku, el más barato): el caso de uso real es "mira
+ * este bug visual" — márgenes de pocos píxeles, alineaciones, contraste. Ahí
+ * haiku falla en el detalle fino y responde de forma genérica, y un análisis
+ * visual equivocado sale más caro que el turno que se ahorró (hay que
+ * repetirlo, y encima con la imagen otra vez).
  *
- * Y no `deep` (opus): si el mensaje ADEMÁS pide trabajo técnico, classify()
- * ya lo manda a deep por su cuenta. Este piso solo evita el suelo.
+ * Y no `alto`: si el mensaje ADEMÁS pide trabajo técnico, classify() ya lo
+ * manda ahí por su cuenta. Este piso solo evita el suelo.
  */
-export const IMAGE_FLOOR_TIER: Tier = "standard";
-
-const EFFORT_ORDER: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+export const IMAGE_FLOOR_TIER: Tier = "medio";
 
 export function capEffort(effort: Effort | undefined, max: Effort): Effort | undefined {
+  const order: Effort[] = ["low", "medium", "high"];
   if (!effort) return effort;
-  return EFFORT_ORDER.indexOf(effort) > EFFORT_ORDER.indexOf(max) ? max : effort;
+  return order.indexOf(effort) > order.indexOf(max) ? max : effort;
 }

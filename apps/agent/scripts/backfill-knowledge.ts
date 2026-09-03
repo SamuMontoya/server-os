@@ -3,11 +3,9 @@
  * todo lo que ya existía sin embedding para que entre a match_knowledge.
  *
  *   1. memories sin embedding
- *   2. meetings sin summary_embedding
- *   3. task_executions sin embedding (prompt + análisis + resultado)
- *   4. conversation_messages sin embedding (mensajes con señal, ≥20 chars)
- *   5. vault → vault_docs (índice completo del vault, por hash)
- *   6. transcripts de voz recientes de ElevenLabs
+ *   2. task_executions sin embedding (prompt + análisis + resultado)
+ *   3. conversation_messages sin embedding (mensajes con señal, ≥20 chars)
+ *   4. vault → vault_docs (índice completo del vault, por hash)
  *
  * Idempotente: correrlo dos veces no re-embebe nada. Uso: pnpm backfill:knowledge
  */
@@ -15,7 +13,6 @@ import { env } from "../src/env.js";
 import { supabase } from "../src/supabase.js";
 import { embed, embedBatch } from "../src/embeddings.js";
 import { syncVaultKnowledge } from "../src/vault/knowledge-sync.js";
-import { syncVoiceTranscripts } from "../src/voice-transcripts.js";
 
 if (!supabase) {
   console.error("Supabase no configurado (falta NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY).");
@@ -58,26 +55,7 @@ console.log("— memories sin embedding…");
   console.log(`  ✓ ${done} memorias vectorizadas`);
 }
 
-// ── 2) meetings ─────────────────────────────────────────────────────────
-console.log("— meetings sin summary_embedding…");
-{
-  const { data } = await db
-    .from("meetings")
-    .select("id,summary")
-    .is("summary_embedding", null)
-    .not("summary", "is", null)
-    .limit(500);
-  let done = 0;
-  for (const row of data ?? []) {
-    const vector = await embed(row.summary ?? "");
-    if (!vector) break;
-    await db.from("meetings").update({ summary_embedding: vector }).eq("id", row.id);
-    done++;
-  }
-  console.log(`  ✓ ${done} reuniones vectorizadas`);
-}
-
-// ── 3) task_executions ──────────────────────────────────────────────────
+// ── 2) task_executions ──────────────────────────────────────────────────
 console.log("— task_executions sin embedding…");
 {
   let done = 0;
@@ -105,7 +83,7 @@ console.log("— task_executions sin embedding…");
   console.log(`  ✓ ${done} ejecuciones vectorizadas`);
 }
 
-// ── 4) conversation_messages ────────────────────────────────────────────
+// ── 3) conversation_messages ────────────────────────────────────────────
 // Cursor por id (no "is null" a secas): los mensajes cortos quedan sin vector
 // a propósito y no deben ciclar el loop.
 console.log("— conversation_messages sin embedding…");
@@ -140,20 +118,12 @@ console.log("— conversation_messages sin embedding…");
   console.log(`  ✓ ${done} mensajes vectorizados (${skipped} cortos sin señal, se saltan)`);
 }
 
-// ── 5) vault ────────────────────────────────────────────────────────────
+// ── 4) vault ────────────────────────────────────────────────────────────
 console.log("— índice semántico del vault…");
 {
   const res = await syncVaultKnowledge();
   if (res) console.log(`  ✓ ${res.indexed} notas vectorizadas de ${res.scanned} escaneadas (${res.removed} eliminadas)`);
   else console.log("  (sin vault o sin Supabase)");
-}
-
-// ── 6) voz ──────────────────────────────────────────────────────────────
-console.log("— transcripts de voz de ElevenLabs…");
-{
-  const res = await syncVoiceTranscripts();
-  if (res) console.log(`  ✓ ${res.mirrored} conversaciones nuevas (${res.turns} turnos) de ${res.checked} revisadas`);
-  else console.log("  (sin credenciales de ElevenLabs o sin Supabase)");
 }
 
 console.log("\n✅ Backfill de conocimiento terminado.");

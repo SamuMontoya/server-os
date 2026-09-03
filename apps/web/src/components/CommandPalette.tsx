@@ -19,11 +19,8 @@ interface Item {
 }
 
 const TABS: { id: CenterTab; label: string }[] = [
-  { id: "voz", label: "Voz en vivo" },
   { id: "consola", label: "Consola" },
   { id: "actividad", label: "Actividad" },
-  { id: "tareas", label: "Tareas" },
-  { id: "reuniones", label: "Reuniones" },
   { id: "memoria", label: "Memoria" },
   { id: "claude", label: "Claude Code" },
 ];
@@ -53,10 +50,7 @@ export function CommandPalette() {
         label: c.label,
         hint: c.hint,
         group: "comando" as const,
-        disabled: Boolean(
-          (c.requiresProject && !ws.selectedProject) ||
-            (c.requiresLiveMeeting && !ctx.liveMeetingActive),
-        ),
+        disabled: Boolean(c.requiresProject && !ws.selectedProject),
         run: () => {
           close();
           void c.run(ctx);
@@ -88,7 +82,7 @@ export function CommandPalette() {
       (i) => i.label.toLowerCase().includes(q) || i.hint?.toLowerCase().includes(q),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, projects, ws.selectedProject, ws.paletteOpen, ctx.liveMeetingActive]);
+  }, [query, projects, ws.selectedProject, ws.paletteOpen]);
 
   useEffect(() => setCursor(0), [query]);
 

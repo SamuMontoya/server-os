@@ -42,15 +42,11 @@ export const env = {
   EMBEDDINGS_PROVIDER: (process.env.EMBEDDINGS_PROVIDER || "").toLowerCase(),
   OLLAMA_URL: (process.env.OLLAMA_URL || "http://127.0.0.1:11434").replace(/\/$/, ""),
   OLLAMA_EMBED_MODEL: process.env.OLLAMA_EMBED_MODEL || "nomic-embed-text",
+  // STT del dictado del composer: ElevenLabs Scribe con fallback a Whisper.
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || "",
-  // Agente de voz de ElevenLabs. Comparte el valor con el dashboard web
-  // (NEXT_PUBLIC_…) para que la app móvil obtenga el token del mismo agente.
-  ELEVENLABS_AGENT_ID: process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID || "",
-  // Tutor de inglés (segundo agente; token vía GET /elevenlabs/token?agent=tutor).
-  ELEVENLABS_TUTOR_AGENT_ID: process.env.NEXT_PUBLIC_ELEVENLABS_TUTOR_AGENT_ID || "",
-  // Proveedor de STT preferido para reuniones: "whisper" | "scribe".
-  // Default: scribe primero, Whisper de fallback. Ponlo en "whisper" si
-  // ElevenLabs se queda sin créditos para no gastar la llamada fallida a Scribe.
+  // Proveedor de STT preferido: "whisper" | "scribe". Default: scribe primero,
+  // Whisper de fallback. Ponlo en "whisper" si ElevenLabs se queda sin
+  // créditos para no gastar la llamada fallida a Scribe.
   STT_PROVIDER: (process.env.HERMES_STT || "").toLowerCase(),
   // Junta EN VIVO: STT streaming con diarización (AssemblyAI Universal-Streaming).
   ASSEMBLYAI_API_KEY: process.env.ASSEMBLYAI_API_KEY || "",
@@ -62,15 +58,6 @@ export const env = {
   // gastar) | "off" (solo queda el loop estratégico de 20-45 s).
   COPILOT_PROVIDER: (process.env.HERMES_COPILOT || "").toLowerCase(),
   COPILOT_MODEL: process.env.HERMES_COPILOT_MODEL || "claude-haiku-4-5",
-  // OAuth de Google, COMPARTIDO: YouTube Analytics de Estudio y (si algún día
-  // vuelve) escritura de Calendar. Un solo consentimiento (`pnpm google:auth`)
-  // cubre ambos scopes — por eso vive aparte de cualquier feature concreta.
-  GOOGLE_OAUTH_CLIENT_ID: process.env.GOOGLE_OAUTH_CLIENT_ID || "",
-  GOOGLE_OAUTH_CLIENT_SECRET: process.env.GOOGLE_OAUTH_CLIENT_SECRET || "",
-  GOOGLE_OAUTH_REFRESH_TOKEN: process.env.GOOGLE_OAUTH_REFRESH_TOKEN || "",
-  // Puerto del loopback para el consentimiento OAuth una sola vez (debe
-  // coincidir con el redirect URI autorizado en el cliente OAuth de Google).
-  GOOGLE_OAUTH_PORT: Number(process.env.GOOGLE_OAUTH_PORT || 8788),
   // Navegación profunda por voz (chrome-devtools-mcp sobre un Chrome CDP
   // dedicado). "off" no registra el MCP ni expone /browser/navigate.
   // También mac-only: ensureCdpChrome() lanza Chrome con `open -a`.

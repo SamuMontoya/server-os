@@ -39,18 +39,6 @@ const DESTS: Dest[] = [
       </svg>
     ),
   },
-  { kind: "tab", tab: "tareas", label: "Tareas", icon: I("M4 6h16M4 12h16M4 18h9") },
-  {
-    kind: "tab",
-    tab: "reuniones",
-    label: "Reuniones",
-    icon: (
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-        <rect x="3" y="5" width="18" height="16" rx="2" />
-        <path d="M8 3v4M16 3v4M3 10h18" />
-      </svg>
-    ),
-  },
   {
     kind: "tab",
     tab: "memoria",
@@ -65,33 +53,7 @@ const DESTS: Dest[] = [
       </svg>
     ),
   },
-  { kind: "route", href: "/agenda", label: "Agenda", icon: I("M3 10h18M8 3v4M16 3v4", <rect x="3" y="5" width="18" height="16" rx="2" />) },
-  // Vida se separó en tres secciones (2026-07): finanzas · hábitos · inglés.
-  {
-    kind: "route",
-    href: "/finanzas",
-    label: "Finanzas",
-    icon: I(
-      "M3 8.5V7a2 2 0 0 1 2-2h11M3 8.5V17a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V10.5a2 2 0 0 0-2-2H3z",
-      <circle cx="15.5" cy="14.5" r="1.1" fill="currentColor" stroke="none" />,
-    ),
-  },
-  {
-    kind: "route",
-    href: "/habitos",
-    label: "Hábitos",
-    icon: I("M8.5 12.5l2.5 2.5 4.5-5", <circle cx="12" cy="12" r="9" opacity=".45" />),
-  },
-  {
-    kind: "route",
-    href: "/ingles",
-    label: "Inglés",
-    icon: I(
-      "M3 12h18M12 3c2.6 2.6 2.6 15.4 0 18M12 3c-2.6 2.6-2.6 15.4 0 18",
-      <circle cx="12" cy="12" r="9" opacity=".45" />,
-    ),
-  },
-  // Laboratorio: pantalla nueva para experimentar sin tocar el resto del flujo.
+  // Laboratorio: el chat principal, pantalla propia fuera del shell.
   {
     kind: "route",
     href: "/laboratorio",
@@ -101,16 +63,6 @@ const DESTS: Dest[] = [
         <path d="M9 4.5a2.5 2.5 0 0 0-2.5 2.5c0 .3.03.6.1.88A2.5 2.5 0 0 0 5 10.2v1.1a2.5 2.5 0 0 0 .8 4.6c.15 1.4 1.35 2.5 2.8 2.5.4 0 .78-.08 1.13-.23A2 2 0 0 0 11.5 20V6.5A2 2 0 0 0 9 4.5Z" strokeLinecap="round" strokeLinejoin="round" />
         <path d="M15 4.5a2.5 2.5 0 0 1 2.5 2.5c0 .3-.03.6-.1.88A2.5 2.5 0 0 1 19 10.2v1.1a2.5 2.5 0 0 1-.8 4.6c-.15 1.4-1.35 2.5-2.8 2.5-.4 0-.78-.08-1.13-.23A2 2 0 0 1 12.5 20V6.5A2 2 0 0 1 15 4.5Z" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
-    ),
-  },
-  // Estudio de contenido (marca RuloCode): claqueta.
-  {
-    kind: "route",
-    href: "/estudio",
-    label: "Estudio",
-    icon: I(
-      "M4 9.5h16v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-9zM4 9.5 3 6.8l15.5-2.6 1 2.7L4 9.5z",
-      <path d="M7.5 8.9 9.3 5.6M12.4 8.1l1.8-3.3M17.2 7.3 19 4.1" opacity=".5" />,
     ),
   },
 ];
@@ -141,7 +93,7 @@ export function SideRail() {
         {DESTS.map((d) => {
           const active =
             d.kind === "route"
-              ? d.kind === "route" && pathname === d.href && (d.href !== "/" || ws.tab === "consola" || ws.tab === "voz")
+              ? d.kind === "route" && pathname === d.href && (d.href !== "/" || ws.tab === "consola")
               : inHome && ws.tab === d.tab;
 
           const cls = `group relative grid h-9.5 w-9.5 cursor-pointer place-items-center rounded-sm transition-colors ${

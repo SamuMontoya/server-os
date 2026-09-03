@@ -12,7 +12,7 @@
  * En ambos: NO fijar Content-Type (fetch pone el boundary) y el `file` DEBE
  * llevar filename con extensión (si no, falla la detección de formato).
  */
-import { env } from "../env.js";
+import { env } from "./env.js";
 
 export interface TranscriptResult {
   text: string;
