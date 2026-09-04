@@ -1471,20 +1471,20 @@ html.lab-route body::after {
   text-overflow: ellipsis;
 }
 /* ── Indicador de un chat TRABAJANDO en la lista ──────────────────────────
-   Reemplaza las barras de esqueleto de antes: el pulso de actividad es el
-   orbe (sin ojos — aquí no "mira", solo late) a 16px, alineado con la
-   segunda línea de la card igual que iba el preview de texto que sustituye. */
-.lab-chatcard-orbe {
-  display: inline-flex;
+   Ya no hay punto verde junto al título (duplicaba la señal): el pulso de
+   actividad es el orbe (sin ojos — aquí no "mira", solo late) a 14px, en la
+   MISMA línea que el texto del segundo renglón, que nunca queda vacío
+   mientras corre (ver JSX: cae a "Pensando…" si `chat.preview` no tiene nada
+   todavía). */
+.lab-chatcard-preview--live {
+  display: flex;
   align-items: center;
-  padding: 3px 0 2px;
+  gap: 6px;
 }
-.lab-chatcard-dot {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #2f9e6e;
+.lab-chatcard-preview-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Barra de input al pie del Laboratorio. Ya NO es `fixed` con un `bottom`
    calculado a mano: es el último hijo del papel con `margin-top: auto`, así

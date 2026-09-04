@@ -402,8 +402,12 @@ export default function Laboratorio() {
   /** true = hay suficiente texto por encima del fondo como para mostrar el
    *  botón circular de "ir al final" sobre el composer. */
   const [showJumpDown, setShowJumpDown] = useState(false);
-  /** true = está abierta la pantalla de "chats abiertos" (menú hamburguesa). */
-  const [showChats, setShowChats] = useState(false);
+  /** true = está abierta la pantalla de "chats abiertos" (menú hamburguesa).
+   *  Arranca en `true`: Samu pidió (2026-09-01, repetido 2026-09-04) que al
+   *  cargar la app NO se entre directo al último chat, sino a este menú —
+   *  el chat se abre recién cuando se toca uno de la lista (`onOpen` llama
+   *  `switchToChat`, que sí pone `showChats` en `false`). */
+  const [showChats, setShowChats] = useState(true);
   /**
    * TODOS los object URLs creados en esta visita. Un object URL mantiene el
    * blob vivo hasta que se revoca explícitamente, y las imágenes ya enviadas
