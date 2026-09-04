@@ -540,7 +540,7 @@ export function ChatPanel({
             if (msgs[at]?.role === "assistant" && !msgs[at].content.trim()) {
               msgs[at] = {
                 role: "assistant",
-                content: "⚠ el turno se perdió al reiniciarse el agente. Vuelve a preguntar.",
+                content: "⚠ el agente se reinició a mitad de esta respuesta. Lo que alcanzó a escribir quedó guardado en el historial — sigue la conversación con normalidad.",
               };
             }
             return { ...t, messages: msgs, busy: false, stalled: false, pendingTurn: undefined };

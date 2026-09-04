@@ -23,6 +23,14 @@ Environment=NODE_ENV=production
 # El PATH debe traer node Y claude. Lleva el número de versión de nvm: un
 # upgrade de node lo invalida y hay que regenerar esta unidad.
 Environment=PATH=__PATH__
+# Techo del heap de V8, POR DEBAJO de MemoryHigh. Sin esto V8 elegía su default
+# (~la mitad de la RAM de la caja) y por tanto nunca sentía presión para hacer
+# GC: el cgroup lo estrangulaba primero. Medido en esta caja: 4417 cruces de
+# MemoryHigh en ~1 h, con el event loop congelado a ratos, /health tardando más
+# de 8 s y el vigía reiniciando un agente que solo estaba LENTO — matando de
+# paso todos los turnos vivos (61 reinicios en un día). Con el techo aquí, V8
+# hace GC antes de que el kernel tenga que intervenir.
+Environment=NODE_OPTIONS=--max-old-space-size=900
 
 ExecStart=__PNPM__ --filter @hermes/agent start
 
@@ -34,11 +42,21 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=server-os-agent
 
+# El proceso puede tardar en soltar: los turnos vivos se cierran y se persisten
+# al recibir SIGTERM. 90 s (el default) era tanto que systemd acababa mandando
+# SIGKILL, y eso sí se lleva por delante el trabajo en curso.
+TimeoutStopSec=25
+
 # La máquina tiene 3.2 GB y también corre el dashboard: un run desbocado no
 # debe llevarse el sistema por delante. Al pasarse, lo mata el OOM del cgroup
 # y Restart lo levanta — mejor eso que congelar la caja entera.
+#
+# MemoryHigh NO mata: ESTRANGULA (reclaim síncrono + swap). Con 1200M se cruzaba
+# miles de veces por hora y el agente quedaba congelado a ratos sin que nada lo
+# reportara. Se sube a 1400M y el freno real pasa a ser NODE_OPTIONS (arriba),
+# que hace GC en vez de castigar al proceso entero.
 MemoryMax=1500M
-MemoryHigh=1200M
+MemoryHigh=1400M
 
 [Install]
 WantedBy=default.target

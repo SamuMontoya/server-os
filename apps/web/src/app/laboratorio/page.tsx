@@ -1399,7 +1399,10 @@ export default function Laboratorio() {
         turnIdRef.current = null;
         pendingTurnRef.current = null;
         setBusy(false);
-        appendNotice(replyId, "⚠ el turno se perdió al reiniciarse el agente. Vuelve a preguntar.");
+        appendNotice(
+          replyId,
+          "⚠ el agente se reinició a mitad de esta respuesta. Lo que alcanzó a escribir quedó guardado en el historial — sigue la conversación con normalidad.",
+        );
         schedulePersist();
         return;
       }

@@ -115,6 +115,13 @@ const MAX_TURNS = 60;
 const RETAIN_MS = 6 * 60 * 60 * 1000;
 /** Intentos totales antes de reportar el error. */
 export const MAX_ATTEMPTS = 3;
+/**
+ * Techo de tiempo por INTENTO (no por turno completo: cada reintento y cada
+ * continuación lo renuevan). `maxTurns` acota pasos, no reloj — un tool que
+ * se cuelga (red, un comando que bloquea) no lo dispara nunca. Ver el
+ * comentario en el loop de `drive()` para el incidente que lo motivó.
+ */
+export const MAX_TURN_WALL_MS = 15 * 60_000;
 /** Espera antes de cada reintento (determinista: los tests la controlan). */
 const BACKOFF_MS = [1000, 3000];
 
@@ -377,6 +384,19 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       for (;;) {
         const abort = new AbortController();
         aborts.set(turn.id, abort);
+        // Red de seguridad: `maxTurns` limita PASOS, no tiempo. Un tool que se
+        // cuelga (red, un comando bloqueante, lo que sea) deja el proceso
+        // `claude` de este intento vivo para siempre — visto en producción:
+        // un vigía que reinicia por /health lento tuvo que matar a la fuerza
+        // ~40 procesos acumulados de turnos que nunca cerraron solos. Pasado
+        // este tiempo se aborta como si el cliente lo hubiera cancelado, así
+        // el proceso se libera aunque el turno en sí no haya "fallado".
+        let timedOut = false;
+        const wallClockGuard = setTimeout(() => {
+          timedOut = true;
+          abort.abort();
+        }, MAX_TURN_WALL_MS);
+        wallClockGuard.unref?.();
         // Texto de ESTE intento: el reintento arranca de cero y no se pega al
         // parcial del intento anterior (eso duplicaba frases a medias). Una
         // continuación SÍ debe arrancar en cero por el mismo motivo: lo que
@@ -464,6 +484,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
               emitEvent(turn.id, { kind: "delta", text: result.finalText });
             }
             if (result.sdkSessionId) turn.sdkSessionId = result.sdkSessionId;
+            clearTimeout(wallClockGuard);
             return close(turn, "done");
           }
           failure = result.finalText || "el agente terminó con error";
@@ -473,9 +494,21 @@ export function createTurnEngine(deps: TurnEngineDeps) {
           failure = err instanceof Error ? err.message : String(err);
           failureSource = "transporte";
         }
+        clearTimeout(wallClockGuard);
 
-        // Cancelación explícita: no es un fallo y no se reintenta.
-        if (abort.signal.aborted) return close(turn, "stopped", failure ?? undefined);
+        // Cancelación explícita del cliente (`stop`) o del guardia de tiempo
+        // (arriba): en ambos casos no es un fallo del modelo y no se reintenta,
+        // pero el mensaje debe distinguirlos — "cancelaste" y "se colgó" piden
+        // acciones distintas de quien lee.
+        if (abort.signal.aborted) {
+          return close(
+            turn,
+            timedOut ? "error" : "stopped",
+            timedOut
+              ? "el turno se demoró más de la cuenta (probablemente se quedó pegado en algo) y se cortó. Probá de nuevo, o más acotado."
+              : (failure ?? undefined),
+          );
+        }
 
         // Se acabó `maxTurns` con el trabajo a medias: NO es un error de
         // verdad. La sesión del SDK sigue viva (`resume` ya se actualizó por
