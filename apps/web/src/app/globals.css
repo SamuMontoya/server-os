@@ -1225,53 +1225,6 @@ html.lab-route body::after {
 .lab-topbar-rename:focus {
   outline: none;
 }
-/* Menú de dos opciones. Ancho fijo y centrado bajo el título — no bajo el
-   dedo, que en un toque desde cualquier punto del título se sentiría
-   errático. */
-.lab-title-menu-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 30;
-}
-.lab-title-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 31;
-  display: flex;
-  flex-direction: column;
-  min-width: 224px;
-  padding: 4px;
-  border-radius: 10px;
-  border: 1px solid #ededec;
-  background: #fff;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-}
-/* Ícono a la IZQUIERDA del texto de cada opción (Samu lo cambió de opinión:
-   antes iba a la derecha con espacio repartido — ahora pegado al texto,
-   como un ítem de menú normal). */
-.lab-title-menu button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: none;
-  background: none;
-  padding: 9px 12px;
-  border-radius: 6px;
-  text-align: left;
-  font-family: var(--font-notion);
-  font-size: 13.5px;
-  color: #37352f;
-  cursor: pointer;
-}
-.lab-title-menu button svg {
-  flex-shrink: 0;
-  color: #9b9a97;
-}
-.lab-title-menu button:hover {
-  background: #f1f1ef;
-}
 .lab-menu-btn {
   display: inline-flex;
   align-items: center;
