@@ -221,7 +221,12 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
 
       <div className="lab-chats-list">
         {chats.length === 0 ? (
-          <p className="lab-chats-empty">Sin chats todavía en este proyecto.</p>
+          <div className="lab-chats-empty">
+            <p className="lab-chats-empty-title">Aún no hay chats aquí</p>
+            <p className="lab-chats-empty-hint">
+              Toca el <strong>+</strong> de arriba para empezar uno nuevo.
+            </p>
+          </div>
         ) : (
           chats.map((c) => (
             <SwipeableCard

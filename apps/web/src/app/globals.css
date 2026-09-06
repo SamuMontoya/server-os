@@ -1313,9 +1313,29 @@ html.lab-route body::after {
   padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 .lab-chats-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  min-height: 240px;
+  text-align: center;
+  padding: 24px 16px;
+}
+.lab-chats-empty-title {
+  color: #2f2e2c;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+.lab-chats-empty-hint {
   color: #9b9a97;
   font-size: 13px;
-  padding: 8px 2px;
+  margin: 0;
+}
+.lab-chats-empty-hint strong {
+  color: #2f2e2c;
 }
 
 /* Cada card es un asa arrastrable (SwipeableCard) sobre un fondo de acción
