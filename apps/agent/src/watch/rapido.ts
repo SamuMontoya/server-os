@@ -109,7 +109,14 @@ class SesionRapida {
   /** Turnos ya entregados al SDK, en orden: la correlación es FIFO estricta. */
   private vivos: Pendiente[] = [];
   private despertar: (() => void) | null = null;
+  /** Cuántos turnos lleva la sesión ACTUAL — se reinicia en cada `asegurar()` nueva. */
+  private turnos = 0;
   private cerrada = false;
+  /**
+   * Notas de `anotar()` sin entregar todavía. Se acumulan en memoria — CERO
+   * viajes al modelo — y se pegan delante de la siguiente `preguntar()` real.
+   */
+  private notas: string[] = [];
 
   /** Arranca el proceso y paga el coste una vez, antes de la primera pregunta real. */
   calentar(): void {
@@ -123,21 +130,28 @@ class SesionRapida {
    * Cuando un turno escalado responde, esa respuesta no existe para la sesión
    * rápida: es otro proceso. Sin esto, preguntar "¿y eso por qué?" justo
    * después de una consulta escalada recibiría un "¿a qué te refieres?", que
-   * en una conversación de muñeca se siente roto. Va como turno silencioso:
-   * ocupa su sitio en la cola (la correlación es FIFO) pero no emite nada.
+   * en una conversación de muñeca se siente roto.
+   *
+   * ANTES esto encolaba un turno silencioso propio — que igual le costaba un
+   * viaje completo al modelo (generar el "OK" y esperar su `result`) solo para
+   * tirar la respuesta. Medido en producción: si la siguiente pregunta real
+   * llegaba antes de que ese "OK" cerrara, se quedaba en cola DETRÁS de un
+   * viaje entero desperdiciado. Ahora la nota solo se guarda en memoria y se
+   * pega delante del texto de la próxima `preguntar()` real — el modelo la ve
+   * igual (y en el mismo orden), pero sin gastar un turno propio en sacarla.
    */
-  anotar(_resumen: string): void {
-    this.asegurar();
-    this.encolar({
-      prompt: `[contexto, no respondas nada más que OK] ${_resumen}`,
-      silencioso: true,
-    });
+  anotar(resumen: string): void {
+    this.notas.push(resumen);
   }
 
   preguntar(prompt: string, onDelta: (t: string) => void): Promise<string> {
     this.asegurar();
+    const conNotas = this.notas.length
+      ? `${this.notas.map((n) => `[contexto: ${n}]`).join("\n")}\n\n${prompt}`
+      : prompt;
+    this.notas = [];
     return new Promise((resolver) => {
-      this.encolar({ prompt, onDelta, resolver });
+      this.encolar({ prompt: conNotas, onDelta, resolver });
     });
   }
 
@@ -160,6 +174,7 @@ class SesionRapida {
 
   private asegurar(): void {
     if (this.q || this.cerrada) return;
+    this.turnos = 0;
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     async function* entrada(): AsyncGenerator<SDKUserMessage> {
@@ -241,7 +256,13 @@ class SesionRapida {
           }
           const r = msg as { ttft_ms?: number; duration_ms?: number };
           if (r.ttft_ms != null) {
-            console.log(`[reloj] ttft=${r.ttft_ms}ms total=${r.duration_ms ?? "?"}ms`);
+            this.turnos += 1;
+            // `turno=N` es a propósito: la sesión vive todo lo que viva el
+            // proceso y su historial solo crece — sin saber CUÁN profundo va
+            // un turno no se puede distinguir "esto es lento siempre" de
+            // "esto se pone lento porque la sesión ya acumuló 40 idas y
+            // vueltas". Sin este número, esa pregunta no tiene respuesta.
+            console.log(`[reloj] ttft=${r.ttft_ms}ms total=${r.duration_ms ?? "?"}ms turno=${this.turnos}`);
           }
         }
       }
