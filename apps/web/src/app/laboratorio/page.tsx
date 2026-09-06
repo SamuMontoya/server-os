@@ -1805,7 +1805,24 @@ export default function Laboratorio() {
           // la abrió tiene que poder cerrarla. Antes la única salida era la ✕
           // que la propia pantalla dibujaba, y con la barra ya visible detrás
           // eran dos controles para lo mismo en la misma esquina.
-          onClick={() => setShowChats((v) => !v)}
+          //
+          // Al ABRIR (no al cerrar) se le quita el foco a lo que sea que lo
+          // tenga: si el composer del chat anterior tenía el teclado abierto,
+          // `--lab-vh` (el alto real de `.lab-paper`, ver globals.css) sigue
+          // el `visualViewport` en vivo — nada lo recalcula solo al cambiar de
+          // pantalla, y la lista de chats no tiene ningún input que perder el
+          // foco por su cuenta. Sin este blur, el teclado seguía "abierto"
+          // (o Safari tardaba en cerrarlo) y el papel entero se quedaba con
+          // el alto achicado del teclado: la lista se veía colapsada, con un
+          // hueco en blanco abajo en vez de ocupar toda la pantalla (pedido de
+          // Samu 2026-09-06, reportado con captura).
+          onClick={() =>
+            setShowChats((v) => {
+              const next = !v;
+              if (next) (document.activeElement as HTMLElement | null)?.blur();
+              return next;
+            })
+          }
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
