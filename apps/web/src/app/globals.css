@@ -1431,6 +1431,22 @@ html.lab-route body::after {
      El `overflow:hidden` se queda porque es lo que recorta el fondo rojo de
      "Eliminar" mientras la fila se arrastra. */
   overflow: hidden;
+  /* Alto FIJO (pedido de Samu 2026-09-06, tras ver el texto del subtítulo
+     cortado): `.lab-chats-list` es `flex-direction:column` y cada fila, sin
+     `flex-shrink:0`, hereda el default de flexbox (`flex-shrink:1`). Cuando
+     la suma de alturas naturales de las filas superaba el alto disponible,
+     flexbox NO generaba overflow/scroll — encogía cada fila por debajo de lo
+     que su propio contenido necesitaba, y ese contenido comprimido (con
+     `overflow:hidden` arriba) se veía a medio cortar. Con alto fijo +
+     `flex-shrink:0` cada fila mide SIEMPRE lo mismo pase lo que pase arriba:
+     ya no hay nada que "encoger", así que cuando de verdad no caben todas,
+     el contenedor desborda de verdad y dispara el scroll (y el buscador,
+     que depende de ese mismo overflow real — ver `hasOverflow` en
+     LabChatsScreen.tsx). El valor (60px) es el alto natural de una fila con
+     título + subtítulo de una línea cada uno; con eso sobra para el texto de
+     ambos renglones sin recortarlos. */
+  height: 60px;
+  flex-shrink: 0;
 }
 .lab-chatcard-bg {
   position: absolute;
@@ -1450,13 +1466,22 @@ html.lab-route body::after {
 .lab-chatcard {
   position: relative;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
+  /* Alto completo del wrap fijo (60px, ver `.lab-chatcard-wrap`) — `box-sizing`
+     para que el padding no se sume por encima de esos 60px, y `align-items:
+     center` (ya no `flex-start`) para que el bloque título+subtítulo quede
+     centrado verticalmente dentro de la fila en vez de pegado arriba. */
+  box-sizing: border-box;
+  height: 100%;
+  width: 100%;
   /* Un poco de aire a los lados (Samu pidió "pad x para que se vea bien": sin
      él el texto tocaba el borde de la pantalla y el borde inferior se sentía
      pegado, no como el filo de una fila). Sigue siendo mucho menos que el
-     padding de card de antes (14px) — esto es respiro, no caja. */
-  padding: 12px 6px;
+     padding de card de antes (14px) — esto es respiro, no caja. Ya sin
+     padding vertical: el alto lo fija `.lab-chatcard-wrap` y el centrado lo
+     da `align-items:center`, no un padding a mano. */
+  padding: 0 6px;
   /* NI caja NI papel: Samu pidió que cada chat sea solo una FILA separada por
      una línea. Se mantiene la estructura (título + subtítulo + tiempo) y se
      quitan radio, fondo y sombras; lo único que divide es el filo inferior.
