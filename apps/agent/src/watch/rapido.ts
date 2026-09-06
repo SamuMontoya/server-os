@@ -109,6 +109,8 @@ const MODELO = process.env.WATCH_MODEL || "claude-haiku-4-5-20251001";
 const HISTORIAL_MAX = 24;
 
 type Mensaje = { role: "user" | "assistant"; content: string };
+type BloqueTexto = { type: "text"; text: string; cache_control?: { type: "ephemeral" } };
+type MensajeAPI = { role: "user" | "assistant"; content: string | BloqueTexto[] };
 
 class SesionRapida {
   private historial: Mensaje[] = [];
@@ -165,7 +167,22 @@ class SesionRapida {
       return msg;
     }
 
-    const mensajes: Mensaje[] = [...this.historial, { role: "user", content: prompt }];
+    // Punto de corte del caché: TODO lo anterior a la pregunta nueva (system +
+    // historial) es el mismo prefijo exacto que ya se mandó la vez pasada, así
+    // que se marca como cacheable — Anthropic solo reprocesa lo que cambió
+    // (la pregunta nueva), no la conversación entera desde cero en cada
+    // llamada. Sin mínimo de tokens no cachea nada (silencioso, no falla), así
+    // que al principio de una sesión esto no hace nada — empieza a notarse
+    // según crece el historial.
+    const previos: MensajeAPI[] = this.historial.map((m) => ({ role: m.role, content: m.content }));
+    if (previos.length > 0) {
+      const ultimo = previos[previos.length - 1];
+      previos[previos.length - 1] = {
+        role: ultimo.role,
+        content: [{ type: "text", text: ultimo.content as string, cache_control: { type: "ephemeral" } }],
+      };
+    }
+    const mensajes: MensajeAPI[] = [...previos, { role: "user", content: prompt }];
 
     let res: Response;
     try {
@@ -181,7 +198,7 @@ class SesionRapida {
           model: MODELO,
           max_tokens: 300,
           stream: true,
-          system: SISTEMA,
+          system: [{ type: "text", text: SISTEMA, cache_control: { type: "ephemeral" } }],
           messages: mensajes,
         }),
       });
@@ -203,6 +220,11 @@ class SesionRapida {
     let buf = "";
     let acumulado = "";
     let primerDeltaEn: number | null = null;
+    // Del `message_start`: cuánto del prefijo se sirvió de caché vs. de cero.
+    // Es la única forma de CONFIRMAR que el cache_control de arriba hace algo
+    // en vez de asumirlo.
+    let cacheLectura = 0;
+    let cacheEscritura = 0;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     try {
@@ -217,13 +239,24 @@ class SesionRapida {
           buf = buf.slice(idx + 2);
           const dataLine = bloque.split("\n").find((l) => l.startsWith("data:"));
           if (!dataLine) continue;
-          let evento: { type?: string; delta?: { type?: string; text?: string } };
+          let evento: {
+            type?: string;
+            delta?: { type?: string; text?: string };
+            message?: { usage?: { cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
+          };
           try {
             evento = JSON.parse(dataLine.slice(5).trim());
           } catch {
             continue;
           }
-          if (evento.type === "content_block_delta" && evento.delta?.type === "text_delta" && evento.delta.text) {
+          if (evento.type === "message_start") {
+            cacheLectura = evento.message?.usage?.cache_read_input_tokens ?? 0;
+            cacheEscritura = evento.message?.usage?.cache_creation_input_tokens ?? 0;
+          } else if (
+            evento.type === "content_block_delta" &&
+            evento.delta?.type === "text_delta" &&
+            evento.delta.text
+          ) {
             if (primerDeltaEn == null) primerDeltaEn = Date.now();
             acumulado += evento.delta.text;
             const parcial = acumulado.trim();
@@ -245,7 +278,9 @@ class SesionRapida {
     this.turnos += 1;
     const total = Date.now() - t0;
     const ttft = primerDeltaEn != null ? primerDeltaEn - t0 : null;
-    console.log(`[reloj] ttft=${ttft ?? "?"}ms total=${total}ms turno=${this.turnos}`);
+    console.log(
+      `[reloj] ttft=${ttft ?? "?"}ms total=${total}ms turno=${this.turnos} cache_lectura=${cacheLectura} cache_escritura=${cacheEscritura}`,
+    );
 
     return texto;
   }
