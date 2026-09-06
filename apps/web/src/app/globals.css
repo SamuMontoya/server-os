@@ -1147,6 +1147,28 @@ html.lab-route body::after {
   display: flex;
   flex-direction: column;
 }
+/* La pantalla de "Chats" (lista) no tiene composer ni teclado que gestionar
+   — a diferencia de un chat abierto, aquí no hay ningún input. No hay motivo
+   para que dependa de `--lab-vh`/`--lab-vp-top` (el alto/desfase que sigue al
+   teclado): esas variables solo tienen sentido cuando SÍ hay un composer
+   debajo. Si venías de un chat con el teclado abierto (o de un bfcache de
+   Safari que restauró el `--lab-vh` chico de una sesión anterior sin volver a
+   correr el efecto que lo recalcula), el papel se quedaba con el alto
+   reducido del teclado: la lista se veía colapsada, con hueco en blanco
+   abajo en vez de ocupar toda la pantalla (pedido de Samu 2026-09-06,
+   reportado con captura DOS veces — el fix anterior, quitarle el foco al
+   composer al abrir, no cubría el caso de recargar ya con la lista abierta).
+   Con la lista abierta se ignoran esas dos variables por completo: alto real
+   y sin desfase, siempre. */
+.lab-paper--chats-open {
+  height: 100dvh !important;
+  /* `translateY(0)`, no `transform: none`: un valor de transform (aunque sea
+     0) sigue creando el containing block que necesitan los `position:fixed`
+     de adentro (`.lab-chats-screen` incluido) — `none` se lo quitaría y los
+     reposicionaría contra el viewport real, rompiendo cualquier otro fixed
+     que sí cuente con `.lab-paper` como referencia. */
+  transform: translateY(0) !important;
+}
 /* Flecha de volver: solo el glifo. Sin borde ni fondo hasta el hover, donde
    apenas se insinúa un gris muy tenue para dar feedback de que es clickeable. */
 /* Barra superior: solo el botón de menú por ahora (sin el panel de chats

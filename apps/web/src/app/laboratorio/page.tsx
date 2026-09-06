@@ -1782,7 +1782,7 @@ export default function Laboratorio() {
   );
 
   return (
-    <main className="lab-paper">
+    <main className={`lab-paper${showChats ? " lab-paper--chats-open" : ""}`}>
       {/* Barra superior: antes tenía la flecha de "volver" (quitada el
           2026-08-29 para dejar la pantalla en blanco puro). Vuelve, con el
           icono cambiado por un menú hamburguesa que abre la lista de chats
