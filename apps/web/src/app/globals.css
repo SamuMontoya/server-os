@@ -1330,7 +1330,10 @@ html.lab-route body::after {
   color: #2f2e2c;
   font-size: 16px;
   font-weight: 600;
-  margin: 0;
+  /* Igual que `.lab-hello-title`: sin este margen, el difuminado del orbe
+     (que se sale de su propia caja) le pisa el borde superior a la letra —
+     por eso se veía "cortado" (pedido de Samu 2026-09-06, cierre 2). */
+  margin: 10px 0 0;
 }
 .lab-chats-empty-hint {
   color: #9b9a97;
