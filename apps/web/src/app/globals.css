@@ -1316,12 +1316,15 @@ html.lab-route body::after {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
+  gap: 2px;
+  /* Mismo truco que .lab-hello (chat vacío): margin auto en el eje vertical
+     centra el bloque dentro del contenedor flex, en vez de justify-content,
+     así el orbe+texto quedan a la misma altura visual que en un chat vacío
+     (pedido de Samu 2026-09-06: unificar el layout de ambas pantallas). */
   flex: 1;
-  min-height: 240px;
+  margin: auto 0;
   text-align: center;
-  padding: 24px 16px;
+  padding: 12px 0 28px;
 }
 .lab-chats-empty-title {
   color: #2f2e2c;

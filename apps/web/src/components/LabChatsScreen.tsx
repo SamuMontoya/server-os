@@ -215,30 +215,32 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
           "+" era duplicar los mismos dos controles en las mismas dos
           esquinas. El hueco de la barra lo reserva el padding-top de
           .lab-chats-screen. */}
-      <div className="lab-chats-orbe">
-        <OrbeIA tam="110px" ojos ariaLabel="OS" />
-      </div>
-
-      <div className="lab-chats-list">
-        {chats.length === 0 ? (
-          <div className="lab-chats-empty">
-            <p className="lab-chats-empty-title">Aún no hay chats aquí</p>
-            <p className="lab-chats-empty-hint">
-              Toca el <strong>+</strong> de arriba para empezar uno nuevo.
-            </p>
+      {chats.length === 0 ? (
+        <div className="lab-chats-empty">
+          <OrbeIA tam="132px" ojos ariaLabel="OS" />
+          <p className="lab-chats-empty-title">Aún no hay chats aquí</p>
+          <p className="lab-chats-empty-hint">
+            Toca el <strong>+</strong> de arriba para empezar uno nuevo.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="lab-chats-orbe">
+            <OrbeIA tam="132px" ojos ariaLabel="OS" />
           </div>
-        ) : (
-          chats.map((c) => (
-            <SwipeableCard
-              key={c.id}
-              chat={c}
-              active={c.id === activeId}
-              onOpen={() => onOpen(c.id)}
-              onSwipeLeft={() => onDelete(c.id)}
-            />
-          ))
-        )}
-      </div>
+          <div className="lab-chats-list">
+            {chats.map((c) => (
+              <SwipeableCard
+                key={c.id}
+                chat={c}
+                active={c.id === activeId}
+                onOpen={() => onOpen(c.id)}
+                onSwipeLeft={() => onDelete(c.id)}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
