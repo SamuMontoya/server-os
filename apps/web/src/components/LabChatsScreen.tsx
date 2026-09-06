@@ -18,10 +18,26 @@
  * componente es sordo a la persistencia y al motor de turnos, solo pinta
  * `chats` y dispara los callbacks. Así puede probarse solo con datos de
  * mentira si hace falta, y page.tsx no tiene que saber nada de gestos.
+ *
+ * Lista larga (pedido de Samu 2026-09-06): la lista ya crecía llenando el
+ * contenedor y scrolleando sin comprimir cada fila (`.lab-chats-list` tiene
+ * `flex:1; min-height:0; overflow-y:auto` y ninguna fila tiene flex-grow
+ * propio — eso ya venía de fábrica). Lo que faltaba: 1) paginar el RENDER
+ * cuando hay muchas filas, en vez de montar todas de una (scroll infinito,
+ * ver `CHATS_BATCH_SIZE` + IntersectionObserver más abajo), y 2) un buscador
+ * por título que solo aparece una vez que la lista de verdad desborda el
+ * contenedor y hace falta scrollear para encontrar algo.
  */
 
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { OrbeIA } from "@/components/orbe/OrbeIA";
+
+/** Cuántas filas se pintan por tanda. Con el tope real de chats (40 en
+ *  localStorage, 60 en el servidor — ver lab-persist.ts) casi nunca hace
+ *  falta una segunda tanda, pero si algún día sube el límite la lista no
+ *  monta cientos de filas de una: solo pinta de más cuando el "centinela"
+ *  del fondo entra en pantalla (ver scroll infinito, abajo). */
+const CHATS_BATCH_SIZE = 24;
 
 export interface LabChatSummary {
   id: string;
@@ -207,6 +223,67 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  const [query, setQuery] = useState("");
+  const [visibleCount, setVisibleCount] = useState(CHATS_BATCH_SIZE);
+  const [hasOverflow, setHasOverflow] = useState(false);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Buscar por título (pedido de Samu 2026-09-06): recorta la lista completa
+  // ANTES de paginar el render, así el scroll infinito de abajo pagina sobre
+  // los resultados de la búsqueda, no sobre todos los chats.
+  const filteredChats = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return chats;
+    return chats.filter((c) => c.title.toLowerCase().includes(q));
+  }, [chats, query]);
+
+  // Al cambiar de búsqueda se vuelve a la primera tanda y al tope de la
+  // lista — si no, un filtro nuevo podría heredar el scroll/tanda de la
+  // búsqueda anterior y arrancar mostrando de menos (o de más) resultados.
+  useEffect(() => {
+    setVisibleCount(CHATS_BATCH_SIZE);
+    listRef.current?.scrollTo({ top: 0 });
+  }, [query]);
+
+  const visibleChats = filteredChats.slice(0, visibleCount);
+  const hasMore = visibleCount < filteredChats.length;
+
+  // Scroll infinito: la lista nunca monta más de una tanda de filas de una —
+  // cuando el "centinela" invisible del fondo entra en pantalla, se pinta la
+  // siguiente. Con el tope real de chats (40-60, ver lab-persist.ts) casi
+  // nunca hace falta una segunda tanda, pero si algún día hay muchos más,
+  // esto evita meter cientos de nodos al DOM de una sola vez.
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = listRef.current;
+    if (!sentinel || !root || !hasMore) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((n) => Math.min(filteredChats.length, n + CHATS_BATCH_SIZE));
+        }
+      },
+      { root, rootMargin: "200px" },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasMore, filteredChats.length]);
+
+  // El buscador SOLO aparece cuando la lista de verdad desborda su
+  // contenedor y por lo tanto ya hace falta scrollear para llegar a un chat
+  // viejo (pedido de Samu 2026-09-06): con pocos chats, todos caben a la
+  // vista y un input de búsqueda sería puro ruido antes de esa raya de agua.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const check = () => setHasOverflow(el.scrollHeight > el.clientHeight + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [visibleChats.length, chats.length]);
+
   return (
     <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats">
       {/* SIN barra propia: el Navbar del Laboratorio queda por encima de esta
@@ -228,8 +305,19 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
           <div className="lab-chats-orbe">
             <OrbeIA tam="132px" ojos ariaLabel="OS" />
           </div>
-          <div className="lab-chats-list">
-            {chats.map((c) => (
+          {hasOverflow && (
+            <div className="lab-chats-search">
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Buscar chat por título…"
+                aria-label="Buscar chat por título"
+              />
+            </div>
+          )}
+          <div className="lab-chats-list" ref={listRef}>
+            {visibleChats.map((c) => (
               <SwipeableCard
                 key={c.id}
                 chat={c}
@@ -238,6 +326,12 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
                 onSwipeLeft={() => onDelete(c.id)}
               />
             ))}
+            {hasMore && <div ref={sentinelRef} className="lab-chats-sentinel" aria-hidden="true" />}
+            {query.trim() && filteredChats.length === 0 && (
+              <p className="lab-chats-empty-hint" style={{ padding: "16px 6px" }}>
+                Sin resultados para “{query.trim()}”.
+              </p>
+            )}
           </div>
         </>
       )}

@@ -1324,6 +1324,41 @@ html.lab-route body::after {
   overflow-y: auto;
   padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
+/* Buscador de chats por título (pedido de Samu 2026-09-06): SOLO se monta
+   cuando `.lab-chats-list` de verdad desborda su contenedor (`hasOverflow`
+   en LabChatsScreen.tsx) — con pocos chats todos caben a la vista y el input
+   sería puro ruido antes de esa raya de agua. Vive FUERA de `.lab-chats-list`
+   (es hermano, no hijo) para quedar siempre visible arriba mientras se
+   scrollea la lista, en vez de irse con el contenido. */
+.lab-chats-search {
+  flex-shrink: 0;
+  padding: 0 0 10px;
+}
+.lab-chats-search input {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  border-bottom: 1px solid rgba(55, 53, 47, 0.14);
+  background: transparent;
+  padding: 8px 2px;
+  font-size: 14px;
+  color: #37352f;
+  outline: none;
+  transition: border-color 0.15s ease-out;
+}
+.lab-chats-search input::placeholder {
+  color: #9b9a97;
+}
+.lab-chats-search input:focus {
+  border-bottom-color: #37352f;
+}
+/* Centinela invisible al fondo de la lista: cuando entra en el viewport del
+   scroll (IntersectionObserver en LabChatsScreen.tsx), se pinta la siguiente
+   tanda de filas (scroll infinito). 1px de alto para no dejar hueco visible
+   ni afectar el layout de las filas de encima. */
+.lab-chats-sentinel {
+  height: 1px;
+}
 .lab-chats-empty {
   display: flex;
   flex-direction: column;
