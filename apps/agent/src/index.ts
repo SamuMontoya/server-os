@@ -14,7 +14,6 @@ import { startSystemSampler } from "./system.js";
 import { registerJob } from "./jobs.js";
 import { reconcileRunningTasks } from "./tasks/store.js";
 import { reconcileChatTurns } from "./chat-turn-checkpoints.js";
-import { relojRapido } from "./watch/rapido.js";
 import { registerChatRoutes } from "./routes/chat.js";
 import { registerWatchRoutes } from "./routes/watch.js";
 import { registerTasksRoutes } from "./routes/tasks.js";
@@ -186,8 +185,3 @@ serve({ fetch: app.fetch, port: env.PORT, hostname }, (info) => {
     ),
   );
 });
-
-// El proceso del CLI del reloj se levanta AL ARRANCAR, no en la primera
-// pregunta: así el primer dictado del día ya lo encuentra caliente en vez de
-// pagar los ~5 s de arranque justo cuando alguien está mirando la muñeca.
-relojRapido.calentar();

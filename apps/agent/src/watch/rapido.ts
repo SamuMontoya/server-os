@@ -1,28 +1,36 @@
 /**
- * Canal RÁPIDO del reloj: una sesión persistente del Agent SDK.
+ * Canal RÁPIDO del reloj: llamada DIRECTA a la API de Anthropic, sin el CLI.
  *
- * POR QUÉ EXISTE
- * Un turno normal tarda ~5 s en decir la primera palabra, y medido resulta que
- * casi todo es arrancar el proceso del CLI del SDK — no el modelo (cambiar
- * sonnet por haiku movió la aguja 0,4 s) ni el prompt. En una muñeca eso se
- * lee como una app colgada.
+ * POR QUÉ EXISTE (y por qué ya NO usa el Agent SDK)
+ * Un turno normal tarda ~5 s en decir la primera palabra, y casi todo es
+ * arrancar el proceso del CLI del SDK, no el modelo. La primera versión de
+ * este canal resolvía eso con una sesión PERSISTENTE del SDK (el proceso
+ * quedaba vivo, se pagaba el arranque una sola vez). Funcionaba: ~1 s de
+ * ttft en vez de ~5 s.
  *
- * Aquí el proceso queda VIVO: se paga el arranque una sola vez (warm-up) y
- * cada pregunta cuesta solo lo que tarde el modelo en hablar. Es el mismo
- * patrón que ya usa el copiloto de juntas (meetings/live-copilot.ts), que
- * nació del mismo problema.
+ * Medido después: ese ~1 s todavía tenía ~350-450 ms de overhead propio del
+ * CLI (serializar cada pregunta a stdin, que el CLI llame a la API, que
+ * serialice la respuesta de vuelta por stdout, que este proceso la parsee).
+ * Confirmado comparando el `ttft_ms` que reportaba el SDK contra una llamada
+ * cruda a `api.anthropic.com` con el mismo modelo/prompt: la llamada cruda
+ * bajaba a ~600-700 ms consistentemente.
  *
- * DOS VELOCIDADES
- * Esta sesión va SIN TOOLS a propósito: las tools obligan a round-trips y a
- * un prompt de sistema grande, que es justo lo que se quiere evitar. Cuando la
- * pregunta necesita mirar el sistema de verdad, el modelo responde con el
- * centinela CONSULTAR y quien llama escala a un turno completo (con tools y
- * sus pasos). Así la charla es instantánea y solo se paga el camino lento
- * cuando hace falta de verdad.
+ * Este canal no necesita NADA de lo que paga ese overhead — sin tools, sin
+ * lectura de archivos, sin permisos, sin orquestación — así que se salta el
+ * CLI entero y llama a `/v1/messages` directo, con el mismo token OAuth que
+ * ya usa `budget.ts` para leer el consumo. El historial de la charla (antes
+ * lo llevaba el proceso vivo del SDK) ahora se lleva a mano, acotado para no
+ * crecer sin límite.
+ *
+ * DOS VELOCIDADES (sin cambios de comportamiento)
+ * Esta sesión va SIN TOOLS a propósito. Cuando la pregunta necesita mirar el
+ * sistema de verdad, el modelo responde con el centinela CONSULTAR y quien
+ * llama escala a un turno completo (con tools y sus pasos, vía chat-turns.ts
+ * — ESE sí necesita el CLI/Agent SDK completo).
  */
 
-import { query, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import { env } from "../env.js";
+import "../env.js";
+import { readToken } from "../agent/budget.js";
 import { OWNER } from "../owner.js";
 
 /** El modelo responde EXACTAMENTE esto cuando la pregunta necesita el sistema. */
@@ -94,187 +102,152 @@ punto.`;
  */
 const CENTINELAS = [CENTINELA, CENTINELA_IMAGEN, "IDEA:", "OTRA"];
 
-interface Pendiente {
-  prompt: string;
-  onDelta: (t: string) => void;
-  resolver: (texto: string) => void;
-  buf: string;
-  entregado: boolean;
-  silencioso: boolean;
-}
+/** IDs completos, no alias del CLI: la API cruda no resuelve "haiku". */
+const MODELO = process.env.WATCH_MODEL || "claude-haiku-4-5-20251001";
+
+/** Tope del historial que se manda en cada llamada (mensajes, no turnos). */
+const HISTORIAL_MAX = 24;
+
+type Mensaje = { role: "user" | "assistant"; content: string };
 
 class SesionRapida {
-  private q: Query | null = null;
-  private cola: Pendiente[] = [];
-  /** Turnos ya entregados al SDK, en orden: la correlación es FIFO estricta. */
-  private vivos: Pendiente[] = [];
-  private despertar: (() => void) | null = null;
-  /** Cuántos turnos lleva la sesión ACTUAL — se reinicia en cada `asegurar()` nueva. */
+  private historial: Mensaje[] = [];
+  /** Cuántos turnos van en lo que llevamos — sube con cada respuesta. */
   private turnos = 0;
-  private cerrada = false;
-  /**
-   * Notas de `anotar()` sin entregar todavía. Se acumulan en memoria — CERO
-   * viajes al modelo — y se pegan delante de la siguiente `preguntar()` real.
-   */
+  /** Notas de `anotar()` sin entregar: se pegan delante de la próxima pregunta. */
   private notas: string[] = [];
-
-  /** Arranca el proceso y paga el coste una vez, antes de la primera pregunta real. */
-  calentar(): void {
-    this.asegurar();
-    this.encolar({ prompt: "Responde únicamente: OK", silencioso: true });
-  }
+  /**
+   * Mutex simple: sin proceso propio que serialice, dos `preguntar()`
+   * concurrentes (dos pestañas, un doble tap) podrían leer/escribir
+   * `historial` en cualquier orden. Encadenar por esta promesa basta —
+   * ya no hace falta la cola FIFO con correlación por turno de la versión
+   * con el SDK, porque cada llamada es un request HTTP autocontenido.
+   */
+  private cadena: Promise<unknown> = Promise.resolve();
 
   /**
-   * Le cuenta a la sesión rápida algo que pasó FUERA de ella.
-   *
-   * Cuando un turno escalado responde, esa respuesta no existe para la sesión
-   * rápida: es otro proceso. Sin esto, preguntar "¿y eso por qué?" justo
-   * después de una consulta escalada recibiría un "¿a qué te refieres?", que
-   * en una conversación de muñeca se siente roto.
-   *
-   * ANTES esto encolaba un turno silencioso propio — que igual le costaba un
-   * viaje completo al modelo (generar el "OK" y esperar su `result`) solo para
-   * tirar la respuesta. Medido en producción: si la siguiente pregunta real
-   * llegaba antes de que ese "OK" cerrara, se quedaba en cola DETRÁS de un
-   * viaje entero desperdiciado. Ahora la nota solo se guarda en memoria y se
-   * pega delante del texto de la próxima `preguntar()` real — el modelo la ve
-   * igual (y en el mismo orden), pero sin gastar un turno propio en sacarla.
+   * Ya no hay proceso que arrancar en frío: cada pregunta es un POST directo,
+   * sin subproceso de por medio. Se deja el método (index.ts lo llama al
+   * arrancar) para no tocar ese call site por algo que ya no hace nada.
+   */
+  calentar(): void {}
+
+  /**
+   * Le cuenta a la sesión rápida algo que pasó FUERA de ella (una idea
+   * guardada, una escalada que terminó) para que la próxima pregunta real
+   * tenga ese contexto. Solo se guarda en memoria — cero llamadas al modelo
+   * — y se pega delante del PRÓXIMO prompt real en `preguntar()`.
    */
   anotar(resumen: string): void {
     this.notas.push(resumen);
   }
 
   preguntar(prompt: string, onDelta: (t: string) => void): Promise<string> {
-    this.asegurar();
     const conNotas = this.notas.length
       ? `${this.notas.map((n) => `[contexto: ${n}]`).join("\n")}\n\n${prompt}`
       : prompt;
     this.notas = [];
-    return new Promise((resolver) => {
-      this.encolar({ prompt: conNotas, onDelta, resolver });
-    });
+    const tarea = this.cadena.then(() => this.llamar(conNotas, onDelta));
+    // No propagar el rechazo de ESTA llamada a la siguiente en la cadena.
+    this.cadena = tarea.then(
+      () => undefined,
+      () => undefined,
+    );
+    return tarea;
   }
 
-  private encolar(p: {
-    prompt: string;
-    onDelta?: (t: string) => void;
-    resolver?: (t: string) => void;
-    silencioso?: boolean;
-  }): void {
-    this.cola.push({
-      prompt: p.prompt,
-      onDelta: p.onDelta ?? (() => {}),
-      resolver: p.resolver ?? (() => {}),
-      buf: "",
-      entregado: false,
-      silencioso: p.silencioso ?? false,
-    });
-    this.despertar?.();
-  }
-
-  private asegurar(): void {
-    if (this.q || this.cerrada) return;
-    this.turnos = 0;
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
-    async function* entrada(): AsyncGenerator<SDKUserMessage> {
-      while (!self.cerrada) {
-        const p = self.cola.shift();
-        if (p) {
-          self.vivos.push(p);
-          yield {
-            type: "user",
-            message: { role: "user", content: p.prompt },
-            parent_tool_use_id: null,
-          } as SDKUserMessage;
-          continue;
-        }
-        await new Promise<void>((r) => {
-          self.despertar = r;
-        });
-        self.despertar = null;
-      }
+  private async llamar(prompt: string, onDelta: (t: string) => void): Promise<string> {
+    const t0 = Date.now();
+    const token = await readToken();
+    if (!token) {
+      const msg = "No tengo credenciales para responder ahora mismo.";
+      onDelta(msg);
+      return msg;
     }
 
-    this.q = query({
-      prompt: entrada(),
-      options: {
-        cwd: env.VAULT_PATH || process.cwd(),
-        systemPrompt: SISTEMA,
-        // Configurable para poder MEDIR el cambio, no suponerlo: con el
-        // proceso ya vivo el tiempo hasta la primera palabra es casi todo del
-        // modelo, así que aquí sí se nota cuál se use.
-        model: process.env.WATCH_MODEL || "haiku",
-        includePartialMessages: true,
-        // Aquí manda el tiempo hasta la primera palabra: el razonamiento
-        // previo lo estropea y para una frase corta no aporta nada.
-        thinking: { type: "disabled" },
-        maxTurns: 1000, // la sesión vive todo lo que viva el proceso
-        settingSources: [],
-        tools: [], // sin tools: texto plano directo, sin round-trips
-        permissionMode: "default",
-      },
-    });
-    void this.consumir(this.q);
-  }
+    const mensajes: Mensaje[] = [...this.historial, { role: "user", content: prompt }];
 
-  private async consumir(q: Query): Promise<void> {
+    let res: Response;
     try {
-      for await (const msg of q) {
-        if (this.cerrada) break;
+      res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "anthropic-beta": "oauth-2025-04-20",
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: MODELO,
+          max_tokens: 300,
+          stream: true,
+          system: SISTEMA,
+          messages: mensajes,
+        }),
+      });
+    } catch (err) {
+      console.error("[reloj] llamada falló:", err);
+      const msg = "Algo falló de mi lado, intenta de nuevo.";
+      onDelta(msg);
+      return msg;
+    }
 
-        if (msg.type === "stream_event") {
-          const ev = msg.event as { type?: string; delta?: { type?: string; text?: string } };
-          if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta" && ev.delta.text) {
-            const actual = this.vivos[0];
-            if (actual) {
-              actual.buf += ev.delta.text;
-              // El centinela no se streamea: si la respuesta empieza por él,
-              // el reloj no debe ver aparecer la palabra CONSULTAR en pantalla.
-              // NINGÚN centinela se streamea: si la respuesta empieza por uno,
-              // esas palabras no deben aparecer en la muñeca. La lista va en
-              // una constante porque olvidarse de añadir aquí un centinela
-              // nuevo lo filtra a la pantalla — ya pasó con IDEA:.
-              const parcial = actual.buf.trim()
-              const esCentinela = CENTINELAS.some(
-                (c) => c.startsWith(parcial) || parcial.startsWith(c),
-              )
-              if (!esCentinela && !actual.silencioso) {
-                actual.onDelta(ev.delta.text);
-              }
-            }
+    if (!res.ok || !res.body) {
+      const cuerpo = await res.text?.().catch(() => "");
+      console.error(`[reloj] llamada falló: ${res.status} ${cuerpo ?? ""}`);
+      const msg = "Algo falló de mi lado, intenta de nuevo.";
+      onDelta(msg);
+      return msg;
+    }
+
+    let buf = "";
+    let acumulado = "";
+    let primerDeltaEn: number | null = null;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        // Los eventos SSE vienen separados por una línea en blanco.
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const bloque = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const dataLine = bloque.split("\n").find((l) => l.startsWith("data:"));
+          if (!dataLine) continue;
+          let evento: { type?: string; delta?: { type?: string; text?: string } };
+          try {
+            evento = JSON.parse(dataLine.slice(5).trim());
+          } catch {
+            continue;
           }
-        } else if (msg.type === "result") {
-          // El `result` CIERRA el turno más viejo, incluso si vino sin
-          // mensaje del asistente (interrumpido). Sin esto la correlación
-          // FIFO se desalinea y cada respuesta sale contestando a la
-          // pregunta anterior.
-          const p = this.vivos.shift();
-          if (p && !p.entregado) {
-            p.entregado = true;
-            p.resolver(p.buf.trim());
-          }
-          const r = msg as { ttft_ms?: number; duration_ms?: number };
-          if (r.ttft_ms != null) {
-            this.turnos += 1;
-            // `turno=N` es a propósito: la sesión vive todo lo que viva el
-            // proceso y su historial solo crece — sin saber CUÁN profundo va
-            // un turno no se puede distinguir "esto es lento siempre" de
-            // "esto se pone lento porque la sesión ya acumuló 40 idas y
-            // vueltas". Sin este número, esa pregunta no tiene respuesta.
-            console.log(`[reloj] ttft=${r.ttft_ms}ms total=${r.duration_ms ?? "?"}ms turno=${this.turnos}`);
+          if (evento.type === "content_block_delta" && evento.delta?.type === "text_delta" && evento.delta.text) {
+            if (primerDeltaEn == null) primerDeltaEn = Date.now();
+            acumulado += evento.delta.text;
+            const parcial = acumulado.trim();
+            // Ningún centinela se streamea: si la respuesta empieza por uno,
+            // esas palabras no deben aparecer en la muñeca.
+            const esCentinela = CENTINELAS.some((c) => c.startsWith(parcial) || parcial.startsWith(c));
+            if (!esCentinela) onDelta(evento.delta.text);
           }
         }
       }
     } catch (err) {
-      console.error("[reloj] sesión caída:", err);
-    } finally {
-      // Que se caiga no puede dejar peticiones colgadas para siempre.
-      for (const p of this.vivos) if (!p.entregado) { p.entregado = true; p.resolver(p.buf.trim()); }
-      this.vivos = [];
-      this.q = null;
-      // La siguiente pregunta reconstruye la sesión (y paga el arranque otra vez).
+      console.error("[reloj] stream cortado:", err);
     }
+
+    const texto = acumulado.trim();
+    this.historial.push({ role: "user", content: prompt }, { role: "assistant", content: texto });
+    if (this.historial.length > HISTORIAL_MAX) this.historial = this.historial.slice(-HISTORIAL_MAX);
+
+    this.turnos += 1;
+    const total = Date.now() - t0;
+    const ttft = primerDeltaEn != null ? primerDeltaEn - t0 : null;
+    console.log(`[reloj] ttft=${ttft ?? "?"}ms total=${total}ms turno=${this.turnos}`);
+
+    return texto;
   }
 }
 

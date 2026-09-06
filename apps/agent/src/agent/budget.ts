@@ -74,7 +74,7 @@ function thresholdCritico(): number {
   return Number.isFinite(n) && n > 0 && n <= 100 ? n : DEFAULT_THRESHOLD_CRITICO;
 }
 
-async function readToken(): Promise<string | null> {
+export async function readToken(): Promise<string | null> {
   // Override explícito, si alguien quiere aislar este lector.
   const fromEnv = (process.env.CLAUDE_OAUTH_TOKEN || "").trim();
   if (fromEnv) return fromEnv;
