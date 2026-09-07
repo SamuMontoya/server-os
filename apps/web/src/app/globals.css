@@ -1543,6 +1543,34 @@ html.lab-route body::after {
 .lab-chatcard--active .lab-chatcard-title {
   color: #1f1e1b;
 }
+/* ── Avatar líder de la fila ──────────────────────────────────────────────
+   Pedido de Samu 2026-09-07: antes había DOS señales de "corriendo" (un
+   punto verde pegado al título + el orbe en la línea del subtítulo) que
+   decían lo mismo dos veces. Ahora es UNA sola marca, a la izquierda de
+   TODO el bloque de texto (título arriba, subtítulo abajo) — como el avatar
+   de una fila de chat cualquiera. Mientras el turno está trabajando
+   (`chat.running`), el avatar es el orbe animado (sin ojos: aquí no "mira",
+   solo late); en cualquier otro estado — terminó bien, terminó con error, o
+   simplemente está en reposo — es un punto plano gris claro, sin animación,
+   porque no hay nada que señalar. `.lab-chatcard` ya tenía `align-items:
+   center` y `gap:12px` (del alto fijo por fila, ver `.lab-chatcard-wrap`),
+   así que el avatar solo necesita su propio tamaño fijo. */
+.lab-chatcard-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lab-chatcard-avatar-dot {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  /* Mismo gris translúcido que ya usa el resto de la card (bordes, glow de
+     foco del buscador) — no un color nuevo, solo un relleno neutro. */
+  background: rgba(55, 53, 47, 0.08);
+}
 .lab-chatcard-main {
   display: flex;
   flex-direction: column;
@@ -1550,9 +1578,8 @@ html.lab-route body::after {
   min-width: 0;
   flex: 1;
 }
-/* Fila superior: punto verde (si corre) + título + tiempo al extremo derecho.
-   El punto va pegado al título, no suelto al otro extremo — así "está
-   corriendo" se lee junto al nombre.
+/* Fila superior: título + tiempo al extremo derecho. Ya no lleva el punto
+   verde de "corriendo" (se mudó al avatar de la izquierda, ver arriba).
    `align-items: baseline` (no `center`): el tiempo es más pequeño que el
    título, y centrarlos por caja los dejaría con las letras a distinta altura,
    que es exactamente el desalineado que Samu señaló. Con baseline las dos
@@ -1593,22 +1620,11 @@ html.lab-route body::after {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* ── Indicador de un chat TRABAJANDO en la lista ──────────────────────────
-   Ya no hay punto verde junto al título (duplicaba la señal): el pulso de
-   actividad es el orbe (sin ojos — aquí no "mira", solo late) a 14px, en la
-   MISMA línea que el texto del segundo renglón, que nunca queda vacío
-   mientras corre (ver JSX: cae a "Pensando…" si `chat.preview` no tiene nada
-   todavía). */
-.lab-chatcard-preview--live {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.lab-chatcard-preview-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* El indicador de "trabajando" ya no vive aquí: es el avatar de la
+   izquierda (ver `.lab-chatcard-avatar`). Este segundo renglón sigue SIEMPRE
+   poblado mientras corre (cae a "Pensando…" si `chat.preview` no tiene nada
+   todavía, ver JSX), pero es solo texto — el avatar ya dice "esto sigue
+   vivo". */
 /* Barra de input al pie del Laboratorio. Ya NO es `fixed` con un `bottom`
    calculado a mano: es el último hijo del papel con `margin-top: auto`, así
    que se pega al borde inferior de lo que el papel mida en cada momento.

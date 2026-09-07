@@ -172,6 +172,20 @@ function SwipeableCard({
           }
         }}
       >
+        {/* Avatar líder (pedido de Samu 2026-09-07): el orbe animado mientras
+            el turno está TRABAJANDO, un punto plano gris claro en cualquier
+            otro estado (terminó bien, terminó con error, o está en reposo).
+            Antes había dos señales de "corriendo" en la fila (punto verde +
+            orbe junto al subtítulo); ahora es una sola, a la izquierda de
+            todo el bloque de texto — ver `.lab-chatcard-avatar` en
+            globals.css. */}
+        <div className="lab-chatcard-avatar">
+          {chat.running ? (
+            <OrbeIA tam="32px" ojos={false} ariaLabel="Trabajando" />
+          ) : (
+            <span className="lab-chatcard-avatar-dot" aria-hidden="true" />
+          )}
+        </div>
         <div className="lab-chatcard-main">
           {/* Título y "Hace 10 min" van en la MISMA fila (no en una columna
               lateral aparte) porque Samu pidió que el tiempo quede alineado
@@ -182,25 +196,21 @@ function SwipeableCard({
             <span className="lab-chatcard-title">{chat.title}</span>
             <span className="lab-chatcard-when">{formatWhen(chat.updatedAt)}</span>
           </div>
-          {/* Segundo renglón: SIEMPRE poblado. El punto verde de "corriendo"
-              se quita de arriba (duplicaba la señal) y el orbe sin ojos se
-              muda acá, junto al texto — así nunca queda vacío: o es lo
-              último que escribió Samu (mientras espera respuesta) o el
-              arranque de lo que va escribiendo el modelo, `chat.preview`
-              (ver derivePreview en laboratorio/page.tsx, que cae al último
-              mensaje del usuario si el asistente aún no contestó). Mientras
-              `running` se fuerza el "…" al final para dejar claro que sigue
-              en marcha, sin duplicarlo si `chat.preview` ya lo trae. */}
+          {/* Segundo renglón: SIEMPRE poblado mientras corre — cae a
+              "Pensando…" si `chat.preview` no tiene nada todavía (ver
+              derivePreview en laboratorio/page.tsx, que cae al último
+              mensaje del usuario si el asistente aún no contestó), o se le
+              fuerza el "…" al final para dejar claro que sigue en marcha,
+              sin duplicarlo si `chat.preview` ya lo trae. El AVATAR de
+              arriba ya dice "esto sigue vivo": este texto solo aporta el
+              contenido, ya no lleva el orbe embebido. */}
           {chat.running ? (
-            <span className="lab-chatcard-preview lab-chatcard-preview--live">
-              <OrbeIA tam="14px" ojos={false} ariaLabel="" />
-              <span className="lab-chatcard-preview-text">
-                {chat.preview
-                  ? chat.preview.endsWith("…")
-                    ? chat.preview
-                    : `${chat.preview}…`
-                  : "Pensando…"}
-              </span>
+            <span className="lab-chatcard-preview">
+              {chat.preview
+                ? chat.preview.endsWith("…")
+                  ? chat.preview
+                  : `${chat.preview}…`
+                : "Pensando…"}
             </span>
           ) : chat.preview ? (
             <span className="lab-chatcard-preview">{chat.preview}</span>
