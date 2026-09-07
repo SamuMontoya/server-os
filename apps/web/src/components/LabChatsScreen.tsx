@@ -274,7 +274,18 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
   // contenedor y por lo tanto ya hace falta scrollear para llegar a un chat
   // viejo (pedido de Samu 2026-09-06): con pocos chats, todos caben a la
   // vista y un input de búsqueda sería puro ruido antes de esa raya de agua.
+  //
+  // OJO (pedido de Samu 2026-09-06, segunda ronda): el chequeo se congela
+  // mientras `query` tiene texto. Antes dependía de `visibleChats.length`,
+  // que es la lista YA FILTRADA — en cuanto escribías algo que recortaba los
+  // resultados por debajo del alto del contenedor, `hasOverflow` pasaba a
+  // false y el propio input de búsqueda se desmontaba solo mientras el
+  // usuario seguía escribiendo en él. La pregunta "¿hace falta buscador?"
+  // solo tiene sentido sobre la lista COMPLETA (sin filtrar): si ya se
+  // decidió que sí hace falta, debe seguir ahí durante toda la búsqueda,
+  // sin importar cuántos resultados vayan quedando.
   useEffect(() => {
+    if (query.trim()) return;
     const el = listRef.current;
     if (!el) return;
     const check = () => setHasOverflow(el.scrollHeight > el.clientHeight + 1);
@@ -282,7 +293,7 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
     const ro = new ResizeObserver(check);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [visibleChats.length, chats.length]);
+  }, [visibleChats.length, chats.length, query]);
 
   return (
     <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats">

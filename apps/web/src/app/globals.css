@@ -1344,7 +1344,11 @@ html.lab-route body::after {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  /* Más aire al fondo (pedido de Samu 2026-09-06): con 16px la última fila
+     quedaba pegada al borde inferior de la pantalla, sin respiro tras
+     scrollear hasta el final — mismo problema que ya se resolvió en la
+     lista de mensajes del chat, solo que acá no había caído. */
+  padding-bottom: max(28px, calc(20px + env(safe-area-inset-bottom)));
 }
 /* Buscador de chats por título (pedido de Samu 2026-09-06): SOLO se monta
    cuando `.lab-chats-list` de verdad desborda su contenedor (`hasOverflow`
@@ -1359,20 +1363,31 @@ html.lab-route body::after {
 .lab-chats-search input {
   width: 100%;
   box-sizing: border-box;
-  border: none;
-  border-bottom: 1px solid rgba(55, 53, 47, 0.14);
+  /* Borde COMPLETO y redondeado (pedido de Samu 2026-09-06; antes solo tenía
+     `border-bottom`, línea suelta sin caja) — mismo lenguaje que
+     `.lab-composer` (borde entero + glow suave al foco), no el subrayado
+     que usan las filas de la lista de abajo. */
+  border: 1px solid rgba(55, 53, 47, 0.16);
+  border-radius: 10px;
   background: transparent;
-  padding: 8px 2px;
+  /* Más padding (pedido de Samu: "un poco más de margen" adentro del input)
+     — con 8px 2px de antes el texto casi tocaba el borde vertical; ahora que
+     el borde rodea toda la caja (no solo abajo) hace falta más aire interno
+     a los lados para que no se sienta apretado. */
+  padding: 10px 14px;
   font-size: 14px;
   color: #37352f;
   outline: none;
-  transition: border-color 0.15s ease-out;
+  transition:
+    border-color 0.15s ease-out,
+    box-shadow 0.15s ease-out;
 }
 .lab-chats-search input::placeholder {
   color: #9b9a97;
 }
 .lab-chats-search input:focus {
-  border-bottom-color: #37352f;
+  border-color: #37352f;
+  box-shadow: 0 0 0 3px rgba(55, 53, 47, 0.06);
 }
 /* Centinela invisible al fondo de la lista: cuando entra en el viewport del
    scroll (IntersectionObserver en LabChatsScreen.tsx), se pinta la siguiente
@@ -2333,7 +2348,8 @@ html.lab-route.lab-kb .lab-inputbar {
 @media (max-width: 768px) {
   .lab-textarea,
   .chat-textarea,
-  .lab-topbar-rename {
+  .lab-topbar-rename,
+  .lab-chats-search input {
     font-size: 16px;
   }
   /* Subir la fuente a 16px sin tocar el line-height rompe la cuenta de arriba:
