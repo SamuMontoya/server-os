@@ -156,7 +156,9 @@ function SwipeableCard({
         <span>✕ Eliminar</span>
       </div>
       <div
-        className={`lab-chatcard ${active ? "lab-chatcard--active" : ""}`}
+        className={`lab-chatcard ${active ? "lab-chatcard--active" : ""} ${
+          !chat.running ? "lab-chatcard--idle" : ""
+        }`}
         style={{ transform: `translateX(${dragX}px)` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -172,20 +174,18 @@ function SwipeableCard({
           }
         }}
       >
-        {/* Avatar líder (pedido de Samu 2026-09-07): el orbe animado mientras
-            el turno está TRABAJANDO, un punto plano gris claro en cualquier
-            otro estado (terminó bien, terminó con error, o está en reposo).
-            Antes había dos señales de "corriendo" en la fila (punto verde +
-            orbe junto al subtítulo); ahora es una sola, a la izquierda de
-            todo el bloque de texto — ver `.lab-chatcard-avatar` en
-            globals.css. */}
-        <div className="lab-chatcard-avatar">
-          {chat.running ? (
+        {/* Avatar líder (pedido de Samu 2026-09-07, corregido en la misma
+            fecha): SOLO existe mientras el turno está TRABAJANDO — el orbe
+            animado. En cualquier otro estado (terminó bien, terminó con
+            error, o está en reposo) NO hay avatar ni punto de ningún tipo:
+            la señal pasa a ser el fondo gris claro de la fila entera
+            (`.lab-chatcard--idle`, ver globals.css) y el contenido vuelve a
+            ser solo título + descripción, sin nada más a la izquierda. */}
+        {chat.running && (
+          <div className="lab-chatcard-avatar">
             <OrbeIA tam="32px" ojos={false} ariaLabel="Trabajando" />
-          ) : (
-            <span className="lab-chatcard-avatar-dot" aria-hidden="true" />
-          )}
-        </div>
+          </div>
+        )}
         <div className="lab-chatcard-main">
           {/* Título y "Hace 10 min" van en la MISMA fila (no en una columna
               lateral aparte) porque Samu pidió que el tiempo quede alineado

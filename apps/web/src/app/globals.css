@@ -1543,18 +1543,29 @@ html.lab-route body::after {
 .lab-chatcard--active .lab-chatcard-title {
   color: #1f1e1b;
 }
+/* Fila en reposo (pedido de Samu 2026-09-07, corrigiendo el intento
+   anterior con un punto gris): mientras el chat NO está trabajando —
+   terminó bien, terminó con error, o simplemente nunca corrió — la fila
+   entera se tiñe de un gris claro plano. Nada de iconos ni puntos: la
+   señal es el fondo de la card, y el contenido vuelve a ser solo título +
+   descripción. Va DESPUÉS de `.lab-chatcard--active` a propósito: si el
+   chat abierto también está en reposo (el caso normal, la mayoría del
+   tiempo), este fondo debe ganar sobre el `transparent` de arriba — misma
+   especificidad, gana el que aparece último. */
+.lab-chatcard--idle {
+  background: rgba(55, 53, 47, 0.05);
+}
 /* ── Avatar líder de la fila ──────────────────────────────────────────────
    Pedido de Samu 2026-09-07: antes había DOS señales de "corriendo" (un
    punto verde pegado al título + el orbe en la línea del subtítulo) que
-   decían lo mismo dos veces. Ahora es UNA sola marca, a la izquierda de
-   TODO el bloque de texto (título arriba, subtítulo abajo) — como el avatar
-   de una fila de chat cualquiera. Mientras el turno está trabajando
-   (`chat.running`), el avatar es el orbe animado (sin ojos: aquí no "mira",
-   solo late); en cualquier otro estado — terminó bien, terminó con error, o
-   simplemente está en reposo — es un punto plano gris claro, sin animación,
-   porque no hay nada que señalar. `.lab-chatcard` ya tenía `align-items:
-   center` y `gap:12px` (del alto fijo por fila, ver `.lab-chatcard-wrap`),
-   así que el avatar solo necesita su propio tamaño fijo. */
+   decían lo mismo dos veces. Ahora es UNA sola marca, y SOLO existe
+   mientras el turno está trabajando (`chat.running`): el orbe animado (sin
+   ojos: aquí no "mira", solo late), a la izquierda de TODO el bloque de
+   texto (título arriba, subtítulo abajo). En reposo no se monta nada aquí
+   (ver `.lab-chatcard--idle` arriba, esa es la señal). `.lab-chatcard` ya
+   tenía `align-items:center` y `gap:12px` (del alto fijo por fila, ver
+   `.lab-chatcard-wrap`), así que el avatar solo necesita su propio tamaño
+   fijo. */
 .lab-chatcard-avatar {
   flex-shrink: 0;
   width: 32px;
@@ -1562,14 +1573,6 @@ html.lab-route body::after {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.lab-chatcard-avatar-dot {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  /* Mismo gris translúcido que ya usa el resto de la card (bordes, glow de
-     foco del buscador) — no un color nuevo, solo un relleno neutro. */
-  background: rgba(55, 53, 47, 0.08);
 }
 .lab-chatcard-main {
   display: flex;
