@@ -1315,18 +1315,17 @@ html.lab-route body::after {
   padding: calc(max(16px, calc(env(safe-area-inset-top) + 10px)) + 34px + 6px) 20px 0 20px;
   /* La pantalla misma NO scrollea: solo `.lab-chats-list` (abajo) lo hace. */
   overflow: hidden;
-  /* Compensa el alto de `.lab-inputbar`, que en ESTA pantalla no existe (no
-     hay composer en la lista de chats). Sin este padding-bottom, el orbe de
-     `.lab-chats-empty` se centra en TODO el alto disponible y queda más abajo
-     que el de `.lab-hello` (que se centra en `.lab-messages`, ya encogido por
-     el composer debajo) — al abrir/cerrar la lista el orbe pegaba un salto.
-     Mismo truco que el comentario de arriba: valores repetidos a mano porque
-     estas capas son hermanas y no pueden medirse entre sí. El número imita el
-     alto real de `.lab-inputbar`: su padding-top (14px) + el composer (2px de
-     borde + 24px de padding + la fila de controles de 28px) + su padding-bottom
-     (max(8px, 22px + safe-area-inset-bottom - 21px del pie de estado)).
-     (pedido de Samu 2026-09-06: que no se note el movimiento del orbe). */
-  padding-bottom: calc(14px + 54px + max(8px, calc(1px + env(safe-area-inset-bottom))));
+  /* SIN padding-bottom aquí (pedido de Samu 2026-09-07: "ese espacio se está
+     perdiendo"). Antes había un padding-bottom fijo (~103px, ver historial)
+     que compensaba el alto de `.lab-inputbar` para centrar el orbe de
+     `.lab-chats-empty` — pero vivía en `.lab-chats-screen`, el contenedor
+     COMÚN a las dos ramas (vacía Y con chats), así que ese hueco se
+     descontaba también cuando SÍ había chats: `.lab-chats-list` (flex:1)
+     tenía ~103px menos de los que en verdad le sobraban, y esa franja se
+     veía como espacio muerto al fondo de la lista — la última fila cortada
+     a la mitad y debajo, nada. La compensación del composer SOLO tiene
+     sentido para centrar el orbe vacío; se mueve a `.lab-chats-empty`
+     (ver más abajo), que es la única rama que la necesita. */
 }
 .lab-chats-orbe {
   display: flex;
@@ -1416,7 +1415,17 @@ html.lab-route body::after {
      seguía sin quedar centrado en la pantalla). */
   margin: auto 0;
   text-align: center;
-  padding: 12px 0 28px;
+  /* El padding-bottom extra (antes vivía en `.lab-chats-screen`, ver ese
+     comentario) compensa el alto de `.lab-inputbar` — que esta pantalla no
+     tiene — para que el orbe centre igual que en `.lab-hello` (que sí se
+     centra ya encogido por el composer debajo). Solo esta rama (la vacía)
+     lo necesita: con chats, `.lab-chats-empty` ni se monta, así que
+     `.lab-chats-list` no paga ese impuesto. Número igual al de antes: el
+     alto real de `.lab-inputbar` (padding-top 14px + composer de 2px borde +
+     24px padding + fila de controles 28px + su padding-bottom
+     max(8px, 22px + safe-area-inset-bottom - 21px del pie de estado)). */
+  padding: 12px 0
+    calc(28px + 14px + 54px + max(8px, calc(1px + env(safe-area-inset-bottom))));
 }
 .lab-chats-empty-title {
   color: #2f2e2c;
