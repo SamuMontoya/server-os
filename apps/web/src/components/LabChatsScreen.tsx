@@ -48,6 +48,11 @@ export interface LabChatSummary {
   updatedAt: number;
   /** true = tenía (o tiene) un turno corriendo la última vez que se supo. */
   running: boolean;
+  /** true = tiene actividad más nueva que la última vez que Samu lo abrió
+   *  (ver `seenAt` en lab-persist.ts) — pinta la fila con fondo gris claro.
+   *  El chat activo (el que está abierto ahora) nunca llega en true: ver
+   *  `listChatsForProject` en laboratorio/page.tsx. */
+  unread: boolean;
 }
 
 interface Props {
@@ -157,7 +162,7 @@ function SwipeableCard({
       </div>
       <div
         className={`lab-chatcard ${active ? "lab-chatcard--active" : ""} ${
-          !chat.running ? "lab-chatcard--idle" : ""
+          chat.unread ? "lab-chatcard--idle" : ""
         }`}
         style={{ transform: `translateX(${dragX}px)` }}
         onPointerDown={onPointerDown}
@@ -174,13 +179,16 @@ function SwipeableCard({
           }
         }}
       >
-        {/* Avatar líder (pedido de Samu 2026-09-07, corregido en la misma
-            fecha): SOLO existe mientras el turno está TRABAJANDO — el orbe
-            animado. En cualquier otro estado (terminó bien, terminó con
-            error, o está en reposo) NO hay avatar ni punto de ningún tipo:
-            la señal pasa a ser el fondo gris claro de la fila entera
-            (`.lab-chatcard--idle`, ver globals.css) y el contenido vuelve a
-            ser solo título + descripción, sin nada más a la izquierda. */}
+        {/* Avatar líder: SOLO existe mientras el turno está TRABAJANDO — el
+            orbe animado. En cualquier otro estado no hay avatar ni punto de
+            ningún tipo: el contenido es solo título + descripción, sin nada
+            más a la izquierda (pedido de Samu 2026-09-07).
+            El fondo gris de la fila (`.lab-chatcard--idle`, ver globals.css)
+            es un asunto DISTINTO: no depende de `running` sino de
+            `chat.unread` — solo se tiñe el chat que tiene cambios más
+            nuevos que la última vez que Samu lo abrió (corrección de Samu
+            el mismo día: al principio CUALQUIER chat en reposo se pintaba
+            de gris, y debía ser nada más el que está pendiente de leer). */}
         {chat.running && (
           <div className="lab-chatcard-avatar">
             <OrbeIA tam="32px" ojos={false} ariaLabel="Trabajando" />

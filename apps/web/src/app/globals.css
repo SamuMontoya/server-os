@@ -1543,15 +1543,19 @@ html.lab-route body::after {
 .lab-chatcard--active .lab-chatcard-title {
   color: #1f1e1b;
 }
-/* Fila en reposo (pedido de Samu 2026-09-07, corrigiendo el intento
-   anterior con un punto gris): mientras el chat NO está trabajando —
-   terminó bien, terminó con error, o simplemente nunca corrió — la fila
-   entera se tiñe de un gris claro plano. Nada de iconos ni puntos: la
-   señal es el fondo de la card, y el contenido vuelve a ser solo título +
-   descripción. Va DESPUÉS de `.lab-chatcard--active` a propósito: si el
-   chat abierto también está en reposo (el caso normal, la mayoría del
-   tiempo), este fondo debe ganar sobre el `transparent` de arriba — misma
-   especificidad, gana el que aparece último. */
+/* Chat SIN LEER (pedido de Samu 2026-09-07, segunda corrección): el primer
+   intento pintaba de gris cualquier chat en reposo (!running) — con
+   `running` casi siempre false, la lista ENTERA quedaba gris, que no era
+   la idea. La marca real es "unread": este chat de FONDO tiene actividad
+   más nueva que la última vez que Samu lo abrió (ver `seenAt` en
+   lab-persist.ts y `unread` en `listChatsForProject`, laboratorio/page.tsx)
+   — el mismo concepto de "no leído" de cualquier bandeja de mensajes.
+   Nada de iconos ni puntos: la señal es el fondo de la card entera.
+   Va DESPUÉS de `.lab-chatcard--active` a propósito: si el chat ABIERTO
+   ahora mismo también estuviera sin leer (no debería pasar — abrirlo lo
+   marca leído, ver `loadChatIntoState` — pero por si acaso) este fondo
+   gana sobre el `transparent` de arriba: misma especificidad, gana el que
+   aparece último. */
 .lab-chatcard--idle {
   background: rgba(55, 53, 47, 0.05);
 }
@@ -1562,7 +1566,8 @@ html.lab-route body::after {
    mientras el turno está trabajando (`chat.running`): el orbe animado (sin
    ojos: aquí no "mira", solo late), a la izquierda de TODO el bloque de
    texto (título arriba, subtítulo abajo). En reposo no se monta nada aquí
-   (ver `.lab-chatcard--idle` arriba, esa es la señal). `.lab-chatcard` ya
+   — el fondo gris de `.lab-chatcard--idle` (arriba) es una señal DISTINTA
+   (sin leer, no "sin trabajar") y no depende de esto. `.lab-chatcard` ya
    tenía `align-items:center` y `gap:12px` (del alto fijo por fila, ver
    `.lab-chatcard-wrap`), así que el avatar solo necesita su propio tamaño
    fijo. */

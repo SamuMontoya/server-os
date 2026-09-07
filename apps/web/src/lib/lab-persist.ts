@@ -72,6 +72,16 @@ export interface LabThread {
   model: string | null;
   /** Turno en vuelo. Se persiste: es lo que permite reengancharse al volver. */
   pendingTurn?: PendingLabTurn;
+  /** Última vez que Samu ABRIÓ este chat de verdad (no solo que recibió
+   *  actividad — eso es `updatedAt`). Decide si la lista lo marca "sin leer"
+   *  (pedido de Samu 2026-09-07: antes CUALQUIER chat en reposo llevaba fondo
+   *  gris, y debía ser solo el que tiene cambios sin ver). `undefined` = chat
+   *  de antes de que existiera este campo, o nunca abierto tras cambiar —
+   *  se trata como "leído" (no se marca sin leer de la nada al desplegar
+   *  esto: solo mejores nuevos "no leído" a partir de aquí, ver
+   *  `listChatsForProject`). Solo local (no viaja al servidor / otro
+   *  dispositivo): es una anotación de ESTE navegador, no un dato del chat. */
+  seenAt?: number;
 }
 
 /** Estado completo del laboratorio: todos los chats + cuál está activo por proyecto. */
@@ -221,6 +231,7 @@ export function parseLab(raw: string | null, now: number): HydratedLab | null {
         draft: typeof t.draft === "string" ? t.draft : "",
         model: typeof t.model === "string" ? t.model : null,
         pendingTurn: isPendingTurn(t.pendingTurn) ? t.pendingTurn : undefined,
+        seenAt: typeof t.seenAt === "number" ? t.seenAt : undefined,
       };
     }
     if (Object.keys(byChat).length === 0) return null;

@@ -477,6 +477,13 @@ export default function Laboratorio() {
    *  repinta con `chatsVersion`. */
   const titleRef = useRef<string>(init.thread?.title ?? "");
 
+  /** Última vez que ESTE chat (el que está en foco ahora) se abrió de
+   *  verdad — ver `seenAt` en lab-persist.ts. Arranca en "ahora" para un
+   *  chat recién creado (nadie tiene que leer lo que él mismo acaba de
+   *  escribir) o en lo que ya traía guardado si es uno que se retoma.
+   *  `loadChatIntoState` la refresca cada vez que se abre OTRO chat. */
+  const seenAtRef = useRef<number>(init.thread?.seenAt ?? Date.now());
+
   /** Snapshot del chat activo, tal como debe guardarse ahora mismo. */
   const buildThread = (overrides?: Partial<LabThread>): LabThread => ({
     id: activeChatIdRef.current,
@@ -488,6 +495,7 @@ export default function Laboratorio() {
     draft: draftRef.current,
     model: modelRef.current,
     pendingTurn: pendingTurnRef.current ?? undefined,
+    seenAt: seenAtRef.current,
     ...overrides,
   });
 
@@ -670,6 +678,11 @@ export default function Laboratorio() {
         preview: derivePreview(messagesRef.current),
         updatedAt: Date.now(),
         running: busy || !!pendingTurnRef.current,
+        // El activo es, por definición, el que Samu tiene abierto (o
+        // acaba de abrir): nunca "sin leer", aunque su `updatedAt` de
+        // arriba sea siempre "ahora" — comparar eso contra `seenAtRef`
+        // no tendría sentido (siempre ganaría "ahora").
+        unread: false,
       });
     }
     for (const [key, t] of chatsRef.current) {
@@ -681,6 +694,12 @@ export default function Laboratorio() {
         preview: derivePreview(t.messages),
         updatedAt: t.updatedAt,
         running: !!t.pendingTurn,
+        // "Sin leer" (pedido de Samu 2026-09-07): solo si este chat de
+        // FONDO tiene actividad más nueva que la última vez que Samu lo
+        // abrió. Sin `seenAt` guardado (chat de antes de que existiera
+        // este campo) se trata como leído — no se marca sin leer de la
+        // nada al desplegar esto.
+        unread: typeof t.seenAt === "number" && t.updatedAt > t.seenAt,
       });
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -695,6 +714,9 @@ export default function Laboratorio() {
     chatsRef.current.delete(chatStorageKey(projKey, id));
     activeChatIdRef.current = id;
     titleRef.current = thread?.title ?? "";
+    // Se abre AHORA: lo que sea que este chat tuviera pendiente queda leído.
+    // Ver `seenAt` en lab-persist.ts y `unread` en listChatsForProject.
+    seenAtRef.current = Date.now();
     activeByProjectRef.current[projKey] = id;
     turnIdRef.current = null;
     setStopping(false);
