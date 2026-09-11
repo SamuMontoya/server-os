@@ -20,6 +20,18 @@ import { env } from "./env.js";
 
 export type EmbeddingProvider = "openai" | "ollama" | "none";
 
+/**
+ * Techo por request de embeddings. Sin esto, un Ollama colgado (modelo
+ * descargándose, proceso caído pero el puerto sigue "abierto", CPU saturada)
+ * bloqueaba `searchKnowledge()` SIN LÍMITE — y esto se llama en CADA turno de
+ * chat, antes de la primera palabra (ver buildTurnContext en
+ * agent/system-prompt.ts). El try/catch de abajo ya trata cualquier fallo de
+ * red como "sin embedding" y sigue con el fallback por texto: agregar el
+ * timeout no cambia el manejo de errores, solo le pone un techo.
+ */
+const OLLAMA_TIMEOUT_MS = 5000;
+const OPENAI_TIMEOUT_MS = 6000;
+
 function resolveProvider(): EmbeddingProvider {
   const p = env.EMBEDDINGS_PROVIDER;
   if (p === "ollama" || p === "openai" || p === "none") return p;
@@ -85,6 +97,7 @@ async function viaOpenAI(texts: string[]): Promise<(number[] | null)[]> {
           Authorization: `Bearer ${env.OPENAI_API_KEY}`,
         },
         body: JSON.stringify({ model: "text-embedding-3-small", input: chunk }),
+        signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
       });
       if (!res.ok) {
         console.error("[hermes] embeddings openai", res.status, await res.text());
@@ -116,6 +129,7 @@ async function viaOllama(texts: string[]): Promise<(number[] | null)[]> {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: env.OLLAMA_EMBED_MODEL, input: chunk }),
+        signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
       });
       if (!res.ok) {
         console.error("[hermes] embeddings ollama", res.status, await res.text());

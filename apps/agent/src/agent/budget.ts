@@ -123,6 +123,14 @@ async function fetchUtilization(): Promise<number | null> {
         "anthropic-version": "2023-06-01",
         "User-Agent": "claude-cli (external, server-os)",
       },
+      // Es la PRIMERA llamada de red de cada turno (currentProfile() se
+      // espera antes que nada más en runAgentTurn) y sin timeout un cuelgue
+      // acá bloqueaba TODO el chat sin límite — el orbe pegado no era el
+      // modelo pensando, era esto colgado antes de que el modelo arrancara.
+      // El catch de abajo ya trata cualquier error como "uso no disponible"
+      // (falla hacia `normal`), así que el timeout no cambia el comportamiento
+      // de error, solo le pone techo.
+      signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as { five_hour?: { utilization?: unknown } };
