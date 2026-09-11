@@ -20,6 +20,8 @@ const SOURCE_META: Record<KnowledgeSource, { label: string; tone: Tone }> = {
   execution: { label: "ejecución", tone: "blue" },
   conversation: { label: "chat", tone: "amber" },
   vault: { label: "vault", tone: "green" },
+  drive: { label: "drive", tone: "cyan" },
+  chat: { label: "adjunto", tone: "amber" },
 };
 
 export function MemoryView({ memories, online }: { memories: Memory[]; online: boolean }) {

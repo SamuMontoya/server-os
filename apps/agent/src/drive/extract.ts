@@ -1,13 +1,18 @@
 /**
- * Extracción de texto plano desde un buffer descargado de Drive.
- * Soporta PDF, DOCX y XLSX (los formatos que aparecen en syllabus/planes de
- * curso). Cualquier otro mimeType devuelve "" y el caller lo cuenta como
+ * Extracción de texto plano desde un buffer (de Drive o de un upload manual
+ * del chat). Soporta PDF, DOCX, XLSX y texto plano (TXT/MD/CSV/JSON) — los
+ * formatos "que la mayoría soporta" sin arrastrar parsers pesados de más.
+ * Cualquier otro mimeType/extensión devuelve "" y el caller lo cuenta como
  * "sin texto extraíble" en vez de fallar.
  */
 
 const PDF_MIME = "application/pdf";
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+/** Texto plano de verdad: se decodifica tal cual, sin parser de por medio. */
+const PLAIN_TEXT_EXT = new Set([".txt", ".md", ".markdown", ".csv", ".json", ".log"]);
+const PLAIN_TEXT_MIME_PREFIXES = ["text/", "application/json"];
 
 export async function extractText(buf: Buffer, mimeType: string, name: string): Promise<string> {
   const lower = name.toLowerCase();
@@ -32,9 +37,13 @@ export async function extractText(buf: Buffer, mimeType: string, name: string): 
       }
       return out;
     }
+    const ext = lower.slice(lower.lastIndexOf("."));
+    if (PLAIN_TEXT_EXT.has(ext) || PLAIN_TEXT_MIME_PREFIXES.some((p) => mimeType.startsWith(p))) {
+      return buf.toString("utf8");
+    }
   } catch (err) {
     console.error(`[drive] extracción falló (${name}):`, (err as Error).message);
     return "";
   }
-  return ""; // tipo no soportado (imágenes, audio, etc.)
+  return ""; // tipo no soportado (imágenes, audio, .pptx/.doc/.xls legado, etc.)
 }

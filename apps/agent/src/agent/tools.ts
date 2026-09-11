@@ -35,11 +35,19 @@ const saveMemoryTool = tool(
   async (args) => text(await saveMemory({ ...args, source: "agent" })),
 );
 
-const KNOWLEDGE_SOURCES = ["memory", "meeting", "execution", "conversation", "vault"] as const;
+const KNOWLEDGE_SOURCES = [
+  "memory",
+  "meeting",
+  "execution",
+  "conversation",
+  "vault",
+  "drive",
+  "chat",
+] as const;
 
 const searchKnowledgeTool = tool(
   "search_knowledge",
-  "Búsqueda semántica unificada en TODO lo que OS sabe: memorias, ejecuciones de tareas, conversaciones pasadas y notas del vault. Primera opción para '¿en qué quedamos?', '¿qué sabemos de X?' o cualquier contexto histórico.",
+  "Búsqueda semántica unificada en TODO lo que OS sabe: memorias, ejecuciones de tareas, conversaciones pasadas, notas del vault, documentos de Drive indexados y documentos que el usuario subió a mano en el chat. Primera opción para '¿en qué quedamos?', '¿qué sabemos de X?' o cualquier contexto histórico.",
   {
     query: z.string().describe("Qué buscar, en lenguaje natural"),
     sources: z

@@ -94,6 +94,8 @@ const SOURCE_LABEL: Record<KnowledgeSource, string> = {
   execution: "ejecución",
   conversation: "chat",
   vault: "vault",
+  drive: "drive",
+  chat: "adjunto",
 };
 
 // ── Conteos de la base de conocimiento (panel MEMORIA ACTIVA) ───────────

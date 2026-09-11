@@ -14,6 +14,11 @@ import {
   saveChatAttachment,
   MAX_ATTACHMENT_BYTES,
 } from "../chat-attachments.js";
+import {
+  ingestUploadedDocuments,
+  MAX_DOCUMENT_BYTES,
+  MAX_DOCUMENTS_PER_UPLOAD,
+} from "../documents/chat-documents.js";
 // El dictado del composer usaba el mismo STT que las juntas (Scribe → Whisper).
 import { transcribe } from "../stt.js";
 import {
@@ -211,6 +216,53 @@ export function registerChatRoutes(app: Hono): void {
       },
     });
   });
+
+  /**
+   * Sube uno o varios documentos (PDF/DOCX/XLSX/TXT/MD/CSV/JSON), los
+   * vectoriza en `chat_docs` y devuelve un resumen — nunca el contenido ni
+   * una ruta en disco. El archivo original NO se guarda: se procesa en
+   * memoria y se descarta apenas se extrae el texto (a diferencia de las
+   * imágenes, que sí persisten para que el modelo las pueda releer).
+   *
+   * Automático por diseño: no hay confirmación intermedia, igual que
+   * `/chat/attachments` sube la imagen apenas se pega. El resumen que
+   * devuelve es lo que el composer usa para anteponer un aviso al mensaje
+   * ("ya indexé X, Y" — ver chat-documents.ts en el frontend).
+   */
+  app.post(
+    "/chat/documents",
+    bodyLimit({ maxSize: MAX_DOCUMENT_BYTES * MAX_DOCUMENTS_PER_UPLOAD + 2 * 1024 * 1024 }),
+    async (c) => {
+      const body = await c.req.parseBody({ all: true }).catch(() => null);
+      const raw = body?.["files"];
+      const files = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter(
+        (f): f is File => f instanceof File,
+      );
+      if (files.length === 0) return c.json({ error: "campo 'files' requerido" }, 400);
+      if (files.length > MAX_DOCUMENTS_PER_UPLOAD) {
+        return c.json({ error: `máximo ${MAX_DOCUMENTS_PER_UPLOAD} archivos por subida` }, 400);
+      }
+      for (const f of files) {
+        if (f.size === 0) return c.json({ error: `"${f.name}" llegó vacío` }, 400);
+        if (f.size > MAX_DOCUMENT_BYTES) {
+          const mb = (f.size / 1024 / 1024).toFixed(1);
+          return c.json(
+            { error: `"${f.name}" pesa ${mb} MB (máximo ${MAX_DOCUMENT_BYTES / 1024 / 1024} MB)` },
+            400,
+          );
+        }
+      }
+      const input = await Promise.all(
+        files.map(async (f) => ({
+          name: f.name || "documento",
+          mimeType: f.type || "",
+          buffer: Buffer.from(await f.arrayBuffer()),
+        })),
+      );
+      const result = await ingestUploadedDocuments(input);
+      return c.json(result);
+    },
+  );
 
   app.post("/chat/turns", async (c) => {
     const b = await c.req

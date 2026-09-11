@@ -27,10 +27,12 @@ export type KnowledgeSource =
   | "meeting"
   | "execution"
   | "conversation"
-  | "vault";
+  | "vault"
+  | "drive"
+  | "chat";
 
 /** Un hit de búsqueda semántica cross-fuente: memorias, reuniones, ejecuciones,
- *  conversaciones (texto/voz) y notas del vault. */
+ *  conversaciones (texto/voz), notas del vault, docs de Drive y adjuntos del chat. */
 export interface KnowledgeHit {
   source: KnowledgeSource;
   /** Ancla dentro de su fuente: uuid de memoria, meeting_id, execution_id, id de mensaje o path del vault. */

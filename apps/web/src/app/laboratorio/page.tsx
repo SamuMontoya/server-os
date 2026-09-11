@@ -32,6 +32,7 @@ import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
 import { uuid } from "@/lib/uuid";
 import { isSupportedImage, uploadChatImage } from "@/lib/chat-attachments";
+import { isSupportedDocument, uploadChatDocuments } from "@/lib/chat-documents";
 import { OrbeIA } from "@/components/orbe/OrbeIA";
 import {
   loadLab,
@@ -95,6 +96,24 @@ type LabAttachment = {
   id?: string;
   name: string;
   url: string;
+  error?: string;
+};
+
+/**
+ * Documento subido a mano (el clip), mientras vive en el composer.
+ *
+ * A diferencia de LabAttachment, acá NO hay `id` que llegue después: el
+ * servidor procesa y descarta el archivo en el mismo request, así que el
+ * estado final es "chunks" (cuántos fragmentos quedaron indexados) o
+ * "error". Sin `url` porque no hay miniatura posible ni falta: es un chip de
+ * texto, no una imagen.
+ */
+type LabDocument = {
+  key: string;
+  name: string;
+  status: "uploading" | "done" | "error";
+  chunks?: number;
+  truncated?: boolean;
   error?: string;
 };
 
@@ -374,6 +393,8 @@ export default function Laboratorio() {
   const bumpUsage = () => setUsageKey((k) => k + 1);
   // Imágenes pegadas que todavía no se han enviado.
   const [attachments, setAttachments] = useState<LabAttachment[]>([]);
+  const [documents, setDocuments] = useState<LabDocument[]>([]);
+  const docInputRef = useRef<HTMLInputElement | null>(null);
   const [dropping, setDropping] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Contenedor scrolleable de la conversación + las piezas del "anclaje
@@ -1270,11 +1291,78 @@ export default function Laboratorio() {
     });
   };
 
+  // ── Documentos subidos a mano (el clip) ────────────────────────────────
+  //
+  // A diferencia de addImages, acá la subida ES el procesamiento completo:
+  // cuando el fetch resuelve, el documento YA está trozado, vectorizado y
+  // guardado en chat_docs — no hay un segundo paso. El chip solo informa.
+  const MAX_DOCUMENTS = 5;
+
+  const addDocuments = (files: File[]) => {
+    const docs = files.filter(isSupportedDocument);
+    if (docs.length === 0) return;
+    const room = Math.max(0, MAX_DOCUMENTS - documents.length);
+    const batch = docs.slice(0, room);
+    if (batch.length === 0) return;
+
+    // Pares (key local, archivo) fijados ANTES del fetch: así el callback no
+    // tiene que adivinar qué chip corresponde a qué resultado buscando por
+    // nombre (dos archivos podrían llamarse igual).
+    const uploads = batch.map((file) => ({ key: uuid(), file }));
+    setDocuments((prev) => [
+      ...prev,
+      ...uploads.map((u) => ({ key: u.key, name: u.file.name, status: "uploading" as const })),
+    ]);
+
+    // Un solo request para toda la tanda: el servidor reparte el cupo de
+    // fragmentos entre los archivos (MAX_TOTAL_CHUNKS_PER_UPLOAD), así que
+    // subirlos juntos es lo que le permite repartir bien ese presupuesto.
+    void uploadChatDocuments(uploads.map((u) => u.file))
+      .then((result) => {
+        // El servidor procesa en el ORDEN en que llegaron los archivos, y
+        // devuelve ok/failed sin conservar ese orden — pero los nombres de
+        // esta tanda son las claves con las que se busca cada resultado.
+        setDocuments((prev) =>
+          prev.map((d) => {
+            const upload = uploads.find((u) => u.key === d.key);
+            if (!upload) return d; // no es de esta tanda
+            const ok = result.ok.find((r) => r.name === upload.file.name);
+            if (ok) return { ...d, status: "done" as const, chunks: ok.chunks, truncated: ok.truncated };
+            const fail = result.failed.find((r) => r.name === upload.file.name);
+            return { ...d, status: "error" as const, error: fail?.error ?? "no se pudo procesar" };
+          }),
+        );
+      })
+      .catch((err: unknown) => {
+        const keys = new Set(uploads.map((u) => u.key));
+        setDocuments((prev) =>
+          prev.map((d) =>
+            keys.has(d.key)
+              ? { ...d, status: "error" as const, error: err instanceof Error ? err.message : "no se pudo subir" }
+              : d,
+          ),
+        );
+      });
+  };
+
+  const removeDocument = (key: string) => {
+    // El documento YA fue indexado en el servidor si llegó a "done": quitar
+    // el chip solo saca el aviso de ESTE mensaje, no lo des-vectoriza (sigue
+    // siendo parte de la base de conocimiento). Consistente con "el archivo
+    // original no se guarda, pero lo que ya se indexó, quedó indexado".
+    setDocuments((prev) => prev.filter((d) => d.key !== key));
+  };
+
   /** Alguna imagen todavía subiendo: el envío espera (ver `canSend`). */
   const uploading = attachments.some((a) => !a.id && !a.error);
+  const docsProcessing = documents.some((d) => d.status === "uploading");
   /** Solo las que el servidor ya aceptó pueden viajar en el turno. */
   const readyIds = attachments.filter((a) => a.id).map((a) => a.id!);
-  const canSend = (draft.trim().length > 0 || readyIds.length > 0) && !busy && !uploading;
+  const canSend =
+    (draft.trim().length > 0 || readyIds.length > 0 || documents.length > 0) &&
+    !busy &&
+    !uploading &&
+    !docsProcessing;
 
   const handleSend = async () => {
     const text = draft.trim();
@@ -1291,11 +1379,23 @@ export default function Laboratorio() {
     // Ver `dictationDropRef` en el hook de transcripción de abajo.
     endDictation();
 
+    // Los documentos ya quedaron indexados al subirlos (no hay paso 2): acá
+    // solo se arma el aviso de texto para que el modelo sepa que existen y
+    // los busque con search_knowledge si la pregunta los toca. Los que
+    // fallaron (`status === "error"`) no se mencionan — nunca se indexaron.
+    const indexedDocs = documents.filter((d) => d.status === "done");
+    const docNote = indexedDocs.length
+      ? `📎 Documento${indexedDocs.length > 1 ? "s" : ""} adjunto${indexedDocs.length > 1 ? "s" : ""} e indexado${indexedDocs.length > 1 ? "s" : ""} en la base de conocimiento (fuente "chat"): ${indexedDocs
+          .map((d) => `"${d.name}"${d.chunks && d.chunks > 1 ? ` (${d.chunks} fragmentos)` : ""}`)
+          .join(", ")}. Ya es buscable con search_knowledge, sin el archivo original (no se guardó).`
+      : "";
+    const finalText = [docNote, text].filter(Boolean).join("\n\n");
+
     const sent = attachments.filter((a) => a.id);
     const userMsg: LabMessage = {
       id: Date.now(),
       role: "user",
-      content: text,
+      content: finalText,
       ...(sent.length ? { images: sent.map((a) => ({ url: a.url, name: a.name })) } : {}),
     };
     const replyMsg: LabMessage = { id: Date.now() + 1, role: "assistant", content: "", blocks: [] };
@@ -1313,6 +1413,7 @@ export default function Laboratorio() {
     // Se vacía el composer SIN revocar los object URLs: los hereda la burbuja,
     // que los sigue pintando. Se sueltan todos al desmontar la página.
     setAttachments([]);
+    setDocuments([]);
     setBusy(true);
     // El textarea no se re-mide solo al vaciar el value por JS (no dispara
     // onChange); lo hacemos a mano en el próximo frame, cuando el DOM ya
@@ -1325,7 +1426,7 @@ export default function Laboratorio() {
 
     try {
       const turnId = await startTurn({
-        message: text,
+        message: finalText,
         sessionKey: sessionKeyRef.current!,
         project: selectedProject,
         resume: sdkSessionIdRef.current,
@@ -1625,6 +1726,17 @@ export default function Laboratorio() {
   // portapapeles puede traer texto Y una imagen a la vez (captura + "mira
   // esto"): no se hace preventDefault salvo que haya imagen, para no comerse
   // el pegado de texto normal.
+  // Reparte por tipo: imágenes van a addImages (preview + Read del modelo),
+  // cualquier otra cosa soportada va a addDocuments (extracción + vector).
+  // Un archivo que no es ninguna de las dos se ignora en silencio acá — el
+  // input del clip si acepta cualquier cosa, sí valida y avisa al elegir.
+  const addFiles = (files: File[]) => {
+    const images = files.filter((f) => isSupportedImage(f.type));
+    const docs = files.filter((f) => !isSupportedImage(f.type) && isSupportedDocument(f));
+    if (images.length) addImages(images);
+    if (docs.length) addDocuments(docs);
+  };
+
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const files = Array.from(e.clipboardData?.items ?? [])
       .filter((it) => it.kind === "file")
@@ -1632,13 +1744,20 @@ export default function Laboratorio() {
       .filter((f): f is File => f !== null);
     if (files.length === 0) return;
     e.preventDefault();
-    addImages(files);
+    addFiles(files);
   };
 
   const handleDrop = (e: React.DragEvent<HTMLFormElement>) => {
     e.preventDefault();
     setDropping(false);
-    addImages(Array.from(e.dataTransfer?.files ?? []));
+    addFiles(Array.from(e.dataTransfer?.files ?? []));
+  };
+
+  /** El input oculto del clip: cualquier archivo elegido a mano es un documento. */
+  const handleDocPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = ""; // permite re-elegir el mismo archivo después
+    addDocuments(files);
   };
 
   // Dictado por voz → texto. El transcript se vuelca automáticamente al draft
@@ -2086,7 +2205,85 @@ export default function Laboratorio() {
               ))}
             </div>
           )}
+          {documents.length > 0 && (
+            <div className="lab-attachments">
+              {documents.map((d) => (
+                <div
+                  key={d.key}
+                  className={`lab-chip lab-chip--doc ${d.status === "uploading" ? "lab-chip--uploading" : ""} ${
+                    d.status === "error" ? "lab-chip--error" : ""
+                  }`}
+                  title={
+                    d.status === "error"
+                      ? d.error
+                      : d.status === "uploading"
+                        ? `Procesando ${d.name}…`
+                        : `${d.name} — ${d.chunks} fragmento${d.chunks === 1 ? "" : "s"} indexado${
+                            d.chunks === 1 ? "" : "s"
+                          }${d.truncated ? " (recortado: el archivo era muy grande)" : ""}`
+                  }
+                >
+                  <span className="lab-chip-doc-icon" aria-hidden="true">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                      <path
+                        d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinejoin="round"
+                      />
+                      <path d="M14 3v5h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                    </svg>
+                  </span>
+                  <span className="lab-chip-doc-name">{d.name}</span>
+                  {d.status === "uploading" && <span className="lab-chip-spin" aria-hidden="true" />}
+                  <button
+                    type="button"
+                    className="lab-chip-x"
+                    onClick={() => removeDocument(d.key)}
+                    aria-label={`Quitar ${d.name}`}
+                    title="Quitar"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="lab-composer-row">
+            {/* Clip: adjuntar documentos (PDF/DOCX/XLSX/TXT/MD/CSV/JSON). Se
+                indexan solos apenas se eligen — ver addDocuments. A la
+                izquierda del micrófono, mismo tamaño de botón. */}
+            <input
+              ref={docInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx,.xlsx,.txt,.md,.markdown,.csv,.json,.log"
+              className="lab-file-input-hidden"
+              onChange={handleDocPick}
+              tabIndex={-1}
+            />
+            <button
+              type="button"
+              className="lab-mic"
+              onClick={() => docInputRef.current?.click()}
+              disabled={documents.length >= MAX_DOCUMENTS}
+              aria-label="Adjuntar documento"
+              title={
+                documents.length >= MAX_DOCUMENTS
+                  ? `Máximo ${MAX_DOCUMENTS} documentos por mensaje`
+                  : "Adjuntar documento (PDF, DOCX, XLSX, TXT, MD, CSV, JSON)"
+              }
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M17.5 8.5 9.4 16.6a3 3 0 1 1-4.24-4.24l8.13-8.13a2 2 0 1 1 2.83 2.83l-8.13 8.13a1 1 0 1 1-1.41-1.41l7.07-7.07"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
             {micSupported && (
               <button
                 type="button"

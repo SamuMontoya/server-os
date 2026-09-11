@@ -14,18 +14,11 @@ import { listDriveFilesRecursive, type DriveFileEntry } from "./scan.js";
 import { extractText } from "./extract.js";
 import { supabase } from "../supabase.js";
 import { embedBatch, EMB } from "../embeddings.js";
+import { sanitizeExtractedText } from "../text-sanitize.js";
 
 export { extractFolderId } from "./scan.js";
 
 const MAX_CONTENT_CHARS = 16_000;
-
-/**
- * Postgres `text` rechaza el byte NUL (U+0000), que algunos PDF/DOCX dejan
- * colar en la extracción. Se limpia junto con el resto de caracteres de
- * control (se preservan \n \r \t) antes de hashear/guardar: si no, el
- * upsert entero del batch falla con "unsupported Unicode escape sequence".
- */
-const CONTROL_CHARS_RE = new RegExp("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]", "g");
 
 /** Docs nativos de Google (Docs/Sheets/Slides) no tienen bytes descargables: hay que exportarlos. */
 const EXPORT_MIME: Record<string, { mime: string }> = {
@@ -135,7 +128,7 @@ export async function syncDriveFolder(folderId: string): Promise<DriveSyncResult
       skipped++;
       continue;
     }
-    const sanitized = text.replace(CONTROL_CHARS_RE, "");
+    const sanitized = sanitizeExtractedText(text);
     const content = sanitized.trim().slice(0, MAX_CONTENT_CHARS);
     if (!content) {
       skipped++;
