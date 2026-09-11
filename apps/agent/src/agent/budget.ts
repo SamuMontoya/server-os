@@ -2,6 +2,10 @@ import "../env.js";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Modo de consumo, en TRES escalones — no es un interruptor, es una rampa.
@@ -74,10 +78,26 @@ function thresholdCritico(): number {
   return Number.isFinite(n) && n > 0 && n <= 100 ? n : DEFAULT_THRESHOLD_CRITICO;
 }
 
+/**
+ * Cache en memoria del token leído del disco.
+ *
+ * `readToken()` la llama en CADA pregunta del reloj (`rapido.ts`, canal
+ * caliente) — sin cache, cada mensaje pagaba un `readFile` + `JSON.parse`
+ * que no aporta nada la inmensa mayoría de las veces: el token solo cambia
+ * cuando `refrescarTokenSiExpiro()` corre, y eso ya invalida esta cache
+ * explícitamente. El TTL de 60s es solo la red de seguridad para el caso
+ * remoto de que el archivo cambie por fuera de ese flujo (ej. `claude`
+ * corrido a mano en la misma máquina) — igual nunca queda más viejo que eso.
+ */
+let tokenCache: { valor: string | null; en: number } | null = null;
+const TOKEN_CACHE_TTL_MS = 60_000;
+
 export async function readToken(): Promise<string | null> {
   // Override explícito, si alguien quiere aislar este lector.
   const fromEnv = (process.env.CLAUDE_OAUTH_TOKEN || "").trim();
   if (fromEnv) return fromEnv;
+
+  if (tokenCache && Date.now() - tokenCache.en < TOKEN_CACHE_TTL_MS) return tokenCache.valor;
 
   // Se reusa la credencial del PROPIO CLI: es el mismo token OAuth con el que
   // ya infiere y sirve tal cual contra /api/oauth/usage. Pedir un archivo
@@ -105,11 +125,87 @@ export async function readToken(): Promise<string | null> {
     }
   });
 
+  let token: string | null = null;
   for (const read of readers) {
-    const tok = await read();
-    if (tok) return tok;
+    token = await read();
+    if (token) break;
   }
-  return null;
+  tokenCache = { valor: token, en: Date.now() };
+  return token;
+}
+
+let refrescoEnCurso: Promise<void> | null = null;
+
+/**
+ * Fuerza que el CLI refresque su propio `.credentials.json` cuando el token
+ * que lee `readToken()` ya venció.
+ *
+ * Por qué NO se reimplementa el flujo OAuth acá: el endpoint/client_id de
+ * refresh es un detalle interno del CLI, no API pública documentada de
+ * Anthropic — reconstruirlo a mano es fràgil y puede romperse sin aviso.
+ * En cambio, se invoca al `claude` real con un prompt mínimo: su SDK
+ * interno YA detecta el token vencido y lo refresca solo, reescribiendo el
+ * archivo — exactamente lo mismo que pasaría si alguien abriera el chat
+ * principal. Nace de un incidente real: `rapido.ts` (el canal directo del
+ * reloj, sin CLI de por medio) se quedó sirviendo 401 durante horas porque
+ * nada más estaba usando el CLI para refrescarlo solo.
+ *
+ * `refrescoEnCurso` evita refrescos duplicados si dos llamadas del reloj
+ * pisan un 401 casi a la vez.
+ */
+export function refrescarTokenSiExpiro(): Promise<void> {
+  if (!refrescoEnCurso) {
+    refrescoEnCurso = execFileAsync("claude", ["-p", "hola", "--max-turns", "1"], {
+      timeout: 30_000,
+    })
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        refrescoEnCurso = null;
+        // El refresh reescribió el archivo: la cache de readToken() quedaría
+        // sirviendo el token viejo (posiblemente el mismo 401 de recién)
+        // hasta que expire su TTL si no se limpia acá.
+        tokenCache = null;
+      });
+  }
+  return refrescoEnCurso;
+}
+
+/** Margen de seguridad: refresca ANTES de vencer, no después. */
+const MARGEN_REFRESCO_MS = 30 * 60_000;
+/** Cada cuánto se revisa si hace falta refrescar. */
+const INTERVALO_REVISION_MS = 15 * 60_000;
+
+async function expiraPronto(): Promise<boolean> {
+  try {
+    const raw = await readFile(join(homedir(), ".claude", ".credentials.json"), "utf8");
+    const expiresAt = JSON.parse(raw)?.claudeAiOauth?.expiresAt;
+    if (typeof expiresAt !== "number") return true; // sin dato: mejor refrescar
+    return expiresAt - Date.now() < MARGEN_REFRESCO_MS;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Refresco PROACTIVO en segundo plano — se llama una vez al arrancar
+ * (`index.ts`) y desde ahí se repite sola cada `INTERVALO_REVISION_MS`.
+ *
+ * Por qué, si ya existe `refrescarTokenSiExpiro()` reactiva-en-401: esa
+ * arregla el 401 DESPUÉS de que ya le tocó a una pregunta real del reloj
+ * pagar los ~15s que tarda el `claude -p` de refresco — un incidente real
+ * mostró justo eso: alguien preguntando algo y esperando 15s de más porque
+ * el token llevaba horas vencido y nada lo había tocado. Revisando cada 15
+ * minutos y refrescando con 30 de margen antes de vencer, en el camino
+ * normal el reactivo nunca debería ni dispararse — queda de red de
+ * seguridad, no de mecanismo principal.
+ */
+export function iniciarRefrescoPeriodico(): void {
+  const revisar = async () => {
+    if (await expiraPronto()) await refrescarTokenSiExpiro();
+  };
+  void revisar();
+  setInterval(() => void revisar(), INTERVALO_REVISION_MS).unref();
 }
 
 async function fetchUtilization(): Promise<number | null> {

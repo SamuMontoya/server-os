@@ -30,17 +30,73 @@
  */
 
 import "../env.js";
-import { readToken } from "../agent/budget.js";
+import { readToken, refrescarTokenSiExpiro } from "../agent/budget.js";
 import { OWNER } from "../owner.js";
+import { contextoTemporal } from "../temporal.js";
 
-/** El modelo responde EXACTAMENTE esto cuando la pregunta necesita el sistema. */
-export const CENTINELA = "CONSULTAR";
+/**
+ * Prefijo con el que el modelo pide escalar porque la pregunta necesita el
+ * sistema de verdad (archivos, proyectos, servidor). Lleva una descripción
+ * corta detrás — "CONSULTAR: las carpetas del proyecto" — para poder
+ * mostrarla YA como primer paso mientras el turno pesado (que tarda ~5s en
+ * arrancar el CLI, ver el comentario grande de arriba) recién se prepara.
+ * Sin esto, esos primeros segundos se veían como un loader genérico sin
+ * decir nada — con esto, el usuario ve EN MILISEGUNDOS qué se está por
+ * hacer, aunque la respuesta real tarde lo que tarde.
+ */
+export const CENTINELA = "CONSULTAR:";
 
-/** Prefijo con el que la sesión rápida pide una imagen. */
+/** Prefijo con el que la sesión rápida pide una imagen genérica (Pexafy). */
 export const CENTINELA_IMAGEN = "IMAGEN:";
+
+/**
+ * Prefijo para una foto de alguien REAL identificable por nombre — va a
+ * Wikipedia, no a Pexafy. Pexafy agrega bancos de fotos LIBRES (Unsplash,
+ * Pexels, Pixabay...) que por licencia no incluyen gente real reconocible,
+ * así que para "muéstrame a Shakira" siempre traía algo "relacionado"
+ * (alguien cantando) y nunca a ella. Misma lógica que NOTICIA/DATO más
+ * abajo: el clasificador ya entiende la intención, así que la ruta se
+ * decide ahí en vez de adivinar después con una regex.
+ */
+export const CENTINELA_IMAGEN_PERSONA = "IMAGEN-PERSONA:";
 
 /** "Esa no, otra": pide la siguiente imagen de la última búsqueda. */
 export const CENTINELA_OTRA = "OTRA";
+
+/**
+ * "¿En qué quedaste?" / "¿qué estabas haciendo?" — preguntar por el estado
+ * de la última escalada, en vez de dispararla nuevamente. Se contesta en
+ * milisegundos porque NO abre un turno nuevo: `watch.ts` mira el turno que
+ * ya tiene guardado (en memoria del proceso, `chatTurns.get`) y, si sigue
+ * corriendo, engancha esta misma pregunta a seguirlo en vivo en vez de
+ * dejarlo huérfano — nunca "no sé, pregunta de nuevo".
+ */
+export const CENTINELA_ESTADO = "ESTADO";
+
+/**
+ * Búsqueda EN INTERNET, camino rápido — mismo patrón que CENTINELA_IMAGEN:
+ * se maneja EN LÍNEA en watch.ts (Tavily directo + un resumen de una frase
+ * con este mismo modelo rápido), sin pasar por CONSULTAR/chat-turns.ts (un
+ * turno completo con tools y sus pasos, mucho más lento). Antes "buscar en
+ * internet" caía en CONSULTAR junto con archivos/memoria/proyectos — eso
+ * pagaba el turno pesado por algo que ahora resuelve una llamada a Tavily
+ * más un resumen, los dos en el canal ya optimizado a ~650-750ms.
+ *
+ * DOS variantes, no una — probado en vivo que hacía falta: Tavily tiene un
+ * índice de "noticias" (prensa real y fechada) y uno "general" (todo lo
+ * demás), y cuál conviene depende del TIPO de pregunta, no solo de si
+ * necesita internet. "Noticias" le gana al general en resultados/cargos
+ * recién cambiados (ahí el general trae SEO/apuestas viejas) — pero para
+ * datos de referencia estables (calendario de feriados, lista de empresas)
+ * el de noticias trae basura sin relación (para "días festivos de Chile"
+ * devolvía noticias de MINERÍA porque eso es lo que suena de Chile esta
+ * semana). Intentar adivinar esto con una lista de palabras clave en
+ * watch.ts se quedaba corto cada vez que aparecía un caso nuevo — el
+ * clasificador YA entiende la intención real, así que la decisión se le
+ * pasa a él en vez de seguir agrandando una regex.
+ */
+export const CENTINELA_WEB_NOTICIA = "WEB-NOTICIA:";
+export const CENTINELA_WEB_DATO = "WEB-DATO:";
 
 const SISTEMA = `Eres OS, el asistente de ${OWNER}, respondiendo en la pantalla de un reloj.
 
@@ -57,8 +113,16 @@ Si te piden APUNTAR, guardar o recordar algo suelto ("apunta que...",
 IDEA: <la idea, redactada en una frase clara y completa>. Nada más. No lo
 confundas con preguntas SOBRE lo ya guardado, que sí necesitan consultar.
 
-Si te piden VER una imagen de algo ("muéstrame un husky", "enséñame una foto
-de X"), responde únicamente: IMAGEN: <término>. Nada más.
+Si te piden VER una imagen de una PERSONA REAL identificable por su nombre
+(un famoso, un actor, un cantante, un deportista, un político, un personaje
+histórico — alguien que tendría artículo propio en una enciclopedia, no un
+desconocido genérico como "un señor" o "una mujer sonriendo"), responde
+únicamente: ${CENTINELA_IMAGEN_PERSONA} <nombre completo, tal como se
+titularía su artículo>. Nada más.
+
+Si te piden VER una imagen de cualquier otra cosa (un animal, un objeto, un
+lugar, una escena, "una foto bonita de X"), responde únicamente: IMAGEN:
+<término>. Nada más.
 
 El término debe ser CONCRETO y en singular, tal como se titularía un artículo
 de enciclopedia: "husky siberiano", no "una foto bonita de un husky". Quita
@@ -69,12 +133,59 @@ Si acabas de enseñar una imagen y el usuario dice que no era esa, que quiere
 otra, o pide "la siguiente", responde únicamente: OTRA. Nada más — el sistema
 recuerda qué se estaba buscando y trae la siguiente.
 
-Si para responder necesitas mirar archivos, memoria, proyectos, el calendario,
-BUSCAR EN INTERNET o ejecutar algo en la máquina, NO lo intentes ni lo
-inventes y NO lo anuncies:
-responde únicamente con la palabra ${CENTINELA} y nada más. Ni una frase
-antes, ni una explicación, ni "voy a revisar". Solo esa palabra. Otro sistema
-se encargará y el usuario verá lo que se está haciendo.`;
+Si te preguntan por el estado de algo que te pidieron revisar antes ("¿en
+qué quedaste?", "¿qué estabas haciendo?", "¿ya terminaste?", "¿cómo va
+eso?"), responde ÚNICAMENTE con la palabra ${CENTINELA_ESTADO}. Nada más —
+el sistema ya sabe de qué tarea se trata y dice si sigue corriendo o cómo
+terminó, sin que vuelvas a dispararla.
+
+Ya sabés la fecha, hora y lugar actuales — vienen más abajo, en otro bloque
+de este mismo mensaje. Para "qué día es hoy", "qué hora es" o cualquier
+variante, respondé DIRECTO con eso: nunca es un caso de ${CENTINELA_WEB_NOTICIA}
+ni de ${CENTINELA_WEB_DATO}.
+
+Si para responder necesitas algo de INTERNET que NO sea la fecha/hora/lugar
+de arriba, NO lo intentes ni lo inventes: respondé con uno de estos DOS,
+según de qué tipo sea — elegir mal el tipo trae resultados peores, así que
+pensalo bien:
+
+- ${CENTINELA_WEB_NOTICIA} <búsqueda> — para algo que depende de un EVENTO
+  reciente: quién ganó algo, quién es el actual/nuevo presidente o cargo
+  público, el resultado de una elección o un partido, un anuncio, "qué está
+  pasando con X", un resumen de noticias. Si tu respuesta pudo haber
+  cambiado por una noticia después de tu entrenamiento, es este.
+- ${CENTINELA_WEB_DATO} <búsqueda> — para un dato de referencia o en vivo
+  que NO depende de una noticia puntual: un precio, el clima, un calendario
+  (feriados, horarios), una lista o ranking (empresas, países, productos),
+  una cifra o estadística. Esto vive en páginas de referencia, no en
+  artículos de prensa — pedir NOTICIA para esto trae resultados sin
+  relación (probado: "días festivos de Chile" con NOTICIA devolvía
+  noticias de minería, porque eso es lo que suena de Chile esa semana).
+
+En cualquiera de los dos, nada más que eso — la búsqueda como se escribiría
+en un buscador, SIN una fecha exacta escrita ("11 de septiembre de 2026"):
+un buscador rara vez repite esa fecha textual en el resultado, así que
+ponerla ahí empeora la búsqueda — "hoy" es una instrucción para quien
+busca, no un término de búsqueda. Para "noticias de hoy en Colombia" la
+búsqueda es "noticias Colombia", sin más.
+
+IMPORTANTE sobre NOTICIA: tu entrenamiento tiene una fecha de corte, y ya
+sabés que hoy es una fecha posterior a esa. Cualquier pregunta sobre un
+resultado, ganador, elección, cargo público o evento que PUEDA haber
+cambiado o sucedido después de tu entrenamiento es SIEMPRE ${CENTINELA_WEB_NOTICIA},
+aunque "sientas" que ya sabés la respuesta — esa sensación es justo el
+riesgo: tu memoria puede estar describiendo una versión vieja de algo que ya
+cambió. Ante la duda de si tu conocimiento sigue vigente, buscá — no asumas
+que "todavía no pasó" o que "sigue siendo" solo porque así era cuando
+entrenaste.
+
+Si para responder necesitas mirar archivos, memoria, proyectos, el servidor,
+carpetas o ejecutar algo en la máquina, NO lo intentes ni lo inventes:
+responde ÚNICAMENTE con ${CENTINELA} <qué vas a revisar, 2-5 palabras, SIN
+verbo — "las carpetas del proyecto", "el estado del servidor", "los últimos
+commits">. Nada de explicación ni de "voy a": eso y nada más. El usuario lo
+ve EN EL ACTO como primer paso, mientras el sistema completo (que sí puede
+mirar de verdad) arma la respuesta real por detrás.`;
 
 /**
  * Lo que se le añade al turno COMPLETO cuando la vía rápida escala.
@@ -84,10 +195,22 @@ se encargará y el usuario verá lo que se está haciendo.`;
  * rápida y la escalada no lo hereda. Ese era el motivo de que justo las
  * respuestas escaladas salieran largas.
  */
-export const ESTILO_ESCALADA = `Responde para la pantalla de un reloj: UNA sola
-frase corta con la conclusión, en español. Sin markdown, sin asteriscos, sin
-listas, sin encabezados, sin preámbulo y sin narrar lo que vas a hacer — el
-usuario ya está viendo los pasos. Si la respuesta es un dato, di solo el dato.
+export const ESTILO_ESCALADA = `Responde para la pantalla de un reloj: frases
+CORTAS, en español, sin markdown, sin asteriscos, sin listas ni encabezados.
+La CONCLUSIÓN final va en una sola frase. Si la respuesta es un dato, di solo
+el dato.
+
+Podés ir comentando brevemente a medida que investigás (una frase por
+comentario, nunca un párrafo) — el reloj muestra cada comentario tuyo por
+separado, intercalado con lo que vas ejecutando, así que se lee como ir
+contando lo que hacés, no como narrar de más. Lo único que no debe pasar es
+un preámbulo largo antes de arrancar.
+
+Si necesitás mirar varias cosas INDEPENDIENTES entre sí (dos carpetas
+distintas, el estado del servidor Y la lista de proyectos, varios archivos
+sueltos), pedilas TODAS en la misma respuesta en vez de una por una: las
+herramientas de solo lectura corren en paralelo cuando se piden juntas, y
+pedirlas de a una multiplica la espera sin necesidad.
 
 NUNCA cites fuentes, enlaces, dominios ni "según X". En una pantalla de reloj
 la fuente ocupa más que la respuesta y no se puede pinchar. Da el hecho y
@@ -100,7 +223,16 @@ punto.`;
  * completa aquí: cuando se añadió IDEA: y no se apuntó en este filtro, la
  * palabra "IDEA:" salió impresa en el reloj.
  */
-const CENTINELAS = [CENTINELA, CENTINELA_IMAGEN, "IDEA:", "OTRA"];
+const CENTINELAS = [
+  CENTINELA,
+  CENTINELA_IMAGEN,
+  CENTINELA_IMAGEN_PERSONA,
+  CENTINELA_WEB_NOTICIA,
+  CENTINELA_WEB_DATO,
+  CENTINELA_ESTADO,
+  "IDEA:",
+  "OTRA",
+];
 
 /** IDs completos, no alias del CLI: la API cruda no resuelve "haiku". */
 const MODELO = process.env.WATCH_MODEL || "claude-haiku-4-5-20251001";
@@ -144,6 +276,30 @@ class SesionRapida {
     this.notas.push(resumen);
   }
 
+  /**
+   * Notas pendientes + el último intercambio de esta sesión, en texto —
+   * para pasárselo a la escalada completa (CONSULTAR/`chat-turns.ts`), que
+   * es una sesión APARTE sin acceso a este historial.
+   *
+   * Bug real que arregla: la nota SÍ llega a la CLASIFICACIÓN (viaja pegada
+   * al mensaje dentro de `preguntar()`), así que el modelo rápido decide
+   * escalar viendo el contexto — pero la escalada arma su propio prompt
+   * desde el mensaje pelado, sin ese contexto. "Profundiza en eso" escalaba
+   * y el turno completo no tenía ni idea de qué era "eso".
+   *
+   * CONSUME las notas pendientes (igual que haría `preguntar()`) para que no
+   * se repitan de más en la próxima pregunta rápida después de escalar.
+   */
+  tomarContextoReciente(): string {
+    const partes: string[] = this.notas.map((n) => `[contexto: ${n}]`);
+    this.notas = [];
+    const ultimo = this.historial.slice(-2);
+    if (ultimo.length) {
+      partes.push(ultimo.map((m) => `${m.role === "user" ? "Usuario" : "OS"}: ${m.content}`).join("\n"));
+    }
+    return partes.join("\n");
+  }
+
   preguntar(prompt: string, onDelta: (t: string) => void): Promise<string> {
     const conNotas = this.notas.length
       ? `${this.notas.map((n) => `[contexto: ${n}]`).join("\n")}\n\n${prompt}`
@@ -158,7 +314,11 @@ class SesionRapida {
     return tarea;
   }
 
-  private async llamar(prompt: string, onDelta: (t: string) => void): Promise<string> {
+  private async llamar(
+    prompt: string,
+    onDelta: (t: string) => void,
+    reintento = false,
+  ): Promise<string> {
     const t0 = Date.now();
     const token = await readToken();
     if (!token) {
@@ -198,7 +358,13 @@ class SesionRapida {
           model: MODELO,
           max_tokens: 300,
           stream: true,
-          system: [{ type: "text", text: SISTEMA, cache_control: { type: "ephemeral" } }],
+          // Segundo bloque de system, SIN cache_control: la fecha/hora cambia
+          // en cada llamada, así que va después del prefijo cacheable en vez
+          // de mezclada con SISTEMA (eso tiraría el caché byte a byte).
+          system: [
+            { type: "text", text: SISTEMA, cache_control: { type: "ephemeral" } },
+            { type: "text", text: contextoTemporal() },
+          ],
           messages: mensajes,
         }),
       });
@@ -212,6 +378,16 @@ class SesionRapida {
     if (!res.ok || !res.body) {
       const cuerpo = await res.text?.().catch(() => "");
       console.error(`[reloj] llamada falló: ${res.status} ${cuerpo ?? ""}`);
+      // 401 con token vencido: se refresca vía el CLI real (ver
+      // refrescarTokenSiExpiro) y se reintenta ESTA MISMA pregunta una vez
+      // — sin esto, el reloj se queda sirviendo "algo falló de mi lado"
+      // durante horas hasta que alguien abra el chat principal y lo
+      // refresque de pura casualidad.
+      if (res.status === 401 && !reintento) {
+        console.log("[reloj] token vencido, forzando refresh vía CLI…");
+        await refrescarTokenSiExpiro();
+        return this.llamar(prompt, onDelta, true);
+      }
       const msg = "Algo falló de mi lado, intenta de nuevo.";
       onDelta(msg);
       return msg;
@@ -219,6 +395,9 @@ class SesionRapida {
 
     let buf = "";
     let acumulado = "";
+    // Cuánto de `acumulado` ya se mandó por `onDelta` — ver el flush de más
+    // abajo.
+    let entregado = 0;
     let primerDeltaEn: number | null = null;
     // Del `message_start`: cuánto del prefijo se sirvió de caché vs. de cero.
     // Es la única forma de CONFIRMAR que el cache_control de arriba hace algo
@@ -263,7 +442,16 @@ class SesionRapida {
             // Ningún centinela se streamea: si la respuesta empieza por uno,
             // esas palabras no deben aparecer en la muñeca.
             const esCentinela = CENTINELAS.some((c) => c.startsWith(parcial) || parcial.startsWith(c));
-            if (!esCentinela) onDelta(evento.delta.text);
+            // Mientras podría SER un centinela, no se manda nada — pero eso
+            // retiene texto real (ej. "C" de "Canberra", porque "CONSULTAR"
+            // también empieza por C). En cuanto se confirma que NO lo es, hay
+            // que mandar TODO lo retenido de una — mandar solo el delta de
+            // ESTA vuelta perdía esos primeros caracteres para siempre (bug
+            // real: "Canberra" llegaba como "anberra").
+            if (!esCentinela && entregado < acumulado.length) {
+              onDelta(acumulado.slice(entregado));
+              entregado = acumulado.length;
+            }
           }
         }
       }

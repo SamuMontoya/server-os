@@ -45,9 +45,17 @@ struct ContentView: View {
   @State private var sacudidaDesde: Date?
   @State private var paso: Paso?
   @State private var respuesta = ""
-  @State private var imagen: URL?
+  @State private var imagen: Data?
   @State private var corriendo = false
   @State private var enRespuesta = false
+  /// Verdadero mientras se está hablando la confirmación de una escalada
+  /// ("Ok, voy a revisar X") — ver `aplicar`. El sintetizador de voz
+  /// ENCOLA, no bloquea, así que sin esto lo que llega justo después
+  /// (el ícono de carpeta) se pintaba mientras la confirmación TODAVÍA se
+  /// estaba diciendo, viéndose atropellado. Lo que llega mientras tanto se
+  /// guarda en `colaEnEspera` y se aplica recién cuando termina de hablar.
+  @State private var esperandoConfirmacion = false
+  @State private var colaEnEspera: [Agente.Evento] = []
   /// Chat vinculado que se está siguiendo (ver Espejo.swift). Vive aparte de
   /// `enRespuesta`: son dos canales distintos, uno propio del reloj
   /// (Agente/preguntar) y otro que solo mira un turno ajeno.
@@ -85,6 +93,8 @@ struct ContentView: View {
       paso = nil
       respuesta = ""
       imagen = nil
+      esperandoConfirmacion = false
+      colaEnEspera = []
       Voz.compartida.callar()   // una pregunta nueva calla la anterior
       corriendo = true
       enRespuesta = true
@@ -111,8 +121,20 @@ struct ContentView: View {
 
   /// Reparte un evento del agente. Lo usan la pregunta nueva Y el re-enganche
   /// al volver: duplicarlo garantizaba que un día divergieran.
+  ///
+  /// Mientras se está hablando la confirmación de una escalada, todo lo que
+  /// llegue se guarda en vez de pintarse — ver `esperandoConfirmacion`.
   @MainActor
   private func aplicar(_ ev: Agente.Evento) {
+    if esperandoConfirmacion {
+      colaEnEspera.append(ev)
+      return
+    }
+    aplicarYa(ev)
+  }
+
+  @MainActor
+  private func aplicarYa(_ ev: Agente.Evento) {
     switch ev {
     case .texto(let t):
       // Vibra en la PRIMERA palabra, no al terminar: en un reloj lo
@@ -125,16 +147,45 @@ struct ContentView: View {
       // Se habla lo MISMO que se pinta, ya sin markdown: si no, la
       // voz lee "asterisco asterisco" en cada énfasis que se escape.
       Voz.compartida.alLlegar(sinMarcas(t))
-    case .imagen(let u):
-      // La vibración NO va aquí: aquí solo llega la URL, y la foto
-      // tarda todavía en descargarse. Vibrar ahora hace mirar una
-      // pantalla que aún está vacía. La dispara la vista al pintarla.
-      imagen = u
+    case .confirmacion(let t):
+      // Pantalla limpia con la confirmación — y se HABLA, no se pinta y ya:
+      // hasta que termine de decirse en voz alta, nada de lo que llegue
+      // después (el ícono de carpeta, pasos reales) se revela. Sin esto,
+      // como el sintetizador encola en vez de bloquear, la carpeta aparecía
+      // mientras la confirmación TODAVÍA se estaba diciendo.
+      paso = nil
+      respuesta = t
+      esperandoConfirmacion = true
+      Voz.compartida.decirYAvisar(sinMarcas(t)) {
+        respuesta = ""
+        esperandoConfirmacion = false
+        let siguientes = colaEnEspera
+        colaEnEspera = []
+        for e in siguientes { aplicarYa(e) }
+      }
+    case .imagen(let d):
+      // La vibración SÍ va aquí: a diferencia de una URL, estos bytes ya
+      // son la foto entera — decodificarla es instantáneo, así que no hay
+      // pantalla vacía que esperar como antes.
+      WKInterfaceDevice.current().play(.notification)
+      imagen = d
     case .escala:
       // La vía rápida no bastó. Se limpia lo que hubiera dicho y a
       // partir de aquí se ven los pasos del turno completo.
       respuesta = ""
     case .paso(let n, let o):
+      // Limpia el mensaje anterior: sin esto, un comentario del modelo
+      // ANTES de este paso seguía viviendo en `respuesta` (invisible
+      // mientras se ve el paso, porque el texto y el paso son excluyentes
+      // en pantalla) y el PRÓXIMO comentario se le pegaba encima apenas
+      // volviera a verse texto — eso era la "concatenación". Cada paso
+      // cierra el mensaje anterior; el próximo texto arranca de cero.
+      respuesta = ""
+      // Mismo cierre del lado hablado: si el comentario no terminó en un
+      // signo de puntuación antes de este paso, `cerrar()` lo dice YA en
+      // vez de dejarlo en el limbo hasta el final del turno — el corte
+      // visual y el hablado quedan en el mismo punto.
+      Voz.compartida.cerrar()
       // Reemplaza, no acumula: solo interesa lo que está haciendo AHORA.
       withAnimation(.easeInOut(duration: 0.18)) {
         paso = Paso(nombre: n, objetivo: o)
@@ -202,14 +253,38 @@ struct ContentView: View {
       // ¿Se bajó la muñeca a mitad de una respuesta? Se recupera desde su
       // cursor en vez de darla por perdida: watchOS suspende la app y eso mata
       // el stream, pero el turno sigue vivo en el servidor.
-      let habia = await Agente.recuperar { ev in
-        Task { @MainActor in
-          if !enRespuesta {
-            enRespuesta = true
-            corriendo = true
+      //
+      // Con TOPE DE TIEMPO: `Agente.recuperar` primero mira un id guardado en
+      // disco y solo si hay uno hace una llamada de red — pero esa llamada
+      // puede demorarse (turno viejo de una prueba anterior, wifi lenta) y
+      // eso retrasaba el poder abrir el dictado de una al abrir la app. 1.5s
+      // de margen: si no respondió para entonces, se cancela y se asume que
+      // no había nada que recuperar — perder una recuperación lenta de vez en
+      // cuando es mejor que hacer esperar SIEMPRE al caso común (abrir de
+      // cero, nada que recuperar).
+      let habia = await withTaskGroup(of: Bool.self) { grupo -> Bool in
+        grupo.addTask {
+          await Agente.recuperar { ev in
+            Task { @MainActor in
+              if !enRespuesta {
+                enRespuesta = true
+                corriendo = true
+              }
+              aplicar(ev)
+            }
           }
-          aplicar(ev)
         }
+        grupo.addTask {
+          try? await Task.sleep(nanoseconds: 1_500_000_000)
+          return false
+        }
+        let primero = await grupo.next() ?? false
+        // `withTaskGroup` espera a TODOS los hijos antes de devolver el
+        // control, aunque ya se haya leído el primer resultado — sin
+        // cancelar el que quedó atrás, el tope de 1.5s no cortaría nada:
+        // esta llamada completa igual se quedaría colgada esperándolo.
+        grupo.cancelAll()
+        return primero
       }
       if habia { corriendo = false }
     }

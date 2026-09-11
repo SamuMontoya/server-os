@@ -1,5 +1,6 @@
 import SwiftUI
 import WatchKit
+import UIKit
 
 /// Un paso del agente: qué hizo y sobre qué.
 struct Paso: Identifiable {
@@ -19,6 +20,8 @@ struct Paso: Identifiable {
     case "Grep": "magnifyingglass"
     case "Glob", "LS": "folder"
     case "WebFetch", "WebSearch": "globe"
+    case "ImageSearch": "photo"
+    case "Escalando": "folder"
     case "Task": "bolt"
     default: "sparkles"
     }
@@ -33,6 +36,8 @@ struct Paso: Identifiable {
     case "Grep": "Buscó"
     case "Glob", "LS": "Listó"
     case "WebFetch", "WebSearch": "Consultó"
+    case "ImageSearch": "Buscó"
+    case "Escalando": "Revisando"
     case "Task": "Delegó"
     default: "Usó"
     }
@@ -78,7 +83,7 @@ func sinMarcas(_ t: String) -> String {
 struct Respuesta: View {
   let paso: Paso?
   let texto: String
-  let imagen: URL?
+  let imagen: Data?
   let corriendo: Bool
   let alTocar: () -> Void
 
@@ -88,23 +93,20 @@ struct Respuesta: View {
     GeometryReader { geo in
       ScrollView {
         VStack(spacing: 6) {
-          if let imagen {
+          if let imagen, let foto = UIImage(data: imagen) {
             // A pantalla casi completa: en un reloj una imagen pequeña no se
             // ve, y aquí la imagen ES la respuesta.
-            AsyncImage(url: imagen) { fase in
-              switch fase {
-              case .success(let img):
-                img.resizable().scaledToFit()
-                  .clipShape(RoundedRectangle(cornerRadius: 10))
-                  // Vibra cuando la imagen YA está en pantalla, no cuando
-                  // llegó su dirección.
-                  .onAppear { WKInterfaceDevice.current().play(.notification) }
-              case .failure:
-                Text("No cargó").font(.system(size: 13)).foregroundStyle(Self.tinta.opacity(0.5))
-              default:
-                OrbeCargando()
-              }
-            }
+            //
+            // Ya NO es un AsyncImage: los bytes llegan completos en el mismo
+            // evento del servidor (ver `buscarImagen` en `imagen.ts`), así
+            // que decodificarla es local e instantáneo — no hay una segunda
+            // descarga que esperar ni, con ella, una segunda pantalla de
+            // carga genérica entre "buscando" y la foto.
+            Image(uiImage: foto)
+              .resizable().scaledToFit()
+              .clipShape(RoundedRectangle(cornerRadius: 10))
+          } else if imagen != nil {
+            Text("No cargó").font(.system(size: 13)).foregroundStyle(Self.tinta.opacity(0.5))
           } else if !texto.isEmpty {
             Text(sinMarcas(texto))
               .font(.system(size: 16))

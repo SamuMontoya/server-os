@@ -4,7 +4,7 @@ import { cors } from "hono/cors";
 import { env } from "./env.js";
 import { EMB } from "./embeddings.js";
 import { modelSummary } from "./agent/models.js";
-import { budgetState } from "./agent/budget.js";
+import { budgetState, iniciarRefrescoPeriodico } from "./agent/budget.js";
 import { verifySupabaseToken, withUser } from "./auth.js";
 import { pushPresence } from "./presence.js";
 import { readProjects } from "./vault/projects.js";
@@ -141,6 +141,7 @@ registerChatThreadsRoutes(app); // /chat/threads*, /chat/active — continuidad 
 
 // ── Boot ───────────────────────────────────────────────────────────────
 startSystemSampler(); // sampler de CPU (5s) para GET /system
+iniciarRefrescoPeriodico(); // token OAuth del reloj fresco de antemano, no reactivo a un 401 real
 void readProjects(); // primer parse + sync a projects_cache
 void reconcileRunningTasks(); // arregla tareas 'running' huérfanas de un reinicio
 // Turnos de chat que quedaron 'running' cuando el proceso ANTERIOR murió a

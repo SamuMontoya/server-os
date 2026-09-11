@@ -67,10 +67,16 @@ enum Agente {
   /// aportan y solo quitarían sitio.
   enum Evento {
     case texto(String)
+    /// Confirmación instantánea antes de escalar ("Ok, voy a revisar X") —
+    /// distinta de `.texto`: esta se habla y HASTA QUE termina de hablarse
+    /// no se revela lo que venga después (ver `ContentView.aplicar`).
+    case confirmacion(String)
     /// La vía rápida no bastó: se pasa al turno completo, con pasos.
     case escala
-    /// Una imagen de internet para enseñar en pantalla.
-    case imagen(URL)
+    /// Una imagen de internet para enseñar en pantalla, YA descargada por el
+    /// servidor — nunca una URL: el reloj no abre una segunda conexión para
+    /// bajarla (ver el comentario grande de `buscarImagen` en `imagen.ts`).
+    case imagen(Data)
     case paso(nombre: String, objetivo: String)
     case fin
     case fallo(String)
@@ -92,11 +98,24 @@ enum Agente {
     get {
       guard let d = UserDefaults.standard.dictionary(forKey: "turnoReloj"),
             let id = d["id"] as? String else { return nil }
+      // Un pendiente VIEJO (de una prueba de hace rato, un turno que el
+      // servidor ya cerró hace tiempo) no vale la pena recuperarlo — y peor,
+      // bloquea el "ya te estoy escuchando" de abrir la app de cero, porque
+      // `recuperar()` cree que hay algo real que mostrar primero. Un turno
+      // GENUINAMENTE activo va refrescando `desde` en cada `seq` nuevo (ver
+      // el `set` de abajo), así que nunca envejece mientras sigue en curso.
+      let desde = d["desde"] as? Double ?? 0
+      if Date().timeIntervalSince1970 - desde > 120 {
+        UserDefaults.standard.removeObject(forKey: "turnoReloj")
+        return nil
+      }
       return (id, d["seq"] as? Int ?? 0)
     }
     set {
       if let n = newValue {
-        UserDefaults.standard.set(["id": n.id, "seq": n.seq], forKey: "turnoReloj")
+        UserDefaults.standard.set(
+          ["id": n.id, "seq": n.seq, "desde": Date().timeIntervalSince1970],
+          forKey: "turnoReloj")
       } else {
         UserDefaults.standard.removeObject(forKey: "turnoReloj")
       }
@@ -156,12 +175,16 @@ enum Agente {
     switch evento {
     case "delta":
       if let t = j["text"] as? String, !t.isEmpty { alRecibir(.texto(t)) }
+    case "confirmacion":
+      if let t = j["text"] as? String, !t.isEmpty { alRecibir(.confirmacion(t)) }
     case "paso":
       if let n = j["name"] as? String, !n.isEmpty {
         alRecibir(.paso(nombre: n, objetivo: j["target"] as? String ?? ""))
       }
     case "imagen":
-      if let u = j["url"] as? String, let url = URL(string: u) { alRecibir(.imagen(url)) }
+      if let b64 = j["datos"] as? String, let datos = Data(base64Encoded: b64) {
+        alRecibir(.imagen(datos))
+      }
     case "escala":
       alRecibir(.escala)
     case "latido", "turno":
@@ -227,7 +250,15 @@ enum Agente {
       // de sistema de la sesión persistente del servidor. Mandarlo aquí
       // alargaba cada pregunta y encima confundía al clasificador.
       p.httpBody = try JSONSerialization.data(withJSONObject: ["message": texto])
-      p.timeoutInterval = 300
+      // 300s (medido en producción: un turno normal en el reloj tarda bien
+      // por debajo de 1s, uno escalado con tools puede llevar más) dejaba que
+      // una conexión genuinamente colgada (wifi que se cae a medio stream,
+      // sin RST ni FIN) se quedara "cargando" hasta CINCO MINUTOS antes de
+      // que este intento se diera por vencido — se sentía como que la app se
+      // congeló. 30s alcanza de sobra para lo lento de verdad y falla rápido
+      // ante lo que de verdad está colgado, para que el reintento de arriba
+      // tenga margen de sobra para correr.
+      p.timeoutInterval = 30
 
       // La respuesta ES el stream: /watch/ask contesta por SSE directamente,
       // sin el paso previo de crear un turno. Un viaje menos antes de hablar.
@@ -268,8 +299,16 @@ enum Agente {
       if !silencioso { alRecibir(.fallo("El servidor no dijo nada")) }
       return false
     } catch {
-      // Si ya habló, se corta aquí: reintentar duplicaría lo dicho.
+      // Si ya habló, no se reintenta ESTE request (duplicaría lo dicho) —
+      // pero el turno sigue vivo en el SERVIDOR (es un trabajo suyo, no de
+      // este socket), así que antes de darlo por perdido se intenta
+      // RECONECTAR al mismo turno con el cursor que ya se guardó arriba.
+      // Es el mismo camino que usa `recuperar()` al reabrir la app — la
+      // diferencia es que acá no hace falta reabrir nada: pasa solo,
+      // aunque la conexión se haya caído por bajar la muñeca a mitad de
+      // una respuesta larga.
       if hablo {
+        if await recuperar(alRecibir: alRecibir) { return true }
         alRecibir(.fallo("Se cortó a medias"))
         return true
       }

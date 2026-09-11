@@ -17,6 +17,12 @@ final class Voz: NSObject {
   private let sintetizador = AVSpeechSynthesizer()
   private var pendiente = ""
 
+  /// Avisos de "ya terminé de decir ESTA frase concreta" — por identidad del
+  /// `AVSpeechUtterance`, porque el sintetizador ENCOLA (no bloquea): sin
+  /// esto, quien pide hablar algo no tiene forma de saber cuándo el reloj
+  /// de verdad terminó de decirlo en voz alta, solo cuándo se lo pidió.
+  private var alTerminarPorUtterance: [ObjectIdentifier: () -> Void] = [:]
+
   private lazy var voz: AVSpeechSynthesisVoice? = Self.mejor()
 
   private static func mejor() -> AVSpeechSynthesisVoice? {
@@ -48,6 +54,7 @@ final class Voz: NSObject {
     // conviene— pintar otra.
     sintetizador.usesApplicationAudioSession = false
     super.init()
+    sintetizador.delegate = self
   }
 
   /// Habla por FRASES según van llegando, no al final.
@@ -74,11 +81,35 @@ final class Voz: NSObject {
   func callar() {
     pendiente = ""
     sintetizador.stopSpeaking(at: .immediate)
+    // El delegate avisa `didCancel` de la que sonaba al parar, pero no hay
+    // garantía de que también avise de las que quedaron en cola sin
+    // empezar — se cierran TODAS acá, explícito: nadie debe quedar
+    // esperando un aviso que ya no va a llegar (eso trababa `enEspera` de
+    // ContentView para siempre).
+    let pendientes = Array(alTerminarPorUtterance.values)
+    alTerminarPorUtterance.removeAll()
+    pendientes.forEach { cb in DispatchQueue.main.async(execute: cb) }
+  }
+
+  /// Dice UNA frase suelta, fuera del buffer de `alLlegar`/`cerrar` (que es
+  /// para la RESPUESTA que va llegando en pedazos) — para algo puntual como
+  /// la confirmación de "ok, voy a revisar X", donde quien llama necesita
+  /// saber cuándo el reloj YA lo dijo en voz alta, no solo cuándo se lo pidió.
+  func decirYAvisar(_ t: String, alTerminar: @escaping () -> Void) {
+    let limpio = t.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !limpio.isEmpty else { return alTerminar() }
+    let u = construir(limpio)
+    alTerminarPorUtterance[ObjectIdentifier(u)] = alTerminar
+    sintetizador.speak(u)
   }
 
   private func decir(_ t: String) {
     let limpio = t.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !limpio.isEmpty else { return }
+    sintetizador.speak(construir(limpio))
+  }
+
+  private func construir(_ limpio: String) -> AVSpeechUtterance {
     let u = AVSpeechUtterance(string: limpio)
     u.voice = voz
     // Un pelo por encima del ritmo por defecto: en un reloj la respuesta es
@@ -93,7 +124,27 @@ final class Voz: NSObject {
     // dial mientras suena). Poner esto explícito evita que un cambio futuro lo
     // deje atenuado sin darse cuenta.
     u.volume = 1.0
+    return u
+  }
+}
 
-    sintetizador.speak(u)
+extension Voz: AVSpeechSynthesizerDelegate {
+  /// El delegate puede llamar desde cualquier hilo — de un lado a otro por
+  /// `@MainActor` porque quien está esperando este aviso casi siempre toca
+  /// `@State` de una vista.
+  func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+    avisar(utterance)
+  }
+
+  /// `callar()` (una pregunta nueva silenciando la anterior) cancela en vez
+  /// de terminar — sin este caso, el aviso de la frase cancelada nunca
+  /// llega y quien esperaba quedaría colgado para siempre.
+  func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+    avisar(utterance)
+  }
+
+  private func avisar(_ utterance: AVSpeechUtterance) {
+    guard let cb = alTerminarPorUtterance.removeValue(forKey: ObjectIdentifier(utterance)) else { return }
+    DispatchQueue.main.async(execute: cb)
   }
 }

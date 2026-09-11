@@ -1,108 +1,82 @@
+import { imageSearch, imageSearchConfigured } from "../imagesearch/index.js";
+import { wikipediaImageSearch } from "../imagesearch/wikipedia.js";
+
 /**
  * Primera imagen de internet para una consulta ("muéstrame un husky").
  *
- * Sin API key ni cuenta: Wikipedia primero (rápida, imágenes limpias y de
- * portada, que para "un husky" es exactamente lo que se quiere) y Openverse
- * de respaldo para lo que Wikipedia no tenga como artículo.
+ * Antes esto era Wikipedia (portada del artículo) + Openverse de respaldo,
+ * sin API key. Reemplazado por Pexafy: un solo proveedor que ya busca +
+ * rankea + pagina sobre 9 bancos de fotos libres (Unsplash, Pexels, Pixabay
+ * y más), con búsqueda por SIGNIFICADO en vez de coincidencia de palabras —
+ * mismo motivo que Tavily para texto: una sola llamada bien hecha en vez de
+ * armar el pipeline a mano contra varias fuentes gratis pero limitadas.
  *
- * Devuelve SIEMPRE https: el reloj no carga http sin desactivar ATS, y no
- * merece la pena abrir esa puerta por esto.
+ * `indice` 0 es la primera imagen; 1, 2… son "esa no, otra". Pexafy pagina
+ * de verdad (a diferencia de la vieja portada única de Wikipedia), así que
+ * no hace falta la división en dos fuentes de antes — se pide `indice + 1`
+ * resultados y se toma el último; para "otra" varias veces seguidas esto
+ * repite trabajo (vuelve a traer las anteriores), pero es la única forma
+ * simple sin cursores para un caso que en la práctica no pasa de 2-3 toques.
+ *
+ * Se pide la MINIATURA, no `url` (mediana/grande): en una pantalla de ~200pt
+ * no se nota la diferencia de resolución, pero sí el peso. Es literalmente lo
+ * que pedía el spec original ("mostrar thumbnails... en milisegundos"), que
+ * se había perdido al armar el mapeo de `pexafy.ts` pensando en un
+ * consumidor de pantalla grande.
+ *
+ * Y se descarga ACÁ, en el servidor, no en el reloj: antes se mandaba la URL
+ * al reloj y era ÉL quien la bajaba, una SEGUNDA conexión saliente además de
+ * la del `/watch/ask` — exactamente lo que WatchKit pide evitar (WWDC19/716,
+ * ya citado en `Agente.swift`: "reducir el número de peticiones al mínimo
+ * absoluto"), porque cada una paga el túnel Bluetooth al iPhone desde cero.
+ * Con la foto embebida en base64 dentro del mismo evento SSE que ya está
+ * abierto, el reloj no abre nada nuevo: la pinta apenas la recibe, sin una
+ * segunda pantalla de carga genérica esperando esa descarga aparte.
  */
-
-const UA = "hermes-os-watch/1.0 (https://github.com/SamuMontoya/server-os)";
-
-// OJO: nada de `origin=*` en estas URLs. Ese parámetro pone a la API de
-// Wikipedia en modo CORS anónimo, que tiene un límite de peticiones mucho más
-// estricto: respondía "You are making too many requests" y caíamos al
-// respaldo, que es exactamente por qué las imágenes salían imprecisas. Solo
-// hace falta desde un navegador; esto es servidor.
-
 /**
- * Wikipedia en DOS pasos, no uno.
+ * `persona`: viene del clasificador (ver `IMAGEN-PERSONA:` en `rapido.ts`) —
+ * pide alguien real identificable por nombre, así que se busca en Wikipedia
+ * en vez de en Pexafy. Con fallback a Pexafy si Wikipedia no tiene artículo
+ * o el artículo no trae foto (alguien menos conocido): es mejor traer ALGO
+ * relacionado que nada, la misma filosofía que el resto de este archivo.
  *
- * `generator=search` devuelve el primer resultado del BUSCADOR, que para
- * "husky" puede ser un club de hockey o una película. `opensearch` resuelve
- * primero el TÍTULO canónico del artículo —que es lo que uno escribiría en la
- * barra de direcciones— y solo entonces se le pide su imagen de portada. Esa
- * es la diferencia entre "una imagen relacionada" y "la imagen de eso".
+ * Ese fallback SOLO aplica en `indice === 0`: Wikipedia da UNA foto por
+ * artículo, sin paginar, así que "otra" sobre una persona no tiene una
+ * segunda foto que ofrecer desde ahí — y encadenar a Pexafy en ese caso
+ * volvería a traer "algo relacionado, no la persona", justo la queja
+ * original. Más honesto decir que no hay más que fingir una segunda.
  */
-async function deWikipedia(q: string, lang: string): Promise<string | null> {
-  const buscar =
-    `https://${lang}.wikipedia.org/w/api.php?action=opensearch&format=json` +
-    `&search=${encodeURIComponent(q)}&limit=1&namespace=0`;
-  const rb = await fetch(buscar, { headers: { "User-Agent": UA } });
-  if (!rb.ok) return null;
-  const jb = (await rb.json()) as [string, string[], string[], string[]];
-  const titulo = jb?.[1]?.[0];
-  if (!titulo) return null;
-
-  // Los de desambiguación no tienen foto propia y llevarían a una imagen que
-  // no representa nada de lo que se pidió.
-  if (/desambiguaci[oó]n|disambiguation/i.test(titulo)) return null;
-
-  const pedir =
-    `https://${lang}.wikipedia.org/w/api.php?action=query&format=json` +
-    `&titles=${encodeURIComponent(titulo)}&prop=pageimages&piprop=thumbnail&pithumbsize=640`;
-  const r = await fetch(pedir, { headers: { "User-Agent": UA } });
-  if (!r.ok) return null;
-  const j = (await r.json()) as {
-    query?: { pages?: Record<string, { thumbnail?: { source?: string } }> };
-  };
-  return Object.values(j.query?.pages ?? {})[0]?.thumbnail?.source ?? null;
-}
-
-/**
- * Openverse, que sí PAGINA. Es lo que permite "esa no, otra".
- *
- * Wikipedia da UNA imagen por artículo (la de portada), así que para pasar a
- * la siguiente no sirve: hay que ir a un buscador con varios resultados.
- */
-async function deOpenverse(q: string, indice: number): Promise<string | null> {
-  const u =
-    `https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}` +
-    // SIN `category=photograph`. Parecía lo correcto —se quiere un perro
-    // real, no un dibujo— pero estrangula el catálogo: para "husky siberiano"
-    // deja 2 resultados donde sin él hay 240. Con dos, pedir "otra" se queda
-    // sin imágenes al segundo intento. La relevancia de Openverse ya pone las
-    // fotos primero.
-    `&page_size=1&mature=false&page=${indice + 1}`;
-  const r = await fetch(u, { headers: { "User-Agent": UA } });
-  if (!r.ok) return null;
-  const j = (await r.json()) as { results?: { thumbnail?: string; url?: string }[] };
-  const hit = j.results?.[0];
-  return hit?.thumbnail ?? hit?.url ?? null;
-}
-
-/**
- * `indice` 0 es la primera imagen; 1, 2… son "esa no, otra".
- *
- * Wikipedia solo entra en el índice 0, porque da UNA imagen por artículo: la
- * de portada, que para "un husky" es la más certera que existe. A partir de
- * ahí manda Openverse, que pagina de verdad. Sin esta división, pedir otra
- * devolvería la misma foto de Wikipedia una y otra vez.
- */
-export async function buscarImagen(q: string, indice = 0): Promise<string | null> {
+export async function buscarImagen(
+  q: string,
+  indice = 0,
+  persona = false,
+): Promise<{ datos: string; mime: string } | null> {
   const consulta = q.trim();
   if (!consulta) return null;
 
-  const fuentes =
-    indice === 0
-      ? [
-          // Español primero: la consulta viene dictada en español y el
-          // artículo local acierta mejor con nombres comunes.
-          () => deWikipedia(consulta, "es"),
-          () => deWikipedia(consulta, "en"),
-          () => deOpenverse(consulta, 0),
-        ]
-      : [() => deOpenverse(consulta, indice - 1)];
-
-  for (const paso of fuentes) {
-    try {
-      const url = await paso();
-      if (url?.startsWith("https://")) return url;
-    } catch {
-      /* se prueba la siguiente fuente */
+  try {
+    let url: string | undefined;
+    if (persona) {
+      if (indice === 0) {
+        url = (await wikipediaImageSearch(consulta, 1))[0]?.url;
+        if (!url && imageSearchConfigured) {
+          const hit = (await imageSearch(consulta, 1))[0];
+          url = hit?.thumbnailUrl ?? hit?.url;
+        }
+      }
+    } else if (imageSearchConfigured) {
+      const hits = await imageSearch(consulta, indice + 1);
+      const hit = hits[indice];
+      url = hit?.thumbnailUrl ?? hit?.url;
     }
+    if (!url) return null;
+
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const mime = r.headers.get("content-type")?.split(";")[0]?.trim() || "image/jpeg";
+    const datos = Buffer.from(await r.arrayBuffer()).toString("base64");
+    return { datos, mime };
+  } catch {
+    return null;
   }
-  return null;
 }
