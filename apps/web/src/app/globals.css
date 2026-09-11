@@ -350,10 +350,21 @@ body::after {
 }
 
 /* ── Markdown (preview de la vista Voz) ─────────────────────────── */
+/* Nada de scroll horizontal en el chat, bajo NINGUNA circunstancia: un
+   token largo sin espacios (un hash, una URL sin protocolo, un UUID) debe
+   partirse donde toque y seguir en la línea de abajo, no empujar la caja
+   a los lados. `overflow-wrap: anywhere` corta en cualquier punto si hace
+   falta (a diferencia de `break-word`, que solo corta si la palabra ya no
+   cabe pero puede desbordar igual con `min-content` de por medio en flex/
+   grid); `min-width: 0` es necesario porque el padre es flex y sin esto
+   un hijo nunca se encoge más allá de su contenido sin envolver. */
 .md {
   color: var(--text);
   font-size: 12.5px;
   line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
 }
 .md > *:first-child {
   margin-top: 0;
@@ -423,6 +434,8 @@ body::after {
      haiku o una dirección no deben aplastarse en un renglón. `pre-line`
      colapsa espacios pero respeta los \n que manda el parser. */
   white-space: pre-line;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .md-ul,
 .md-ol {
@@ -457,7 +470,10 @@ body::after {
   border: 1px solid var(--line);
   border-radius: 4px;
   background: rgba(122, 132, 255, 0.05);
-  overflow-x: auto;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   font-size: 11.5px;
   line-height: 1.5;
   /* Clic para copiar (ver components/Markdown.tsx → CodeBlock). */
@@ -488,6 +504,8 @@ body::after {
   background: rgba(103, 232, 249, 0.1);
   color: var(--cyan);
   font-size: 0.92em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .md-pre code {
   background: transparent;
@@ -1225,53 +1243,6 @@ html.lab-route body::after {
 .lab-topbar-rename:focus {
   outline: none;
 }
-/* Menú de dos opciones. Ancho fijo y centrado bajo el título — no bajo el
-   dedo, que en un toque desde cualquier punto del título se sentiría
-   errático. */
-.lab-title-menu-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 30;
-}
-.lab-title-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 31;
-  display: flex;
-  flex-direction: column;
-  min-width: 224px;
-  padding: 4px;
-  border-radius: 10px;
-  border: 1px solid #ededec;
-  background: #fff;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-}
-/* Ícono a la IZQUIERDA del texto de cada opción (Samu lo cambió de opinión:
-   antes iba a la derecha con espacio repartido — ahora pegado al texto,
-   como un ítem de menú normal). */
-.lab-title-menu button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: none;
-  background: none;
-  padding: 9px 12px;
-  border-radius: 6px;
-  text-align: left;
-  font-family: var(--font-notion);
-  font-size: 13.5px;
-  color: #37352f;
-  cursor: pointer;
-}
-.lab-title-menu button svg {
-  flex-shrink: 0;
-  color: #9b9a97;
-}
-.lab-title-menu button:hover {
-  background: #f1f1ef;
-}
 .lab-menu-btn {
   display: inline-flex;
   align-items: center;
@@ -1342,9 +1313,29 @@ html.lab-route body::after {
   padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 .lab-chats-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  min-height: 240px;
+  text-align: center;
+  padding: 24px 16px;
+}
+.lab-chats-empty-title {
+  color: #2f2e2c;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+.lab-chats-empty-hint {
   color: #9b9a97;
   font-size: 13px;
-  padding: 8px 2px;
+  margin: 0;
+}
+.lab-chats-empty-hint strong {
+  color: #2f2e2c;
 }
 
 /* Cada card es un asa arrastrable (SwipeableCard) sobre un fondo de acción
@@ -1471,20 +1462,20 @@ html.lab-route body::after {
   text-overflow: ellipsis;
 }
 /* ── Indicador de un chat TRABAJANDO en la lista ──────────────────────────
-   Reemplaza las barras de esqueleto de antes: el pulso de actividad es el
-   orbe (sin ojos — aquí no "mira", solo late) a 16px, alineado con la
-   segunda línea de la card igual que iba el preview de texto que sustituye. */
-.lab-chatcard-orbe {
-  display: inline-flex;
+   Ya no hay punto verde junto al título (duplicaba la señal): el pulso de
+   actividad es el orbe (sin ojos — aquí no "mira", solo late) a 14px, en la
+   MISMA línea que el texto del segundo renglón, que nunca queda vacío
+   mientras corre (ver JSX: cae a "Pensando…" si `chat.preview` no tiene nada
+   todavía). */
+.lab-chatcard-preview--live {
+  display: flex;
   align-items: center;
-  padding: 3px 0 2px;
+  gap: 6px;
 }
-.lab-chatcard-dot {
-  flex-shrink: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #2f9e6e;
+.lab-chatcard-preview-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Barra de input al pie del Laboratorio. Ya NO es `fixed` con un `bottom`
    calculado a mano: es el último hijo del papel con `margin-top: auto`, así

@@ -163,23 +163,28 @@ function SwipeableCard({
               cuadrar márgenes a ojo: el `margin-left:auto` del CSS lo manda
               al extremo derecho y el título se queda con el resto. */}
           <div className="lab-chatcard-top">
-            {chat.running && (
-              <span className="lab-chatcard-dot" aria-label="Corriendo" title="Corriendo" />
-            )}
             <span className="lab-chatcard-title">{chat.title}</span>
             <span className="lab-chatcard-when">{formatWhen(chat.updatedAt)}</span>
           </div>
+          {/* Segundo renglón: SIEMPRE poblado. El punto verde de "corriendo"
+              se quita de arriba (duplicaba la señal) y el orbe sin ojos se
+              muda acá, junto al texto — así nunca queda vacío: o es lo
+              último que escribió Samu (mientras espera respuesta) o el
+              arranque de lo que va escribiendo el modelo, `chat.preview`
+              (ver derivePreview en laboratorio/page.tsx, que cae al último
+              mensaje del usuario si el asistente aún no contestó). Mientras
+              `running` se fuerza el "…" al final para dejar claro que sigue
+              en marcha, sin duplicarlo si `chat.preview` ya lo trae. */}
           {chat.running ? (
-            // TRABAJANDO: en vez del último texto (que está congelado en lo
-            // que se dijo antes de irse, y por tanto miente) va el orbe SIN
-            // ojos, chiquito. Es la forma de decir "aquí abajo está pasando
-            // algo que todavía no se puede mostrar" sin inventar un texto ni
-            // recurrir a barras de esqueleto — Samu quería el mismo lenguaje
-            // visual del orbe, no un placeholder genérico. Sin ojos: en la
-            // lista no es "Hermes mirando", es solo el pulso de actividad.
-            // Al abrir el chat se ve la conversación real, no esto.
-            <span className="lab-chatcard-orbe" role="status" aria-label="Trabajando">
-              <OrbeIA tam="16px" ojos={false} ariaLabel="" />
+            <span className="lab-chatcard-preview lab-chatcard-preview--live">
+              <OrbeIA tam="14px" ojos={false} ariaLabel="" />
+              <span className="lab-chatcard-preview-text">
+                {chat.preview
+                  ? chat.preview.endsWith("…")
+                    ? chat.preview
+                    : `${chat.preview}…`
+                  : "Pensando…"}
+              </span>
             </span>
           ) : chat.preview ? (
             <span className="lab-chatcard-preview">{chat.preview}</span>
@@ -216,7 +221,12 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
 
       <div className="lab-chats-list">
         {chats.length === 0 ? (
-          <p className="lab-chats-empty">Sin chats todavía en este proyecto.</p>
+          <div className="lab-chats-empty">
+            <p className="lab-chats-empty-title">Aún no hay chats aquí</p>
+            <p className="lab-chats-empty-hint">
+              Toca el <strong>+</strong> de arriba para empezar uno nuevo.
+            </p>
+          </div>
         ) : (
           chats.map((c) => (
             <SwipeableCard

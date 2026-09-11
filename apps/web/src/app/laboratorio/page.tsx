@@ -281,11 +281,9 @@ export default function Laboratorio() {
   // que el reloj mismo, es "lo que estoy mirando ahora", no una config del
   // chat. Se apaga solo al cambiar de chat (ver switchToChat/createNewChat).
   const [watchLinked, setWatchLinked] = useState(false);
-  // Menú de dos opciones que abre TOCAR el título ("Renombrar" / conectar el
-  // reloj). Reemplaza el ícono aparte que había antes junto al título —
-  // Samu lo quería así: un solo punto de entrada, no un botón más en la
-  // barra.
-  const [titleMenuOpen, setTitleMenuOpen] = useState(false);
+  // Tocar el título entra DIRECTO a renombrar (ver `startRename`) — Samu
+  // pidió (2026-09-04) quitar el menú de dos opciones que había antes
+  // (Renombrar / conectar el reloj): un solo toque, sin paso intermedio.
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -402,8 +400,12 @@ export default function Laboratorio() {
   /** true = hay suficiente texto por encima del fondo como para mostrar el
    *  botón circular de "ir al final" sobre el composer. */
   const [showJumpDown, setShowJumpDown] = useState(false);
-  /** true = está abierta la pantalla de "chats abiertos" (menú hamburguesa). */
-  const [showChats, setShowChats] = useState(false);
+  /** true = está abierta la pantalla de "chats abiertos" (menú hamburguesa).
+   *  Arranca en `true`: Samu pidió (2026-09-01, repetido 2026-09-04) que al
+   *  cargar la app NO se entre directo al último chat, sino a este menú —
+   *  el chat se abre recién cuando se toca uno de la lista (`onOpen` llama
+   *  `switchToChat`, que sí pone `showChats` en `false`). */
+  const [showChats, setShowChats] = useState(true);
   /**
    * TODOS los object URLs creados en esta visita. Un object URL mantiene el
    * blob vivo hasta que se revoca explícitamente, y las imágenes ya enviadas
@@ -623,7 +625,6 @@ export default function Laboratorio() {
   const startRename = () => {
     setRenameDraft(topTitle);
     setRenaming(true);
-    setTitleMenuOpen(false);
     requestAnimationFrame(() => renameInputRef.current?.focus());
   };
 
@@ -643,7 +644,6 @@ export default function Laboratorio() {
    *  se avisa al servidor YA (`unlinkWatchTurn`), no alcanza con dejar de
    *  renovarlo: si no, el reloj seguiría viendo el último turno vinculado. */
   const toggleWatchLink = () => {
-    setTitleMenuOpen(false);
     setWatchLinked((v) => {
       const next = !v;
       if (next && turnIdRef.current) {
@@ -709,7 +709,6 @@ export default function Laboratorio() {
     // El vínculo con el reloj es "lo que estoy mirando ahora", no algo del
     // chat: cambiar de chat (o abrir uno nuevo) lo apaga siempre.
     setWatchLinked(false);
-    setTitleMenuOpen(false);
     setRenaming(false);
     // El pin de lectura y el ancla son del chat que se está DEJANDO — si
     // Samu había scrolleado arriba ahí, no debe heredarlo el que abre ahora.
@@ -1827,10 +1826,10 @@ export default function Laboratorio() {
             "Chats" — la barra no se oculta, así que tiene que contar dónde
             está uno parado.
 
-            Tocar el título ABRE UN MENÚ de dos opciones (renombrar / reloj)
-            en vez de un ícono aparte en la barra — Samu lo pidió así después
-            de que el ícono separado no le convenciera. `position:relative`
-            en el wrapper es lo que ancla el menú justo debajo. */}
+            Tocar el título entra DIRECTO al input de renombrar (sin menú
+            intermedio — Samu pidió (2026-09-04) quitar las dos opciones que
+            había antes). `position:relative` en el wrapper ya no ancla un
+            menú, se deja porque no estorba. */}
         <div className="lab-topbar-titlewrap">
           {renaming ? (
             <input
@@ -1854,7 +1853,7 @@ export default function Laboratorio() {
               className="lab-topbar-title"
               disabled={showChats}
               title={showChats ? undefined : topTitle || undefined}
-              onClick={() => setTitleMenuOpen((v) => !v)}
+              onClick={startRename}
             >
               {watchLinked && (
                 <span className="lab-watch-icon" aria-label="Reloj vinculado" title="Reloj vinculado">
@@ -1863,31 +1862,6 @@ export default function Laboratorio() {
               )}
               <span className="lab-topbar-title-text">{showChats ? "Chats" : topTitle}</span>
             </button>
-          )}
-          {titleMenuOpen && (
-            <>
-              {/* Capa invisible para cerrar al tocar fuera — el menú mismo
-                  no tapa el resto de la pantalla, así que sin esto quedaría
-                  abierto hasta el próximo toque AL título. */}
-              <div className="lab-title-menu-backdrop" onClick={() => setTitleMenuOpen(false)} />
-              <div className="lab-title-menu" role="menu">
-                <button type="button" role="menuitem" onClick={startRename}>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path
-                      d="M4 20h4L18.5 9.5a2.121 2.121 0 0 0-3-3L5 17v3Z"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  <span>Renombrar</span>
-                </button>
-                <button type="button" role="menuitem" onClick={toggleWatchLink}>
-                  <WatchGlyph size={15} />
-                  <span>{watchLinked ? "Desconectar del reloj" : "Conectar al reloj"}</span>
-                </button>
-              </div>
-            </>
           )}
         </div>
         <button
