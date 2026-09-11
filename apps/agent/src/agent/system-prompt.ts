@@ -191,10 +191,16 @@ export async function buildTurnContext(
 ): Promise<string> {
   if (magro || !message.trim()) return "";
 
+  const t0 = Date.now();
   const [recent, relevant] = await Promise.all([
     recentMemories(retrieval.recent),
     searchKnowledge(message, { limit: retrieval.relevant }),
   ]);
+  // Instrumentación TEMPORAL (ver la de session.ts): separa "memorias
+  // recientes" (una consulta simple a Supabase) de "conocimiento relevante"
+  // (embedding + RPC) — son las dos ramas del Promise.all de arriba y la
+  // que tarda más de las dos es la sospechosa real del orbe pegado.
+  console.error(`[timing] buildTurnContext=${Date.now() - t0}ms`);
 
   const seenMemories = new Set<string>(recent.map((m) => m.id));
   const lines = recent.map(

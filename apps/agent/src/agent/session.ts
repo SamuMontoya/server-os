@@ -154,8 +154,16 @@ export interface TurnUsage {
 }
 
 export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
+  // Instrumentación TEMPORAL de latencia: cuánto tarda cada etapa previa a la
+  // primera palabra. Sin esto, "el chat se queda pegado" era un síntoma sin
+  // causa localizada — con esto, journalctl muestra EXACTAMENTE cuál de las
+  // tres etapas es la lenta (perfil, system prompt, o retrieval del turno) en
+  // vez de tener que adivinar. Se puede borrar una vez confirmada la causa.
+  const t0 = Date.now();
+
   // El perfil decide cuánto contexto se PRECARGA (ver budget.ts).
   const _profile = await currentProfile();
+  const t1 = Date.now();
   // El system prompt es ESTABLE por sesión (memoizado, sin el mensaje dentro):
   // es lo que hace que el caché de prompt pegue turno a turno. El contexto que
   // sí depende del mensaje se arma aparte y viaja pegado al mensaje. Ver el
@@ -173,6 +181,11 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
       ? Promise.resolve("")
       : buildTurnContext(opts.prompt, _profile.retrieval, opts.magro),
   ]);
+  const t2 = Date.now();
+  console.error(
+    `[timing] perfil=${t1 - t0}ms precarga(prompt+contexto)=${t2 - t1}ms ` +
+      `total-hasta-SDK=${t2 - t0}ms · magro=${!!opts.magro} precargarContexto=${opts.precargarContexto !== false}`,
+  );
 
   // Enrutamiento del turno. La clasificación es local (cero tokens) y el nivel
   // queda FIJO por sesión: el caché de prompt es por modelo, así que cambiarlo

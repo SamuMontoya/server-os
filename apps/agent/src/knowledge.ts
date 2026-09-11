@@ -22,7 +22,9 @@ export async function searchKnowledge(
 ): Promise<KnowledgeHit[]> {
   if (!supabase) return [];
   const limit = opts.limit ?? 12;
+  const tEmbed0 = Date.now();
   const embedding = await embed(query);
+  const tEmbed1 = Date.now();
   if (embedding) {
     // Se piden de más y se depura acá: sin esto, los turnos de chat recientes
     // (boost de recencia) acaparan el top y aparecen repetidos casi idénticos.
@@ -32,6 +34,12 @@ export async function searchKnowledge(
       filter_sources: opts.sources ?? null,
       filter_project: opts.project ?? null,
     });
+    // Instrumentación TEMPORAL (ver session.ts/system-prompt.ts): separa el
+    // embedding (Ollama/OpenAI) del RPC (Supabase/pgvector) — son la causa
+    // más probable de que el chat se quede pegado en el orbe.
+    console.error(
+      `[timing] searchKnowledge: embed=${tEmbed1 - tEmbed0}ms rpc=${Date.now() - tEmbed1}ms`,
+    );
     if (!error && data) {
       const hits = diversify(data as KnowledgeHit[], limit);
       touchMemories(hits);
