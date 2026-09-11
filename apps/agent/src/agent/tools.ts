@@ -10,6 +10,7 @@ import { searchKnowledge, knowledgeToText } from "../knowledge.js";
 import { readProjects } from "../vault/projects.js";
 import { supabase } from "../supabase.js";
 import { OWNER } from "../owner.js";
+import { syncDriveFolder, extractFolderId } from "../drive/sync.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -172,6 +173,27 @@ const captureIdeaTool = tool(
   },
 );
 
+const syncDriveFolderTool = tool(
+  "sync_drive_folder",
+  "Escanea una carpeta de Google Drive (URL o ID, recursivo) y vectoriza sus documentos (PDF/DOCX/XLSX) en la base de conocimiento — quedan buscables por search_knowledge (fuente 'drive'). Requiere la carpeta compartida con la cuenta de servicio configurada (GOOGLE_DRIVE_SA_KEY_PATH). Reusable: se puede correr de nuevo sobre la misma carpeta (solo re-indexa lo que cambió) o sobre una carpeta distinta.",
+  {
+    folder: z.string().describe("URL de Google Drive (https://drive.google.com/drive/folders/...) o el ID pelado de la carpeta"),
+  },
+  async ({ folder }) => {
+    const folderId = extractFolderId(folder);
+    if (!folderId) return text(`No reconocí un folder ID válido en "${folder}".`);
+    const result = await syncDriveFolder(folderId);
+    if (!result) {
+      return text(
+        "No se pudo sincronizar. Revisa: GOOGLE_DRIVE_SA_KEY_PATH en .env, que la migración 030_drive_docs.sql esté aplicada en Supabase, y que la carpeta esté compartida con la service account.",
+      );
+    }
+    return text(
+      `Sincronizado ✓ ${result.indexed} documentos indexados/actualizados · ${result.scanned} escaneados · ${result.skipped} sin texto extraíble · ${result.removed} eliminados del índice (ya no están en la carpeta).`,
+    );
+  },
+);
+
 const getRecentActivityTool = tool(
   "get_recent_activity",
   "Devuelve la actividad reciente del agente (sesiones y acciones) para responder '¿en qué quedamos?'.",
@@ -217,6 +239,7 @@ const ACTIVE_TOOLS: AnyTool[] = [
   searchVaultTool,
   captureIdeaTool,
   getRecentActivityTool,
+  syncDriveFolderTool,
 ];
 
 export const hermesMcpServer = createSdkMcpServer({

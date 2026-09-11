@@ -53,6 +53,10 @@ export const env = {
   SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL || "",
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || "",
+  // Ruta al JSON de la service account de Google Drive (fuera del repo,
+  // nunca se commitea). Sin esto, sync_drive_folder / pnpm sync:drive quedan
+  // inactivos y lo dicen explícito en vez de fallar con un error críptico.
+  GOOGLE_DRIVE_SA_KEY_PATH: process.env.GOOGLE_DRIVE_SA_KEY_PATH || "",
   // ── Embeddings: proveedor intercambiable ──────────────────────────────
   // "openai"  → text-embedding-3-small, 1536 dims, columnas `embedding`.
   // "ollama"  → modelo local (default nomic-embed-text, 768), columnas
