@@ -10,6 +10,8 @@ import { searchKnowledge, knowledgeToText } from "../knowledge.js";
 import { readProjects } from "../vault/projects.js";
 import { supabase } from "../supabase.js";
 import { OWNER } from "../owner.js";
+import { webSearch, webSearchConfigured } from "../websearch/index.js";
+import { imageSearch, imageSearchConfigured } from "../imagesearch/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -172,6 +174,48 @@ const captureIdeaTool = tool(
   },
 );
 
+const webSearchTool = tool(
+  "web_search",
+  "Búsqueda EN INTERNET, en vivo — para lo que cambia fuera de este sistema y no está en memoria/vault: noticias, precios, docs externas, cualquier hecho actual. Devuelve resultados YA rankeados por relevancia con su contenido extraído, no HTML crudo ni links a pelo.",
+  {
+    query: z.string().describe("Qué buscar, como se escribiría en un buscador"),
+    max_results: z.number().min(1).max(10).optional().describe("Cuántos resultados devolver (default 5)"),
+  },
+  async ({ query, max_results }) => {
+    if (!webSearchConfigured) return text("Búsqueda web no configurada (falta la API key del proveedor).");
+    try {
+      const hits = await webSearch(query, max_results ?? 5);
+      if (!hits.length) return text(`Sin resultados para "${query}".`);
+      return text(hits.map((h, i) => `${i + 1}. ${h.title}\n${h.url}\n${h.content}`).join("\n\n"));
+    } catch (err) {
+      return text(`Error en la búsqueda web: ${String(err).slice(0, 300)}`);
+    }
+  },
+);
+
+const imageSearchTool = tool(
+  "image_search",
+  "Busca imágenes reales para MOSTRAR (Pexafy: Unsplash/Pexels/Pixabay y más, búsqueda por significado — una frase descriptiva completa da mejores resultados que dos palabras sueltas). Devuelve URLs y miniaturas ya rankeadas. Pegá la URL/markdown tal cual en tu respuesta — no describas el contenido de la imagen, el usuario la ve directamente.",
+  {
+    query: z.string().describe("Qué imagen buscar, en lenguaje natural (ej: 'un husky siberiano corriendo en la nieve')"),
+    max_results: z.number().min(1).max(10).optional().describe("Cuántas imágenes devolver (default 3)"),
+  },
+  async ({ query, max_results }) => {
+    if (!imageSearchConfigured) return text("Búsqueda de imágenes no configurada (falta la API key del proveedor).");
+    try {
+      const hits = await imageSearch(query, max_results ?? 3);
+      if (!hits.length) return text(`Sin resultados para "${query}".`);
+      return text(
+        hits
+          .map((h, i) => `${i + 1}. ![${query}](${h.url})${h.attribution ? ` — ${h.attribution}` : ""}`)
+          .join("\n"),
+      );
+    } catch (err) {
+      return text(`Error buscando imágenes: ${String(err).slice(0, 300)}`);
+    }
+  },
+);
+
 const getRecentActivityTool = tool(
   "get_recent_activity",
   "Devuelve la actividad reciente del agente (sesiones y acciones) para responder '¿en qué quedamos?'.",
@@ -216,6 +260,8 @@ const ACTIVE_TOOLS: AnyTool[] = [
   updateProjectNoteTool,
   searchVaultTool,
   captureIdeaTool,
+  webSearchTool,
+  imageSearchTool,
   getRecentActivityTool,
 ];
 

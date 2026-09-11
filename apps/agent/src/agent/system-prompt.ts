@@ -5,6 +5,7 @@ import { readProjects } from "../vault/projects.js";
 import { listPreferences, recentMemories } from "../memory.js";
 import { searchKnowledge } from "../knowledge.js";
 import { OWNER, soulPromptBlock } from "../owner.js";
+import { contextoTemporal } from "../temporal.js";
 
 /**
  * Ensambla el system prompt de Hermes explícitamente (no dependemos del
@@ -65,7 +66,7 @@ Cómo piensas: no eres complaciente. Si algo se puede hacer mejor, dilo — sugi
 
 Reglas:
 - El vault es la fuente de verdad de proyectos y conocimiento. Léelo cuando necesites contexto real; nunca inventes el estado de un proyecto.
-- Tools mcp__hermes__*: search_knowledge (TU PRIMERA opción para contexto histórico — memorias, ejecuciones, conversaciones pasadas y vault) · save_memory/save_preference (proactivo, al cerrar una tarea significativa; cada memoria autocontenida con nombres y contexto) · search_memory/get_recent_activity (acotadas a una fuente) · get_project_status/update_project_note (proyectos) · capture_idea (Inbox del vault).
+- Tools mcp__hermes__*: search_knowledge (TU PRIMERA opción para contexto histórico — memorias, ejecuciones, conversaciones pasadas y vault) · web_search (TU ÚNICA opción para cualquier cosa que necesite internet EN VIVO: noticias, precios, resultados de eventos, documentación externa, cualquier hecho actual o posterior a lo que sabes — úsala en vez de responder de memoria o de "no sé"/"no lo encontré", y en vez de WebSearch/WebFetch, que son de respaldo si esta falla) · image_search (para MOSTRAR una imagen real — pegá la URL/markdown tal cual, sin describir la imagen) · save_memory/save_preference (proactivo, al cerrar una tarea significativa; cada memoria autocontenida con nombres y contexto) · search_memory/get_recent_activity (acotadas a una fuente) · get_project_status/update_project_note (proyectos) · capture_idea (Inbox del vault).
 - Nada destructivo sin confirmación explícita (sudo, borrar fuera del vault, lo irreversible) — el resto depende de la conversación.
 - NUNCA termines tu respuesta diciendo que "avisas cuando esté listo" o algo similar y te quedes ahí sin hacer nada más: no existe un "después" en el que vuelvas a escribir solo — este turno es tu única oportunidad de trabajar. Si la tarea implica varios pasos, HAZLOS ahora mismo, uno tras otro, en este mismo turno, y usa las tools de verdad (no solo lo digas). Si de verdad no te alcanza el turno, el sistema te deja continuar solo — pero eso pasa por seguir llamando tools, nunca por prometer que ibas a hacerlo.
 - Bash con \`run_in_background: true\` (más \`BashOutput\` para revisar y \`KillShell\` para cortarlo) es para comandos genuinamente largos (install, build, descarga de un modelo) — así el turno no se queda bloqueado esperando. Pero lanzarlo en background NO es una excusa para terminar el turno con "corriendo en background, aviso cuando esté listo": eso es exactamente la promesa vacía de la regla de arriba. Revisa el progreso con \`BashOutput\` DENTRO de este mismo turno (esperando un poco entre chequeos si hace falta) y sigue trabajando en lo que sí puedas mientras tanto; solo cierras el turno con un resultado real confirmado, no una expectativa.
@@ -174,8 +175,10 @@ const SOURCE_LABELS: Record<string, string> = {
  * usuario, el contenido variable queda DESPUÉS de todo lo cacheable y solo
  * cuesta lo que pesa.
  *
- * Devuelve "" si no hay nada que aportar — el llamador no debe agregar
- * encabezados vacíos al mensaje.
+ * SIEMPRE incluye la fecha/hora actual (`contextoTemporal`, ver temporal.ts)
+ * — es la única línea que no depende de retrieval, así que sale incluso en
+ * modo magro o con mensaje vacío. El resto (memorias + conocimiento) se
+ * agrega debajo cuando aplica.
  */
 export async function buildTurnContext(
   message: string,
@@ -190,7 +193,8 @@ export async function buildTurnContext(
   /** Salta toda la precarga. Lo usa el canal del reloj. */
   magro = false,
 ): Promise<string> {
-  if (magro || !message.trim()) return "";
+  const temporal = contextoTemporal();
+  if (magro || !message.trim()) return temporal;
 
   const [recent, relevant] = await Promise.all([
     recentMemories(retrieval.recent),
@@ -209,10 +213,10 @@ export async function buildTurnContext(
     const body = h.content.replace(/\s+/g, " ").trim().slice(0, retrieval.chars);
     lines.push(`- [${label}${scope} ${h.created_at.slice(0, 10)}] ${body}`);
   }
-  if (!lines.length) return "";
+  if (!lines.length) return temporal;
 
   return (
-    `<contexto-hermes>\nLo que ya sabes que puede venir al caso (memorias recientes + búsqueda semántica sobre el mensaje). Si necesitas más, amplía con search_knowledge.\n` +
+    `${temporal}\n\n<contexto-hermes>\nLo que ya sabes que puede venir al caso (memorias recientes + búsqueda semántica sobre el mensaje). Si necesitas más, amplía con search_knowledge.\n` +
     lines.join("\n") +
     `\n</contexto-hermes>`
   );

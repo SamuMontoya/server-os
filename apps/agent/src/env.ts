@@ -70,6 +70,21 @@ export const env = {
   // Whisper de fallback. Ponlo en "whisper" si ElevenLabs se queda sin
   // créditos para no gastar la llamada fallida a Scribe.
   STT_PROVIDER: (process.env.HERMES_STT || "").toLowerCase(),
+  // Búsqueda web EN VIVO del agente (tool `web_search`): proveedor
+  // intercambiable, mismo patrón que EMBEDDINGS_PROVIDER — hoy "tavily" es
+  // el único, pensado para poder sumar Exa/Brave/SearXNG o un motor propio
+  // open source sin tocar la tool ni el prompt (ver websearch/index.ts).
+  WEBSEARCH_PROVIDER: (process.env.WEBSEARCH_PROVIDER || "tavily").toLowerCase(),
+  TAVILY_API_KEY: process.env.TAVILY_API_KEY || "",
+  // Fecha/hora/lugar actuales (ver temporal.ts): HERMES_TZ es una zona IANA
+  // ("America/Bogota"); vacía cae a la del sistema operativo. HERMES_LOCATION
+  // es texto libre para mostrar, no GPS en vivo.
+  HERMES_TZ: process.env.HERMES_TZ || "",
+  HERMES_LOCATION: process.env.HERMES_LOCATION || "",
+  // Búsqueda de imágenes: mismo patrón intercambiable que WEBSEARCH_PROVIDER
+  // — hoy Pexafy (ver imagesearch/index.ts).
+  IMAGESEARCH_PROVIDER: (process.env.IMAGESEARCH_PROVIDER || "pexafy").toLowerCase(),
+  PEXAFY_API_KEY: process.env.PEXAFY_API_KEY || "",
 };
 
 export const REPO_ROOT = root;
