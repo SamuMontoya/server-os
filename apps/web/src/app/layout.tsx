@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { Providers } from "./providers";
+import { OWNER } from "@/lib/owner";
 
 // Fuentes AUTO-HOSPEDADAS (antes venían de next/font/google).
 // `next/font/google` descarga los woff2 de fonts.gstatic.com en CADA build. Con
@@ -37,7 +38,7 @@ const mono = localFont({
 
 export const metadata: Metadata = {
   title: "OS",
-  description: "AI Operating System personal de RuloCode",
+  description: `AI Operating System personal${OWNER ? ` de ${OWNER}` : ""}`,
   // Instalado en la pantalla de inicio del iPhone, el dashboard se abre en
   // modo app (sin barra de Safari). `appleWebApp` es lo que iOS mira: sin él
   // queda como un marcador y se comporta como una pestaña más.

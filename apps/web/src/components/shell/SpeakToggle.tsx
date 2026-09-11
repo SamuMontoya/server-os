@@ -11,8 +11,9 @@
 import { useState } from "react";
 import { Toggle } from "@/components/ui/Toggle";
 import { useSpeechSettings, speakSample, stopSpeaking } from "@/hooks/useSpeech";
+import { OWNER } from "@/lib/owner";
 
-const MUESTRA = "Hola Samu, así sueno leyendo tus respuestas.";
+const MUESTRA = `Hola${OWNER ? ` ${OWNER}` : ""}, así sueno leyendo tus respuestas.`;
 
 export function SpeakToggle() {
   const { enabled, supported, toggle, voices, current, setVoice, rate, setRate } =

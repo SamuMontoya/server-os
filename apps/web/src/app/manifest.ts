@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { OWNER } from "@/lib/owner";
 
 /**
  * Manifest de la app instalable. Next lo sirve en /manifest.webmanifest.
@@ -16,7 +17,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "OS",
     short_name: "OS",
-    description: "AI Operating System personal de RuloCode",
+    description: `AI Operating System personal${OWNER ? ` de ${OWNER}` : ""}`,
     // Abre en el Laboratorio, igual que "/" (que redirige ahí). Se pone
     // explícito para que el icono de la pantalla de inicio del iPhone no
     // gaste un redirect en cada apertura.
