@@ -2114,21 +2114,30 @@ export default function Laboratorio() {
                   onCopied={flashCopyToast}
                 />
               ))}
-              {streaming && blocks.length === 0 ? (
-                // "Pensando" solo hasta el primer bloque: a partir de ahí los
-                // pasos ya cuentan qué está haciendo (igual que ChatPanel).
-                // Antes eran tres puntos grises saltando; ahora es el orbe en
-                // miniatura, ya con ojos (a 56px caben) para que "pensando"
-                // se lea como el mismo personaje en todo Hermes (igual que
-                // en el arranque). Tamaño = el doble del botón circular de
-                // enviar (.lab-send, 28px), o sea 56px.
-                <span role="status" aria-label="OS está pensando">
-                  <OrbeIA tam="56px" ojos ariaLabel="" />
-                </span>
-              ) : null}
             </div>
           );
         })}
+        {/* "Pensando": UN solo orbe, montado siempre (nunca dentro del `.map`
+            de arriba). Antes vivía adentro de cada `<div key={m.id}>`, así que
+            cada mensaje nuevo lo desmontaba y montaba de cero — recompilar el
+            shader y volver a subir el atlas (4080×4080) a la GPU en CADA
+            turno. En un celular ese costo se sentía como el chat "atascado en
+            el orbe" sin dejar ver fluir el streaming de la respuesta debajo.
+            Con una sola instancia persistente solo se alterna `activo`
+            (pausa/reanuda el dibujo, ver OrbeIA) — la GPU no vuelve a pagar
+            el setup. Solo hasta el primer bloque: a partir de ahí los pasos ya
+            cuentan qué está haciendo (igual que ChatPanel). Tamaño = el doble
+            del botón circular de enviar (.lab-send, 28px), o sea 56px. */}
+        {(() => {
+          const last = messages[messages.length - 1];
+          const lastBlocks = last?.role === "assistant" ? (last.blocks ?? []) : [];
+          const pensando = busy && last?.role === "assistant" && lastBlocks.length === 0;
+          return (
+            <span role="status" aria-label="OS está pensando" hidden={!pensando}>
+              <OrbeIA tam="56px" ojos ariaLabel="" activo={pensando} />
+            </span>
+          );
+        })()}
         {/* Colchón elástico: altura manejada a mano (ver syncSpacer). Es lo
             que permite subir el último mensaje al borde superior cuando la
             respuesta aún no ocupa la pantalla, y se encoge según ella crece. */}

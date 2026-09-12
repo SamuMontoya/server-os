@@ -109,6 +109,17 @@ export type OrbeIAProps = {
    *  atlas por inpainting armónico). Apagarlos sirve para auditar la película
    *  de color contra los fotogramas originales. */
   ojos?: boolean;
+  /**
+   * Pausa el bucle de dibujo SIN desmontar el componente (el contexto WebGL,
+   * el programa compilado y la textura del atlas — 4080×4080 — siguen vivos).
+   * Pensado para el orbe de "pensando" del chat: antes se montaba y desmontaba
+   * en CADA turno (recompilar el shader y volver a subir el atlas entero a la
+   * GPU en cada mensaje), y ese costo, en un celular, se sentía como el chat
+   * "atascado en el orbe" sin dejar ver el streaming de la respuesta debajo.
+   * Con `activo=false` el consumidor lo deja montado siempre y solo alterna
+   * esto (ver Laboratorio: el orbe de pensando vive UNA vez, no por mensaje).
+   */
+  activo?: boolean;
 };
 
 export function OrbeIA({
@@ -116,7 +127,11 @@ export function OrbeIA({
   className,
   ariaLabel = "Orbe de la IA, en reposo",
   ojos = true,
+  activo = true,
 }: OrbeIAProps) {
+  const activoRef = useRef(activo);
+  const marcoRef = useRef<((ahora: number) => void) | null>(null);
+  const rafRef = useRef(0);
   const refCuerpo = useRef<HTMLDivElement | null>(null);
   const refLienzo = useRef<HTMLCanvasElement | null>(null);
   const refMovOjos = useRef<HTMLDivElement | null>(null);
@@ -138,7 +153,6 @@ export function OrbeIA({
     }
 
     let vivo = true;
-    let raf = 0;
 
     const compilar = (tipo: number, fuente: string) => {
       const s = gl.createShader(tipo)!;
@@ -280,6 +294,10 @@ export function OrbeIA({
 
     const marco = (ahora: number) => {
       if (!vivo) return;
+      // Pausado (`activo=false`): no se agenda el próximo frame ni se toca la
+      // GPU. El efecto de abajo lo despierta con requestAnimationFrame apenas
+      // `activo` vuelve a true — el contexto y la textura siguen intactos.
+      if (!activoRef.current) return;
       if (atlasListo && MOV) {
         const t = quieto ? 0 : ((ahora - t0) / 1000) % DUR;
         const fi = t * META.fps;
@@ -308,21 +326,23 @@ export function OrbeIA({
 
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       }
-      if (!quieto) raf = requestAnimationFrame(marco);
+      if (!quieto) rafRef.current = requestAnimationFrame(marco);
     };
-    raf = requestAnimationFrame(marco);
+    marcoRef.current = marco;
+    rafRef.current = requestAnimationFrame(marco);
 
     // Si cambia la preferencia hay que congelar o volver a arrancar el bucle.
     const alCambiarMovimiento = (e: MediaQueryListEvent) => {
       quieto = e.matches;
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(marco);
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(marco);
     };
     mq.addEventListener("change", alCambiarMovimiento);
 
     return () => {
       vivo = false;
-      cancelAnimationFrame(raf);
+      marcoRef.current = null;
+      cancelAnimationFrame(rafRef.current);
       aborto.abort();
       img.onload = null;
       img.onerror = null;
@@ -341,6 +361,18 @@ export function OrbeIA({
       gl.getExtension("WEBGL_lose_context")?.loseContext();
     };
   }, []);
+
+  // Efecto APARTE del de arriba (que solo corre una vez): togglear `activo`
+  // no debe recrear el contexto WebGL ni re-subir el atlas. Al volver a true,
+  // el bucle estaba detenido (marco() no se reagenda solo, ver arriba) así
+  // que hay que despertarlo a mano.
+  useEffect(() => {
+    activoRef.current = activo;
+    if (activo && marcoRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(marcoRef.current);
+    }
+  }, [activo]);
 
   return (
     <div
