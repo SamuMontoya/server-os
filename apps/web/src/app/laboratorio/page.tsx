@@ -797,7 +797,8 @@ export default function Laboratorio() {
    *  online se disparan casi juntos al volver de segundo plano. */
   const resumeRetryPendingRef = useRef(false);
   /**
-   * true = hay una recuperación EN VUELO (esperando a `fetchTurnResilient`).
+   * Id del turno con una recuperación EN VUELO (esperando a
+   * `fetchTurnResilient`), o `null` si no hay ninguna.
    *
    * `unfollowRef` no alcanzaba como candado: solo se llena cuando `follow` ya
    * engancha, o sea DESPUÉS del await. Montar y volver de segundo plano se
@@ -806,8 +807,16 @@ export default function Laboratorio() {
    * arrancaban cada una su cadena de GET con backoff y su propio `follow` —
    * dos SSE sobre el mismo turno, replayeando el mismo `seq` y pintando los
    * deltas dos veces.
+   *
+   * Guarda el ID (no un booleano): un booleano simple bloqueaba TAMBIÉN el
+   * reenganche de un chat DISTINTO — cambiar de A a B (con B corriendo) y
+   * volver a A antes de que el `fetchTurnResilient` de B resolviera dejaba a
+   * A con el guardia puesto por B, así que el intento de reenganche de A se
+   * descartaba en silencio (bug real, encontrado auditando este archivo: A
+   * quedaba con el ícono de detener sin aparecer, para siempre). Guardando el
+   * id, el guardia solo bloquea un segundo intento sobre el MISMO turno.
    */
-  const resumeInFlightRef = useRef(false);
+  const resumeInFlightRef = useRef<string | null>(null);
 
   // Textarea auto-crecible (hasta ~5 líneas), igual que en ChatPanel.
   //
@@ -1367,9 +1376,12 @@ export default function Laboratorio() {
   const resumePending = () => {
     const pending = pendingTurnRef.current;
     // Tres condiciones para NO recuperar: nada pendiente, ya enganchado, o ya
-    // hay una recuperación en vuelo (ver resumeInFlightRef).
-    if (!pending || unfollowRef.current || resumeInFlightRef.current) return;
-    resumeInFlightRef.current = true;
+    // hay una recuperación en vuelo PARA ESTE MISMO turno (ver resumeInFlightRef
+    // — comparar por id, no un booleano a secas, para no bloquear el
+    // reenganche de un chat DISTINTO al que quedó una recuperación anterior
+    // en vuelo).
+    if (!pending || unfollowRef.current || resumeInFlightRef.current === pending.id) return;
+    resumeInFlightRef.current = pending.id;
     // El turno escribe en el ÚLTIMO mensaje del asistente. Si por lo que sea
     // no hay uno (se guardó entre el envío y el placeholder), se crea: sin
     // hueco donde escribir, la respuesta recuperada no se vería.
@@ -1391,7 +1403,17 @@ export default function Laboratorio() {
     // justo lo que obligaba a repetir la pregunta con el turno vivísimo del
     // otro lado.
     void fetchTurnResilient(pending.id, pending.seq).then((st) => {
-      resumeInFlightRef.current = false;
+      if (resumeInFlightRef.current === pending.id) resumeInFlightRef.current = null;
+      // Mientras esto esperaba la red, Samu pudo cambiar de chat (o el chat
+      // activo pudo terminar/perder este turno por otra vía). Si ya no es lo
+      // que se está mirando, tocar `busy`/`pendingTurn`/los mensajes acá le
+      // pisaría el estado al chat que SÍ está en pantalla ahora — bug real
+      // encontrado auditando: el chat al que Samu volvía se quedaba con
+      // busy=false permanente porque esta continuación, tardía, lo resolvía
+      // por él con datos de OTRO chat. El chat que quedó atrás (`pending`) no
+      // pierde nada: retoma solo con su PROPIO `resumePending` la próxima vez
+      // que se abra.
+      if (pendingTurnRef.current?.id !== pending.id) return;
       if (st === "not-found") {
         // El agente se reinició y el turno ya no existe. Lo honesto es
         // decirlo, no dejar el composer bloqueado para siempre.
@@ -1431,7 +1453,7 @@ export default function Laboratorio() {
       // `fetchTurnResilient` devuelve null en vez de lanzar—, pero el precio
       // de equivocarse aquí es asimétrico).
       .catch(() => {
-        resumeInFlightRef.current = false;
+        if (resumeInFlightRef.current === pending.id) resumeInFlightRef.current = null;
       });
   };
   resumePendingRef.current = resumePending;

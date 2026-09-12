@@ -7,10 +7,9 @@
  * markdown completo, y una respuesta de un turno agéntico puede traer pasos,
  * código, tablas — nada de eso cabe ni sirve en 40mm. Se le pide al modelo
  * MÁS barato (haiku) que la aplane a lo que realmente importa saber sin sacar
- * el teléfono.
+ * el teléfono. API directa, no el Agent SDK — ver direct-complete.ts.
  */
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { optionsFor } from "./models.js";
+import { completarDirecto } from "./direct-complete.js";
 
 const SYSTEM = `Resumes la respuesta de un asistente para la pantalla de un reloj (40mm).
 
@@ -42,29 +41,10 @@ export function cleanGist(raw: string): string {
 export async function gistForAnswer(text: string): Promise<string> {
   const msg = text.trim().slice(0, 4000);
   if (!msg) return "";
-  let out = "";
-  try {
-    const q = query({
-      prompt: `Respuesta a resumir:\n"""\n${msg}\n"""\n\nFrase para el reloj:`,
-      options: {
-        systemPrompt: SYSTEM,
-        ...optionsFor("chatGist"),
-        maxTurns: 1,
-        settingSources: [],
-        allowedTools: [],
-        permissionMode: "default",
-      },
-    });
-    for await (const message of q) {
-      const m = message as Record<string, any>;
-      if (m.type !== "assistant") continue;
-      for (const block of m.message?.content ?? m.content ?? []) {
-        if (block.type === "text" && block.text) out += block.text as string;
-      }
-    }
-  } catch (err) {
-    console.error("[chat-gist]", String(err).slice(0, 200));
-    return "";
-  }
+  const out = await completarDirecto(
+    SYSTEM,
+    `Respuesta a resumir:\n"""\n${msg}\n"""\n\nFrase para el reloj:`,
+    { maxTokens: 60 },
+  );
   return cleanGist(out);
 }

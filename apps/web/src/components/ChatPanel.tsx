@@ -141,6 +141,19 @@ export function ChatPanel({
    *  fetchTurnResilient devolviendo null): evita apilar varios si visible +
    *  online se disparan casi juntos al volver de segundo plano. */
   const resumeRetryPending = useRef(new Set<string>());
+  /**
+   * Tabs con una recuperación EN VUELO (esperando `fetchTurnResilient`).
+   *
+   * `followers` no alcanza como candado: solo se llena cuando `follow` ya
+   * engancha, o sea DESPUÉS del await. Montar y volver de segundo plano se
+   * disparan casi juntos (el mismo caso que ya motivó `resumeRetryPending`),
+   * así que sin esto dos llamadas a `resumePendingTurns` pasaban el guardia
+   * de `followers` para el MISMO tab y arrancaban cada una su cadena de GET
+   * y su propio `follow` — dos SSE sobre el mismo turno, duplicando cada
+   * delta en pantalla (mismo bug encontrado y corregido en laboratorio/page.tsx,
+   * `resumeInFlightRef` — acá nunca se había portado la protección).
+   */
+  const resumeInFlight = useRef(new Set<string>());
 
   const [histOpen, setHistOpen] = useState(false);
   const [hist, setHist] = useState<ChatSessionSummary[] | null>(null);
@@ -237,11 +250,15 @@ export function ChatPanel({
   // debounce: "pagehide" es el único evento fiable en Safari móvil.
   useEffect(() => {
     const flush = () => persistRef.current();
-    window.addEventListener("pagehide", flush);
-    document.addEventListener("visibilitychange", () => {
+    const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") flush();
-    });
-    return () => window.removeEventListener("pagehide", flush);
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   const scrollDown = (force = false) => {
@@ -513,6 +530,8 @@ export function ChatPanel({
       const pending = tab.pendingTurn;
       if (!pending) continue;
       if (followers.current.has(tab.key)) continue; // ya enganchado
+      if (resumeInFlight.current.has(tab.key)) continue; // ya en vuelo
+      resumeInFlight.current.add(tab.key);
       // El turno escribe en el ÚLTIMO mensaje del asistente. Si por lo que sea
       // no hay uno (se guardó entre el envío y el placeholder), se crea: sin
       // hueco donde escribir, la respuesta recuperada no se vería.
@@ -531,6 +550,7 @@ export function ChatPanel({
       // "perdido" — eso era lo que obligaba a repetir la pregunta con el
       // turno vivísimo del otro lado.
       void fetchTurnResilient(pending.id, pending.seq).then((st) => {
+        resumeInFlight.current.delete(tab.key);
         if (st === "not-found") {
           // El agente se reinició y el turno ya no existe. Lo honesto es
           // decirlo, no dejar el tab ocupado para siempre.
@@ -564,6 +584,11 @@ export function ChatPanel({
         // Corriendo o cerrado, `follow` resuelve los dos casos: su primer
         // `state` trae el texto íntegro y, si ya cerró, cierra de una.
         follow(tab.key, pending.id, pending.seq, replyIdx);
+      }).catch(() => {
+        // No debería pasar (`fetchTurnResilient` no lanza), pero un candado
+        // que se queda puesto es peor que no tenerlo: dejaría el tab sin
+        // poder reengancharse nunca más en esta sesión.
+        resumeInFlight.current.delete(tab.key);
       });
     }
   };

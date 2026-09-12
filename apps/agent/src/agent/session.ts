@@ -22,6 +22,8 @@ import {
 import { currentProfile } from "./budget.js";
 import { subagentsEnabled } from "./models.js";
 import { attachmentPreamble } from "../chat-attachments.js";
+import { intentarViaRapida, recapEscalada } from "./fast-turn.js";
+import { acuseInstantaneo } from "./instant-ack.js";
 
 /**
  * Corre UN turno agéntico con el Claude Agent SDK.
@@ -161,6 +163,14 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // sí depende del mensaje se arma aparte y viaja pegado al mensaje. Ver el
   // comentario largo en system-prompt.ts — de aquí venía el consumo.
   //
+  // Con una imagen adjunta el pedido es "mirá esto", no una búsqueda semántica
+  // sobre el TEXTO del mensaje — la precarga (hasta 1.5s con el techo de
+  // buildTurnContext) rara vez aporta algo ahí y siempre se paga igual. Se
+  // salta lo mismo que en `magro`, sin tocar el system prompt (proyecto en
+  // foco/preferencias sí pueden importarle a una imagen).
+  const attachments = opts.attachments ?? [];
+  const sinPrecargaDeContexto = opts.magro || attachments.length > 0;
+
   // Las dos se piden a la vez: la búsqueda semántica contra Supabase son
   // varios segundos y encadenarlas era tiempo hasta la primera palabra.
   const [systemPrompt, turnContext] = await Promise.all([
@@ -171,7 +181,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     // historial del turno que se está continuando.
     opts.precargarContexto === false
       ? Promise.resolve("")
-      : buildTurnContext(opts.prompt, _profile.retrieval, opts.magro),
+      : buildTurnContext(opts.prompt, _profile.retrieval, sinPrecargaDeContexto),
   ]);
 
   // Enrutamiento del turno. La clasificación es local (cero tokens) y el nivel
@@ -182,7 +192,6 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // la señal no está en el texto, así que classify() no la puede ver — "mira
   // esto" clasifica como charla y caería en haiku, que en detalle visual fino
   // no da. El techo del perfil se sigue aplicando después.
-  const attachments = opts.attachments ?? [];
   const route = routerEnabled()
     ? routeTurn(
         opts.prompt,
@@ -250,13 +259,64 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   //
   // El contexto recuperado va DELANTE del mensaje y no en el system prompt:
   // ahí cambia en cada turno y rompería el prefijo cacheado (system-prompt.ts).
-  const sdkPrompt = [
+  let sdkPrompt = [
     turnContext,
     attachments.length ? attachmentPreamble(attachments) : "",
     opts.prompt,
   ]
     .filter(Boolean)
     .join("\n\n");
+
+  // Vía rápida (protocolo del reloj, ver fast-turn.ts): en "trivial" se
+  // intenta primero una respuesta directa a la API, sin el arranque del
+  // proceso `claude`. Nunca en `magro` (el reloj ya escala explícitamente
+  // pidiendo el motor completo) ni con adjuntos (una imagen SÍ necesita
+  // análisis real). Si el modelo pide escalar (o la llamada falla por
+  // cualquier motivo) esto no hace nada y el turno sigue de largo, exactamente
+  // como si no existiera esta vía.
+  if (tier === "trivial" && !opts.magro && attachments.length === 0 && opts.onDelta) {
+    const onDelta = opts.onDelta;
+    // Mensaje PELADO (no `sdkPrompt`): `turnContext` menciona "search_knowledge"
+    // por nombre ("si necesitas más, amplía con search_knowledge") y esta vía
+    // no tiene ninguna tool real — ver el comentario largo en fast-turn.ts
+    // sobre por qué el vocabulario de tools en el prompt es justamente lo que
+    // hace que el modelo intente fabricar una pseudo-llamada.
+    const respondioDirecto = await intentarViaRapida({
+      sessionKey: opts.sessionKey,
+      mensaje: opts.prompt,
+      onDelta,
+      signal: opts.abortController?.signal,
+    });
+    if (respondioDirecto) {
+      return { finalText: "", toolCalls: 0, isError: false };
+    }
+    // Se escaló (o falló la vía rápida): si esta sesión SDK todavía no
+    // existe, este turno la crea desde cero y no vería nada de lo ya
+    // conversado por la vía rápida — se le antepone un recap. Si ya hay
+    // `resumeSessionId`, el hilo ya escaló antes y la sesión resumida ya
+    // tiene esa continuidad; no duplicarlo de nuevo.
+    if (!opts.resumeSessionId) {
+      const recap = recapEscalada(opts.sessionKey);
+      if (recap) sdkPrompt = recap + sdkPrompt;
+    }
+  }
+
+  // Acuse instantáneo (ver instant-ack.ts): cualquier turno que llega hasta
+  // acá va a pagar el arranque del proceso `claude` (~4-5s fijos, límite
+  // conocido) — sin esto el usuario mira el orbe vacío ese rato entero. Se
+  // ESPERA (acotado a 1.5s dentro de instant-ack.ts) antes de arrancar el
+  // motor pesado — probado en vivo que dispararlo sin esperar no sirve: el
+  // arranque del propio motor bloquea el hilo de Node y la respuesta de esta
+  // llamada, aunque ya viajó por red, no se procesa hasta que ese hilo se
+  // libera. Nunca en `magro` (el reloj ya tiene su propia confirmación
+  // hablada antes de escalar, ver watch.ts) ni en una auto-continuación
+  // (`precargarContexto: false` — el prompt ahí es el sintético "Se acabó el
+  // presupuesto…", un acuse sobre ESO no diría nada útil y ya se avisó con
+  // el evento `retry`).
+  if (!opts.magro && opts.precargarContexto !== false && opts.onDelta) {
+    const frase = await acuseInstantaneo(opts.prompt, opts.abortController?.signal);
+    if (frase && !opts.abortController?.signal.aborted) opts.onDelta(`${frase}\n\n`);
+  }
 
   try {
     const q = query({

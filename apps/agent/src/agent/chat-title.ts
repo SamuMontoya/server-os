@@ -11,12 +11,13 @@
  * el tema de la persist…"; el modelo da "Persistencia del chat".
  *
  * Por qué haiku y sin tools: es una frase de entrada y tres palabras de salida.
- * No hay nada que razonar ni que buscar — ver el comentario del rol chatTitle
- * en models.ts. `settingSources: []` evita además cargar el CLAUDE.md del
- * vault: para titular no aporta nada y son miles de tokens por llamada.
+ * No hay nada que razonar ni que buscar.
+ *
+ * Por qué API directa y no el Agent SDK: `query()` arranca un proceso `claude`
+ * completo por llamada — medido en vivo, 8.2s para esto, compitiendo por CPU
+ * con el turno real. Mismo bypass que ya usa el reloj (ver direct-complete.ts).
  */
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { optionsFor } from "./models.js";
+import { completarDirecto } from "./direct-complete.js";
 
 const SYSTEM = `Nombras conversaciones. Recibes el PRIMER mensaje de un chat y devuelves un título.
 
@@ -51,29 +52,10 @@ export function cleanTitle(raw: string): string {
 export async function titleForChat(firstMessage: string): Promise<string> {
   const msg = firstMessage.trim().slice(0, 1500);
   if (!msg) return "";
-  let text = "";
-  try {
-    const q = query({
-      prompt: `Primer mensaje del chat:\n"""\n${msg}\n"""\n\nTítulo (máx. 3 palabras):`,
-      options: {
-        systemPrompt: SYSTEM,
-        ...optionsFor("chatTitle"),
-        maxTurns: 1,
-        settingSources: [],
-        allowedTools: [],
-        permissionMode: "default",
-      },
-    });
-    for await (const message of q) {
-      const m = message as Record<string, any>;
-      if (m.type !== "assistant") continue;
-      for (const block of m.message?.content ?? m.content ?? []) {
-        if (block.type === "text" && block.text) text += block.text as string;
-      }
-    }
-  } catch (err) {
-    console.error("[chat-title]", String(err).slice(0, 200));
-    return "";
-  }
+  const text = await completarDirecto(
+    SYSTEM,
+    `Primer mensaje del chat:\n"""\n${msg}\n"""\n\nTítulo (máx. 3 palabras):`,
+    { maxTokens: 20 },
+  );
   return cleanTitle(text);
 }

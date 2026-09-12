@@ -70,7 +70,7 @@ Reglas:
 - Nada destructivo sin confirmación explícita (sudo, borrar fuera del vault, lo irreversible) — el resto depende de la conversación.
 - NUNCA termines tu respuesta diciendo que "avisas cuando esté listo" o algo similar y te quedes ahí sin hacer nada más: no existe un "después" en el que vuelvas a escribir solo — este turno es tu única oportunidad de trabajar. Si la tarea implica varios pasos, HAZLOS ahora mismo, uno tras otro, en este mismo turno, y usa las tools de verdad (no solo lo digas). Si de verdad no te alcanza el turno, el sistema te deja continuar solo — pero eso pasa por seguir llamando tools, nunca por prometer que ibas a hacerlo.
 - Bash con \`run_in_background: true\` (más \`BashOutput\` para revisar y \`KillShell\` para cortarlo) es para comandos genuinamente largos (install, build, descarga de un modelo) — así el turno no se queda bloqueado esperando. Pero lanzarlo en background NO es una excusa para terminar el turno con "corriendo en background, aviso cuando esté listo": eso es exactamente la promesa vacía de la regla de arriba. Revisa el progreso con \`BashOutput\` DENTRO de este mismo turno (esperando un poco entre chequeos si hace falta) y sigue trabajando en lo que sí puedas mientras tanto; solo cierras el turno con un resultado real confirmado, no una expectativa.
-- Lo PRIMERO que escribes en cada turno es una frase CORTÍSIMA (menos de 10 palabras) diciendo qué vas a hacer — "Reviso el repo", "Dale, lo arreglo", "Busco en el vault" — ANTES de llamar ninguna tool, no después. No es el "preámbulo" que la regla de arriba prohíbe (esa habla del CIERRE, de no inflar la respuesta final con relleno) — es la confirmación inmediata de que el mensaje llegó y ya estás en eso, que es lo primero que se ve en pantalla mientras el resto del turno corre. Sin esto, el chat se queda mostrando solo el indicador de "pensando" varios segundos con nada visible antes del primer paso — con esto, Samu ve una respuesta en el primer segundo.
+- Ya se mostró una frase de intención tuya ANTES de que arrancaras (acuse instantáneo, generado aparte para que Samu no mire el orbe vacío mientras arranca este proceso) — no la repitas ni la parafrasees con otra frase de "voy a hacer X" al empezar: andá directo al trabajo real (llamar tools, escribir la respuesta). Esto no es el "preámbulo" que la regla de arriba prohíbe (esa habla del CIERRE) — es evitar el eco de una intención que ya se dijo.
 - Reiniciar \`hermes-agent\` (\`systemctl --user restart hermes-agent\`, o cualquier deploy que termine en eso) te corta a TI: es el proceso que está sirviendo esta misma conversación. Nunca lo hagas por reflejo ni una vez por archivo — junta todos los cambios pendientes en un solo reinicio. Y avisa ANTES, en una frase, que vas a reiniciar ("aplico esto y reinicio el agente") — el checkpoint del turno hace que no se pierda nada y la sesión sigue sola del otro lado, pero un reinicio sin aviso se ve como que el sistema se cayó de la nada.`);
 
   // Persona y preferencias del dueño (SOUL.md, fuera del repo)
@@ -180,6 +180,28 @@ const SOURCE_LABELS: Record<string, string> = {
  * modo magro o con mensaje vacío. El resto (memorias + conocimiento) se
  * agrega debajo cuando aplica.
  */
+/** Techo de espera para la precarga (memorias + search_knowledge). El RPC de
+ * conocimiento normalmente entra bien dentro de esto, pero cuando Supabase se
+ * pone lento (visto en producción: 780ms a 5.5s+ en el mismo endpoint) esto
+ * evita que el usuario se quede mirando el orbe vacío ese rato entero — el
+ * turno arranca igual, sin esa precarga, y el modelo puede pedir
+ * search_knowledge él mismo si de verdad lo necesita (ya es una tool). */
+const PRECARGA_TIMEOUT_MS = 1500;
+
+async function conTechoDeTiempo<T>(promesa: Promise<T>, fallback: T): Promise<T> {
+  let vencido = false;
+  const techo = new Promise<T>((resolve) => {
+    setTimeout(() => {
+      vencido = true;
+      resolve(fallback);
+    }, PRECARGA_TIMEOUT_MS);
+  });
+  return Promise.race([promesa, techo]).then((r) => {
+    if (vencido) console.warn(`[timing] precarga excedió ${PRECARGA_TIMEOUT_MS}ms, se sigue sin ella`);
+    return r;
+  });
+}
+
 export async function buildTurnContext(
   message: string,
   /** Cuánto contexto PRECARGAR. Lo fija el perfil de consumo (budget.ts):
@@ -196,10 +218,13 @@ export async function buildTurnContext(
   const temporal = contextoTemporal();
   if (magro || !message.trim()) return temporal;
 
-  const [recent, relevant] = await Promise.all([
-    recentMemories(retrieval.recent),
-    searchKnowledge(message, { limit: retrieval.relevant }),
-  ]);
+  const [recent, relevant] = await conTechoDeTiempo(
+    Promise.all([
+      recentMemories(retrieval.recent),
+      searchKnowledge(message, { limit: retrieval.relevant }),
+    ]),
+    [[], []] as [Awaited<ReturnType<typeof recentMemories>>, Awaited<ReturnType<typeof searchKnowledge>>],
+  );
 
   const seenMemories = new Set<string>(recent.map((m) => m.id));
   const lines = recent.map(
