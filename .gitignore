@@ -31,6 +31,11 @@ supabase/.temp/
 .playwright-mcp/
 hermes-dashboard.png
 
+# Playwright: artefactos de corrida + sesión de auth con tokens reales
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/e2e/.auth/
+
 # graphify — grafo de código local (lo refresca el job code-graph-update)
 graphify-out/
 

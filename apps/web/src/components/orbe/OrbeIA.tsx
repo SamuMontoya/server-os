@@ -127,92 +127,55 @@ export function OrbeIA({
     const movOjos = refMovOjos.current;
     if (!lienzo || !movOjos) return;
 
-    const gl = lienzo.getContext("webgl", {
-      alpha: false,
-      antialias: false,
-    }) as WebGLRenderingContext | null;
-
-    if (!gl) {
-      setSinWebgl(true);
-      return;
-    }
-
     let vivo = true;
     let raf = 0;
+    // `perdido` congela el bucle mientras el contexto está muerto (GPU
+    // reseteada/driver caído/cambio de GPU en portátiles híbridos): sin esto,
+    // cada llamada a gl.* con el contexto perdido lanza o no hace nada y el
+    // lienzo queda en el último fotograma válido (o negro) sin que nadie lo
+    // note ni lo repare.
+    let perdido = false;
 
-    const compilar = (tipo: number, fuente: string) => {
-      const s = gl.createShader(tipo)!;
-      gl.shaderSource(s, fuente);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        const log = gl.getShaderInfoLog(s);
-        gl.deleteShader(s);
-        throw new Error(log ?? "fallo al compilar el shader");
-      }
-      return s;
-    };
-
+    // Estado GL que se recrea completo cada vez que el contexto se restaura
+    // (todo lo que vive en la GPU se pierde con el contexto: shaders,
+    // programa, buffers y — sobre todo — la textura del atlas).
+    let gl: WebGLRenderingContext | null = null;
     let vs: WebGLShader | null = null;
     let fs: WebGLShader | null = null;
     let pr: WebGLProgram | null = null;
     let bf: WebGLBuffer | null = null;
     let tex: WebGLTexture | null = null;
-
-    try {
-      vs = compilar(gl.VERTEX_SHADER, VERT);
-      fs = compilar(gl.FRAGMENT_SHADER, FRAG);
-      pr = gl.createProgram()!;
-      gl.attachShader(pr, vs);
-      gl.attachShader(pr, fs);
-      gl.linkProgram(pr);
-      if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) {
-        throw new Error(gl.getProgramInfoLog(pr) ?? "fallo al enlazar");
-      }
-    } catch (err) {
-      console.error("[OrbeIA] shader:", err);
-      setSinWebgl(true);
-      return;
-    }
-
-    gl.useProgram(pr);
-
-    // Triángulo que cubre la pantalla; el recorte lo hace el shader.
-    bf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, bf);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      new Float32Array([-1, -1, 3, -1, -1, 3]),
-      gl.STATIC_DRAW,
-    );
-    const loc = gl.getAttribLocation(pr, "pos");
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-
-    // Los locations se resuelven una vez, no en cada fotograma.
-    const U = (n: string) => gl.getUniformLocation(pr!, n);
-    const uRes = U("uRes");
-    const uTex = U("uTex");
-    const uF0 = U("uF0");
-    const uF1 = U("uF1");
-    const uMix = U("uMix");
-    const uMov = U("uMov");
-
-    gl.uniform1f(U("uLado"), META.t);
-    gl.uniform1f(U("uRej"), META.g);
-    gl.uniform1f(U("uCaja"), META.caja);
-    gl.uniform1f(U("uAsp"), META.asp);
-    gl.uniform1f(U("uGris"), GRIS);
-    gl.uniform1f(U("uUmbral"), UMBRAL);
-    gl.uniform1f(U("uMargen"), MARGEN);
-
-    // ── Assets ───────────────────────────────────────────────────────────────
-    let MOV: Mov[] | null = null;
+    let uRes: WebGLUniformLocation | null = null;
+    let uTex: WebGLUniformLocation | null = null;
+    let uF0: WebGLUniformLocation | null = null;
+    let uF1: WebGLUniformLocation | null = null;
+    let uMix: WebGLUniformLocation | null = null;
+    let uMov: WebGLUniformLocation | null = null;
     let atlasListo = false;
 
-    tex = gl.createTexture();
+    // La imagen decodificada y el JSON de movimiento NO dependen de la GPU:
+    // sobreviven a una pérdida de contexto en memoria de JS. Al restaurar no
+    // hace falta re-descargarlos, solo volver a subir la imagen ya lista.
+    let MOV: Mov[] | null = null;
     const img = new Image();
-    img.onload = () => {
-      if (!vivo) return;
+
+    const compilar = (ctx: WebGLRenderingContext, tipo: number, fuente: string) => {
+      const s = ctx.createShader(tipo)!;
+      ctx.shaderSource(s, fuente);
+      ctx.compileShader(s);
+      if (!ctx.getShaderParameter(s, ctx.COMPILE_STATUS)) {
+        const log = ctx.getShaderInfoLog(s);
+        ctx.deleteShader(s);
+        throw new Error(log ?? "fallo al compilar el shader");
+      }
+      return s;
+    };
+
+    /** Sube la textura del atlas a la GPU. Se llama al terminar de decodificar
+     *  la imagen Y, otra vez, al restaurar el contexto (si la imagen ya
+     *  estaba lista, no hay que esperar red de nuevo). */
+    const subirAtlas = () => {
+      if (!gl || !tex) return;
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
       // NEAREST a mano, nunca LINEAR del hardware: el atlas es una rejilla de
@@ -225,8 +188,167 @@ export function OrbeIA({
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.uniform2f(uTex, img.width, img.height);
-      gl.uniform1i(U("uAtlas"), 0);
+      gl.uniform1i(gl.getUniformLocation(pr!, "uAtlas"), 0);
       atlasListo = true;
+    };
+
+    /** (Re)crea todo lo que vive en la GPU: shaders, programa, buffer,
+     *  uniforms y la textura (vacía; subirAtlas la llena). Se llama al montar
+     *  y de nuevo en cada `webglcontextrestored`. Devuelve false si algo
+     *  falla (sin WebGL utilizable). */
+    const crearRecursosGL = (): boolean => {
+      const ctx = lienzo.getContext("webgl", {
+        alpha: false,
+        antialias: false,
+        // Evita que el navegador fuerce la GPU discreta: en portátiles con
+        // gráficos híbridos (Intel+NVIDIA/AMD), cambiar de GPU a mitad de
+        // sesión es la causa más común de "se congela/parpadea/se pone negro
+        // un rato" en WebGL — y de una pérdida de contexto que dispara el
+        // problema en el primer lugar. El orbe es decorativo, no necesita la
+        // GPU de más potencia.
+        powerPreference: "low-power",
+      }) as WebGLRenderingContext | null;
+      if (!ctx) return false;
+      gl = ctx;
+
+      try {
+        vs = compilar(ctx, ctx.VERTEX_SHADER, VERT);
+        fs = compilar(ctx, ctx.FRAGMENT_SHADER, FRAG);
+        pr = ctx.createProgram()!;
+        ctx.attachShader(pr, vs);
+        ctx.attachShader(pr, fs);
+        ctx.linkProgram(pr);
+        if (!ctx.getProgramParameter(pr, ctx.LINK_STATUS)) {
+          throw new Error(ctx.getProgramInfoLog(pr) ?? "fallo al enlazar");
+        }
+      } catch (err) {
+        console.error("[OrbeIA] shader:", err);
+        return false;
+      }
+
+      ctx.useProgram(pr);
+
+      // Triángulo que cubre la pantalla; el recorte lo hace el shader.
+      bf = ctx.createBuffer();
+      ctx.bindBuffer(ctx.ARRAY_BUFFER, bf);
+      ctx.bufferData(
+        ctx.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 3, -1, -1, 3]),
+        ctx.STATIC_DRAW,
+      );
+      const loc = ctx.getAttribLocation(pr, "pos");
+      ctx.enableVertexAttribArray(loc);
+      ctx.vertexAttribPointer(loc, 2, ctx.FLOAT, false, 0, 0);
+
+      // Los locations se resuelven una vez, no en cada fotograma.
+      const U = (n: string) => ctx.getUniformLocation(pr!, n);
+      uRes = U("uRes");
+      uTex = U("uTex");
+      uF0 = U("uF0");
+      uF1 = U("uF1");
+      uMix = U("uMix");
+      uMov = U("uMov");
+
+      ctx.uniform1f(U("uLado"), META.t);
+      ctx.uniform1f(U("uRej"), META.g);
+      ctx.uniform1f(U("uCaja"), META.caja);
+      ctx.uniform1f(U("uAsp"), META.asp);
+      ctx.uniform1f(U("uGris"), GRIS);
+      ctx.uniform1f(U("uUmbral"), UMBRAL);
+      ctx.uniform1f(U("uMargen"), MARGEN);
+
+      tex = ctx.createTexture();
+      atlasListo = false;
+      if (img.complete && img.naturalWidth > 0) {
+        // La imagen ya estaba decodificada de antes (caso típico de
+        // restauración de contexto): no hay que esperar la red de nuevo.
+        subirAtlas();
+      }
+
+      // El tamaño del búfer depende de clientWidth/clientHeight, que no
+      // cambian por la pérdida de contexto — se vuelve a fijar igual en
+      // ambos casos (montaje y restauración). Va ANTES del clear: fijar
+      // canvas.width/height RESETEA el drawing buffer por spec de WebGL (a
+      // negro/transparente), así que un clear hecho antes de este resize se
+      // pierde sin más — ese orden invertido era el bug real detrás del
+      // "a veces se ve negra" (confirmado leyendo el píxel central con
+      // gl.readPixels en los tests de Playwright).
+      medir();
+
+      // Blanco de entrada, antes de que atlas/movimiento terminen de cargar:
+      // sin este clear (después del resize de arriba), el contenido del
+      // framebuffer quedaría en lo que sea que deje el reset del backing
+      // store — en la práctica, negro opaco.
+      ctx.clearColor(1, 1, 1, 1);
+      ctx.clear(ctx.COLOR_BUFFER_BIT);
+
+      return true;
+    };
+
+    // ── Tamaño del búfer ─────────────────────────────────────────────────────
+    // Tamaño CSS × DPR, con DPR topado en 2 y un presupuesto de 3,2 Mpx: si el
+    // orbe se hace enorme, baja la resolución antes que los fps.
+    const medir = () => {
+      if (!gl) return;
+      let dpr = Math.min(window.devicePixelRatio || 1, DPR_MAX);
+      const bruto = lienzo.clientWidth * lienzo.clientHeight * dpr * dpr;
+      if (bruto > PX_MAX) dpr *= Math.sqrt(PX_MAX / bruto);
+      const w = Math.max(1, Math.round(lienzo.clientWidth * dpr));
+      const h = Math.max(1, Math.round(lienzo.clientHeight * dpr));
+      if (lienzo.width !== w || lienzo.height !== h) {
+        lienzo.width = w;
+        lienzo.height = h;
+        gl.viewport(0, 0, w, h);
+        gl.uniform2f(uRes, w, h);
+        // Cambiar canvas.width/height resetea el drawing buffer (spec de
+        // WebGL) — en régimen estable el próximo fotograma del bucle lo
+        // vuelve a pintar enseguida y no se nota, pero si esto pasa MIENTRAS
+        // atlas/movimiento aún cargan (marco() todavía no dibuja nada), sin
+        // este clear el lienzo se ve negro hasta que terminen de cargar.
+        if (!atlasListo || !MOV) {
+          gl.clearColor(1, 1, 1, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+      }
+    };
+
+    // ── Pérdida/restauración de contexto ────────────────────────────────────
+    // Sin `preventDefault()` en `webglcontextlost`, el navegador NO intenta
+    // restaurar el contexto y el lienzo queda muerto para siempre — eso es
+    // el "a veces se ve negra" reportado (una vez perdido, sin este
+    // manejador no vuelve solo ni con más fotogramas ni recargando el
+    // componente, solo recargando la página entera). El evento de pérdida
+    // también puede repetirse varias veces seguidas si el driver está
+    // inestable (típico en GPUs híbridas de Windows/Edge) — eso es el
+    // parpadeo: se pierde, se restaura, se pierde de nuevo.
+    const alPerderContexto = (e: Event) => {
+      e.preventDefault();
+      perdido = true;
+      cancelAnimationFrame(raf);
+    };
+    const alRestaurarContexto = () => {
+      perdido = false;
+      if (!crearRecursosGL()) {
+        setSinWebgl(true);
+        return;
+      }
+      raf = requestAnimationFrame(marco);
+    };
+    lienzo.addEventListener("webglcontextlost", alPerderContexto, false);
+    lienzo.addEventListener("webglcontextrestored", alRestaurarContexto, false);
+
+    if (!crearRecursosGL()) {
+      setSinWebgl(true);
+      return () => {
+        lienzo.removeEventListener("webglcontextlost", alPerderContexto);
+        lienzo.removeEventListener("webglcontextrestored", alRestaurarContexto);
+      };
+    }
+
+    // ── Assets ───────────────────────────────────────────────────────────────
+    img.onload = () => {
+      if (!vivo || perdido) return;
+      subirAtlas();
     };
     img.onerror = () => {
       console.error("[OrbeIA] no se pudo cargar el atlas:", RUTA_ATLAS);
@@ -249,24 +371,6 @@ export function OrbeIA({
         }
       });
 
-    // ── Tamaño del búfer ─────────────────────────────────────────────────────
-    // Tamaño CSS × DPR, con DPR topado en 2 y un presupuesto de 3,2 Mpx: si el
-    // orbe se hace enorme, baja la resolución antes que los fps.
-    const medir = () => {
-      let dpr = Math.min(window.devicePixelRatio || 1, DPR_MAX);
-      const bruto = lienzo.clientWidth * lienzo.clientHeight * dpr * dpr;
-      if (bruto > PX_MAX) dpr *= Math.sqrt(PX_MAX / bruto);
-      const w = Math.max(1, Math.round(lienzo.clientWidth * dpr));
-      const h = Math.max(1, Math.round(lienzo.clientHeight * dpr));
-      if (lienzo.width !== w || lienzo.height !== h) {
-        lienzo.width = w;
-        lienzo.height = h;
-        gl.viewport(0, 0, w, h);
-        gl.uniform2f(uRes, w, h);
-      }
-    };
-    medir();
-
     const observador = new ResizeObserver(medir);
     observador.observe(lienzo);
     window.addEventListener("resize", medir);
@@ -278,8 +382,14 @@ export function OrbeIA({
     const DUR = META.n / META.fps; // 7,0333 s
     const t0 = performance.now();
 
+    // Con `prefers-reduced-motion` el bucle no reprograma más fotogramas
+    // tras el primero (más abajo) — a propósito, para no animar. Pero si ESE
+    // primer fotograma cae antes de que atlas/movimiento terminen de cargar,
+    // sin esta bandera el lienzo se quedaba en blanco/negro PARA SIEMPRE
+    // (nunca llegaba un segundo intento que sí encontrara los assets listos).
+    let dibujoHecho = false;
     const marco = (ahora: number) => {
-      if (!vivo) return;
+      if (!vivo || perdido || !gl) return;
       if (atlasListo && MOV) {
         const t = quieto ? 0 : ((ahora - t0) / 1000) % DUR;
         const fi = t * META.fps;
@@ -307,8 +417,9 @@ export function OrbeIA({
           `scale(${sx}, ${sy})`;
 
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+        dibujoHecho = true;
       }
-      if (!quieto) raf = requestAnimationFrame(marco);
+      if (!quieto || !dibujoHecho) raf = requestAnimationFrame(marco);
     };
     raf = requestAnimationFrame(marco);
 
@@ -320,6 +431,21 @@ export function OrbeIA({
     };
     mq.addEventListener("change", alCambiarMovimiento);
 
+    // Red de seguridad: navegadores como Edge (modo de eficiencia/"sleeping
+    // tabs") pausan rAF o hasta duermen la GPU de una pestaña en segundo
+    // plano. Al volver a primer plano no hay garantía de en qué quedó el
+    // framebuffer — puede llevar dormido un resize que reseteó el buffer
+    // mientras nadie miraba. Forzar un tick nuevo (cancelando el que
+    // quedara pendiente) en vez de esperar a que el navegador decida
+    // reanudar solo es lo que evita el frame viejo/negro justo al volver.
+    const alCambiarVisibilidad = () => {
+      if (document.visibilityState !== "visible" || !gl) return;
+      medir();
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(marco);
+    };
+    document.addEventListener("visibilitychange", alCambiarVisibilidad);
+
     return () => {
       vivo = false;
       cancelAnimationFrame(raf);
@@ -329,6 +455,10 @@ export function OrbeIA({
       mq.removeEventListener("change", alCambiarMovimiento);
       observador.disconnect();
       window.removeEventListener("resize", medir);
+      document.removeEventListener("visibilitychange", alCambiarVisibilidad);
+      lienzo.removeEventListener("webglcontextlost", alPerderContexto);
+      lienzo.removeEventListener("webglcontextrestored", alRestaurarContexto);
+      if (!gl) return;
       if (tex) gl.deleteTexture(tex);
       if (bf) gl.deleteBuffer(bf);
       if (pr) {
