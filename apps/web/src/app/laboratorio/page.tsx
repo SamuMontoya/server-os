@@ -52,6 +52,7 @@ import {
   pushRemoteActive,
 } from "@/lib/lab-sync";
 import { LabChatsScreen, type LabChatSummary } from "@/components/LabChatsScreen";
+import { waitForInitialSession } from "@/lib/auth/token";
 
 /**
  * Un tramo de la respuesta, EN EL ORDEN EN QUE PASÓ.
@@ -237,6 +238,38 @@ function UserBubble({ m, onCopied }: { m: LabMessage; onCopied: () => void }) {
             // eslint-disable-next-line @next/next/no-img-element -- object URL local, no un asset de Next.
             <img key={i} src={img.url} alt={img.name} />
           ))}
+        </div>
+      )}
+      {m.docs && m.docs.length > 0 && (
+        <div className="lab-bubble-docs">
+          {m.docs.map((d, i) => {
+            // "Gránulo 1.docx" → "DOCX"; sin punto → "ARCHIVO".
+            const dot = d.name.lastIndexOf(".");
+            const ext = dot > -1 ? d.name.slice(dot + 1).toUpperCase() : "ARCHIVO";
+            return (
+              <div
+                key={i}
+                className="lab-doc-card"
+                title={`${d.name} — ${d.chunks} fragmento${d.chunks === 1 ? "" : "s"} indexado${
+                  d.chunks === 1 ? "" : "s"
+                }${d.truncated ? " (recortado: el archivo era muy grande)" : ""}`}
+              >
+                <span className="lab-doc-card-icon" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinejoin="round"
+                    />
+                    <path d="M14 3v5h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                <span className="lab-doc-card-name">{d.name}</span>
+                <span className="lab-doc-card-ext">{ext}</span>
+              </div>
+            );
+          })}
         </div>
       )}
       {/* El texto va en un <span> (no como nodo de texto suelto) para que
@@ -1395,8 +1428,15 @@ export default function Laboratorio() {
     const userMsg: LabMessage = {
       id: Date.now(),
       role: "user",
-      content: finalText,
+      // La burbuja muestra solo lo que el usuario escribió — el aviso de
+      // documentos (`docNote`) va aparte en `docs` como card, y a la red
+      // por separado en `finalText` (ver startTurn más abajo): el modelo
+      // necesita el texto plano, la burbuja necesita la card bonita.
+      content: text,
       ...(sent.length ? { images: sent.map((a) => ({ url: a.url, name: a.name })) } : {}),
+      ...(indexedDocs.length
+        ? { docs: indexedDocs.map((d) => ({ name: d.name, chunks: d.chunks ?? 1, truncated: d.truncated })) }
+        : {}),
     };
     const replyMsg: LabMessage = { id: Date.now() + 1, role: "assistant", content: "", blocks: [] };
     // Enviar SIEMPRE re-engancha el auto-anclaje: aunque Samu estuviera
@@ -1628,7 +1668,17 @@ export default function Laboratorio() {
   // escribiendo en un componente que ya no está.
   useEffect(() => {
     resumePending();
-    void syncThreadsFromServer();
+    // El sync de chats depende de IDENTIDAD (`userId` del JWT), no solo de
+    // tener algún bearer — sin esperar la hidratación inicial de la sesión,
+    // este efecto (que corre en el MISMO tick del montaje) casi siempre
+    // gana la carrera contra `getSession()` y sale con `getAccessToken()`
+    // todavía en null, cayendo a la key estática de LAN. Ahí el servidor no
+    // sabe quién pregunta y responde "no hay nada guardado" — no porque no
+    // haya historial, sino porque preguntó antes de saber quién era. En LAN
+    // (sesión ya tibia, red local) esa ventana es de milisegundos y nunca se
+    // nota; en un arranque frío de iPad es justo la ventana que se pierde.
+    // Ver waitForInitialSession en lib/auth/token.ts para el porqué completo.
+    void waitForInitialSession().then(() => syncThreadsFromServer());
     // El hilo inicial (hidratado de localStorage antes del primer render, ver
     // `initRef`) nunca pasa por `loadChatIntoState` — sin esto, reabrir la
     // app con una conversación larga arrancaba en el tope en vez del fondo.
@@ -2042,6 +2092,11 @@ export default function Laboratorio() {
           onOpen={switchToChat}
           onNew={createNewChat}
           onDelete={deleteChat}
+          // Respaldo manual (pull-to-refresh) del sync automático al montar:
+          // mismo `waitForInitialSession` de por medio, por si el gesto pasa
+          // justo en el arranque frío en el que el automático puede perder
+          // la carrera — ver el comentario largo en syncThreadsFromServer.
+          onRefresh={() => waitForInitialSession().then(() => syncThreadsFromServer())}
         />
       )}
       <div
@@ -2250,14 +2305,16 @@ export default function Laboratorio() {
             </div>
           )}
           <div className="lab-composer-row">
-            {/* Clip: adjuntar documentos (PDF/DOCX/XLSX/TXT/MD/CSV/JSON). Se
-                indexan solos apenas se eligen — ver addDocuments. A la
-                izquierda del micrófono, mismo tamaño de botón. */}
+            {/* Clip: adjuntar documentos (PDF/DOCX/XLSX/PPTX/TXT/MD/CSV/JSON/
+                SVG/imágenes — las imágenes elegidas acá se OCRean e indexan
+                como documento, no van a visión). Se indexan solos apenas se
+                eligen — ver addDocuments. A la izquierda del micrófono,
+                mismo tamaño de botón. */}
             <input
               ref={docInputRef}
               type="file"
               multiple
-              accept=".pdf,.docx,.xlsx,.txt,.md,.markdown,.csv,.json,.log"
+              accept=".pdf,.docx,.xlsx,.pptx,.epub,.txt,.md,.markdown,.csv,.json,.log,.svg,.jpg,.jpeg,.png,.webp,.bmp,.tiff,.gif"
               className="lab-file-input-hidden"
               onChange={handleDocPick}
               tabIndex={-1}

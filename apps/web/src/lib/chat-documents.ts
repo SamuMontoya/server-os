@@ -10,7 +10,30 @@
 import { hermesFetch } from "@/lib/hermes";
 
 /** Debe coincidir con SUPPORTED_LABEL en apps/agent/src/documents/chat-documents.ts. */
-const ACCEPTED_EXT = [".pdf", ".docx", ".xlsx", ".txt", ".md", ".markdown", ".csv", ".json", ".log"];
+const ACCEPTED_EXT = [
+  ".pdf",
+  ".docx",
+  ".xlsx",
+  ".pptx",
+  ".epub",
+  ".txt",
+  ".md",
+  ".markdown",
+  ".csv",
+  ".json",
+  ".log",
+  ".svg",
+  // Imágenes: el clip las trata como documento (OCR + indexado), a
+  // diferencia de pegar/soltar donde van a addImages (visión directa) —
+  // ver el reparto por tipo en addFiles, en laboratorio/page.tsx.
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+  ".bmp",
+  ".tiff",
+  ".gif",
+];
 
 export function isSupportedDocument(file: File): boolean {
   const name = file.name.toLowerCase();

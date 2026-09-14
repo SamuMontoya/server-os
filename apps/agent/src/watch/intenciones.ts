@@ -21,9 +21,13 @@ export const CENTINELA_IDEA = "IDEA:";
  *
  * La memoria es lo que importa y es lo que siempre se hace. El archivo en
  * `00 Inbox/` del vault es un extra que solo ocurre si esta máquina TIENE
- * vault: en el servidor `VAULT_PATH` va vacío a propósito (el vault lo manda
- * una sola máquina, ver docs/multi-maquina.md), y escribir ahí crearía un
- * "00 Inbox" relativo al directorio del proceso — basura silenciosa.
+ * vault (`VAULT_PATH` seteado). `docs/multi-maquina.md` describe una
+ * arquitectura vieja (Mac mini como dueña del vault + PCs "solo ejecución");
+ * ya no aplica — jaime-srv es la única máquina y desde 2026-09-11 es también
+ * la dueña del vault (`/root/vault`). Si en el futuro vuelve a haber más de
+ * una máquina, la que NO tenga vault debe dejar `VAULT_PATH` vacío: sin este
+ * guard, `join("", "00 Inbox")` da una ruta RELATIVA que Node resuelve
+ * contra el cwd del proceso — "00 Inbox" fantasma dentro del propio repo.
  */
 export async function capturarIdea(texto: string): Promise<boolean> {
   const contenido = texto.trim();

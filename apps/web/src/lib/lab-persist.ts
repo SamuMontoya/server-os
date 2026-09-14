@@ -41,6 +41,12 @@ export type LabMessage = {
   /** Imágenes que iban con el mensaje (solo en mensajes del usuario): quedan
    *  visibles en la burbuja, como el adjunto que fueron. */
   images?: { url: string; name: string }[];
+  /** Documentos que se indexaron al vuelo con este mensaje (solo usuario):
+   *  el archivo original nunca se guardó, así que acá no hay url que
+   *  mostrar — solo el resumen (nombre, fragmentos) para la card de la
+   *  burbuja. A diferencia de `images`, esto SÍ sobrevive el recorte de
+   *  `trimMessage` (no depende de object URLs). */
+  docs?: { name: string; chunks: number; truncated?: boolean }[];
 };
 
 /** Turno del motor que este hilo dejó corriendo (agent/chat-turns.ts). */

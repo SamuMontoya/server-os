@@ -30,6 +30,38 @@ export function getAccessToken(): string | null {
 }
 
 /**
+ * Se resuelve cuando la hidratación INICIAL del token termina (haya sesión o
+ * no) — una sola vez, no en cada refresco posterior. Sirve para lo que SÍ
+ * necesita esperar identidad antes de disparar (ver `waitForInitialSession`);
+ * el resto del código sigue leyendo `getAccessToken()` síncrono como siempre.
+ */
+let resolveInitialSession: (() => void) | null = null;
+const initialSessionPromise = new Promise<void>((resolve) => {
+  resolveInitialSession = resolve;
+});
+
+/**
+ * Espera a que la sesión inicial de Supabase termine de hidratarse.
+ *
+ * Por qué existe: `getAccessToken()` es síncrono a propósito (ver arriba),
+ * pero eso significa que justo después de montar la app SIEMPRE devuelve
+ * `null` durante los primeros milisegundos — `getSession()` es async y
+ * `providers.tsx` no espera a que resuelva antes de renderizar los hijos.
+ * En una red rápida (LAN, sesión ya tibia) esa ventana es tan corta que
+ * nunca se nota; en un arranque frío de iPad (Wi-Fi lenta, PWA recién
+ * abierta) es lo bastante larga como para que algo que dispara EN EL MISMO
+ * TICK del montaje (como el sync de chats de /laboratorio) salga con
+ * `getHermesKey()` cayendo a la key estática de LAN — sin userId, el
+ * servidor responde "no hay nada guardado" aunque la cuenta sí tenga
+ * historial. No es que no cargó: es que preguntó antes de saber quién era.
+ * Cualquier llamada que dependa de IDENTIDAD (no solo de tener *algún*
+ * bearer) debe esperar esto antes de la primera petición.
+ */
+export function waitForInitialSession(): Promise<void> {
+  return initialSessionPromise;
+}
+
+/**
  * Arranca la suscripción. Idempotente: se llama desde el árbol de providers y
  * un doble montaje (StrictMode) no debe abrir dos suscripciones.
  */
@@ -42,6 +74,8 @@ export function iniciarTokenSync(): void {
   // La sesión inicial no llega por el evento si ya existía al cargar.
   void supabase.auth.getSession().then(({ data }) => {
     accessToken = data.session?.access_token ?? accessToken;
+    resolveInitialSession?.();
+    resolveInitialSession = null;
   });
 
   supabase.auth.onAuthStateChange((_evento, session) => {

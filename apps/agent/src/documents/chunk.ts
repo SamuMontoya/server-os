@@ -24,7 +24,10 @@ export function chunkText(
     const end = Math.min(start + chunkSize, clean.length);
     chunks.push(clean.slice(start, end));
     if (end === clean.length) break;
-    start = end - overlap;
+    // Si `overlap` >= `chunkSize` (mal uso, pero nada lo impide en la firma),
+    // `end - overlap` no avanza y el loop nunca termina. Forzamos avanzar
+    // al menos 1 char por vuelta pase lo que pase con el overlap.
+    start = Math.max(start + 1, end - overlap);
   }
   return chunks;
 }

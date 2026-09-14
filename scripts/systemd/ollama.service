@@ -1,0 +1,27 @@
+[Unit]
+Description=Ollama · motor local de embeddings (nomic-embed-text) para chat_docs/knowledge
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/ollama serve
+
+# Si se cae (OOM, crash), que vuelva solo — sin esto cualquier subida de
+# documento que dependa de él falla con "motor de embeddings no disponible"
+# hasta que alguien lo note y lo relance a mano (pasó dos veces en una tarde,
+# la última vez apenas se cerró la sesión de shell que lo había lanzado con
+# nohup — nohup no basta, hace falta un servicio de verdad).
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama
+
+MemoryMax=1200M
+MemoryHigh=1000M
+
+[Install]
+WantedBy=default.target

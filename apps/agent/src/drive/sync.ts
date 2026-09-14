@@ -31,6 +31,11 @@ const EXPORT_MIME: Record<string, { mime: string }> = {
   "application/vnd.google-apps.presentation": {
     mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   },
+  // Google Drawings no tiene bytes descargables ni parser de vector propio:
+  // se exporta como PNG y entra por el mismo camino de OCR que las imágenes.
+  "application/vnd.google-apps.drawing": {
+    mime: "image/png",
+  },
 };
 
 export interface DriveSyncResult {

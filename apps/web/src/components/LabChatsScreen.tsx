@@ -62,6 +62,13 @@ interface Props {
   onOpen: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  /** Deslizar hacia abajo desde el tope de la lista vuelve a pedirle al
+   *  servidor los chats de otros dispositivos (ver syncThreadsFromServer en
+   *  laboratorio/page.tsx) — el sync automático al entrar cubre el caso
+   *  normal, esto es el respaldo manual para cuando alguien no quiere
+   *  esperar o sospecha que algo quedó desactualizado. Opcional: sin él
+   *  (pantallas de prueba) el gesto simplemente no hace nada. */
+  onRefresh?: () => Promise<void> | void;
 }
 
 /** Cuánto hay que arrastrar (px) antes de que soltar cuente como gesto,
@@ -229,7 +236,16 @@ function SwipeableCard({
   );
 }
 
-export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: Props) {
+/** Cuánto hay que arrastrar (px) antes de que soltar dispare el refresh —
+ *  más corto que el swipe de eliminar porque acá no hay riesgo de acción
+ *  destructiva por error: en el peor caso, un fetch de más. */
+const PULL_COMMIT_PX = 60;
+/** Tope visual del arrastre: pasado esto ya no cede más (con damping, ver
+ *  onPointerMove) — sin tope, arrastrar mucho estira el indicador fuera de
+ *  toda proporción. */
+const PULL_MAX_PX = 90;
+
+export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete, onRefresh }: Props) {
   // Escape para salir. La ✕ propia de esta pantalla ya no existe (la
   // hamburguesa del Navbar hace de toggle), pero con teclado Escape sigue
   // siendo lo que uno espera de un role="dialog".
@@ -246,6 +262,118 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
   const [hasOverflow, setHasOverflow] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // Área completa de la pantalla (orbe + buscador + lista) — el gesto de
+  // pull-to-refresh escucha ACÁ, no solo en `.lab-chats-list`: el pulgar de
+  // alguien que quiere "jalar desde arriba" naturalmente puede arrancar
+  // sobre el orbe grande o el buscador, que están por fuera del scroll.
+  // Atarlo solo a la lista lo dejaba mudo la mitad de las veces.
+  const screenRef = useRef<HTMLDivElement | null>(null);
+
+  // ── Pull-to-refresh ─────────────────────────────────────────────────
+  // Deslizar hacia abajo desde el TOPE de la lista (scrollTop === 0) vuelve
+  // a pedir los chats al servidor — el respaldo manual que pidió Samu para
+  // cuando cambia de dispositivo y el sync automático al entrar no alcanzó
+  // a traer lo último (o simplemente no quiere esperar a averiguarlo).
+  //
+  // OJO — por qué esto es `touchstart/move/end` a mano y NO Pointer Events
+  // por JSX (como SwipeableCard, arriba): un swipe HORIZONTAL no compite con
+  // nada, así que el navegador nunca interviene y los Pointer Events de React
+  // bastan. Un pull VERTICAL en el TOPE de una lista scrolleable sí compite
+  // directo con el rebote nativo (rubber-band) de iOS — Safari le entrega el
+  // gesto a su propio scroll ANTES de que el pointermove de React alcance a
+  // hacer nada útil, así que el arrastre nunca se sentía (el bug real que
+  // reportó Samu). La única forma confiable de ganarle esa carrera es
+  // `touchmove` con `{ passive: false }` + `preventDefault()` en el momento
+  // exacto en que se confirma que es un pull — y React SIEMPRE adjunta los
+  // handlers `onTouchMove` del JSX como passive (no permite preventDefault
+  // ahí), así que el listener tiene que ir con `addEventListener` a mano.
+  const [pullY, setPullY] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  const pullingRef = useRef(false);
+  const pullStartYRef = useRef(0);
+  const onRefreshRef = useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
+
+  useEffect(() => {
+    const target = screenRef.current;
+    if (!target || !onRefresh) return;
+    // El SCROLL que importa es el de la lista (el orbe/buscador de arriba
+    // no scrollean) — se lee de `listRef`, aunque el listener esté puesto
+    // en `screenRef` (el área completa donde puede arrancar el dedo).
+    const atTop = () => (listRef.current?.scrollTop ?? 0) <= 0;
+
+    const commit = (y: number) => {
+      pullingRef.current = false;
+      if (y >= PULL_COMMIT_PX && onRefreshRef.current) {
+        refreshingRef.current = true;
+        setRefreshing(true);
+        setPullY(PULL_COMMIT_PX);
+        void Promise.resolve(onRefreshRef.current()).finally(() => {
+          refreshingRef.current = false;
+          setRefreshing(false);
+          setPullY(0);
+        });
+      } else {
+        setPullY(0);
+      }
+    };
+
+    const onStart = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (!t) return;
+      pullingRef.current = !refreshingRef.current && atTop();
+      pullStartYRef.current = t.clientY;
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!pullingRef.current) return;
+      const t = e.touches[0];
+      if (!t) return;
+      const dy = t.clientY - pullStartYRef.current;
+      if (dy <= 0 || !atTop()) {
+        // Ya no es un pull de verdad (se devolvió o el usuario terminó
+        // scrolleando contenido): se suelta sin tocar el scroll nativo.
+        pullingRef.current = false;
+        setPullY(0);
+        return;
+      }
+      // A partir de acá SÍ es nuestro gesto: se le quita el control al
+      // scroll nativo (si no, además del indicador se vería el rebote
+      // elástico de iOS de fondo, dos animaciones peleando a la vez).
+      e.preventDefault();
+      // Damping tipo "elástico": raíz cuadrada en vez de 1:1, cede rápido
+      // al principio y cada vez menos cuanto más se arrastra.
+      setPullY(Math.min(PULL_MAX_PX, Math.sqrt(dy) * 6));
+    };
+    const onEnd = () => {
+      if (!pullingRef.current) return;
+      setPullY((y) => {
+        commit(y);
+        return y;
+      });
+    };
+
+    // `passive: false` es EL punto de todo esto: sin él, `preventDefault()`
+    // de arriba no hace nada y Safari se queda con el gesto igual.
+    target.addEventListener("touchstart", onStart, { passive: true });
+    target.addEventListener("touchmove", onMove, { passive: false });
+    target.addEventListener("touchend", onEnd, { passive: true });
+    target.addEventListener("touchcancel", onEnd, { passive: true });
+    return () => {
+      target.removeEventListener("touchstart", onStart);
+      target.removeEventListener("touchmove", onMove);
+      target.removeEventListener("touchend", onEnd);
+      target.removeEventListener("touchcancel", onEnd);
+    };
+    // Dependencia por `!!onRefresh` (booleano) y no por `onRefresh` a secas:
+    // page.tsx pasa una función NUEVA en cada render (arrow inline), así que
+    // depender de la referencia desataría y reataría los listeners en CADA
+    // render del padre — incluido a mitad de un gesto en curso. La función
+    // de verdad siempre se lee fresca vía `onRefreshRef.current`, así que
+    // solo hace falta re-atar cuando pasa de tener handler a no tenerlo (o
+    // viceversa), o cuando la lista aparece/desaparece.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!onRefresh, chats.length === 0]);
 
   // Buscar por título (pedido de Samu 2026-09-06): recorta la lista completa
   // ANTES de paginar el render, así el scroll infinito de abajo pagina sobre
@@ -314,7 +442,7 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
   }, [visibleChats.length, chats.length, query]);
 
   return (
-    <div className="lab-chats-screen" role="dialog" aria-modal="true" aria-label="Chats">
+    <div className="lab-chats-screen" ref={screenRef} role="dialog" aria-modal="true" aria-label="Chats">
       {/* SIN barra propia: el Navbar del Laboratorio queda por encima de esta
           capa (z-index:3 vs 2) y sigue activo, así que la hamburguesa ya
           cierra la lista y el "+" ya crea un chat. Dibujar aquí otra ✕ y otro
@@ -345,7 +473,31 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete }: P
               />
             </div>
           )}
+          {/* El gesto de pull-to-refresh se ata solo en el useEffect de
+              arriba (necesita `{ passive: false }`, que JSX no permite) —
+              este div no lleva props de touch/pointer para eso. */}
           <div className="lab-chats-list" ref={listRef}>
+            {/* Indicador de pull-to-refresh: vive DENTRO del scroll, arriba
+                de la primera card, y solo ocupa alto real (empuja las cards
+                hacia abajo) mientras se arrastra o está refrescando — el
+                resto del tiempo es un nodo de 0px, invisible de verdad y no
+                solo con opacity:0 (que igual reservaría espacio). */}
+            {onRefresh && (pullY > 0 || refreshing) && (
+              <div
+                className={`lab-chats-pull ${refreshing ? "lab-chats-pull--active" : ""}`}
+                style={{ height: refreshing ? PULL_COMMIT_PX : pullY }}
+                aria-hidden="true"
+              >
+                <span
+                  className="lab-chip-spin"
+                  style={
+                    refreshing
+                      ? undefined
+                      : { opacity: Math.min(1, pullY / PULL_COMMIT_PX), animationPlayState: "paused" }
+                  }
+                />
+              </div>
+            )}
             {visibleChats.map((c) => (
               <SwipeableCard
                 key={c.id}

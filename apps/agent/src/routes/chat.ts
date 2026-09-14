@@ -218,11 +218,14 @@ export function registerChatRoutes(app: Hono): void {
   });
 
   /**
-   * Sube uno o varios documentos (PDF/DOCX/XLSX/TXT/MD/CSV/JSON), los
-   * vectoriza en `chat_docs` y devuelve un resumen — nunca el contenido ni
-   * una ruta en disco. El archivo original NO se guarda: se procesa en
-   * memoria y se descarta apenas se extrae el texto (a diferencia de las
-   * imágenes, que sí persisten para que el modelo las pueda releer).
+   * Sube uno o varios documentos (PDF/DOCX/XLSX/PPTX/EPUB/TXT/MD/CSV/JSON/SVG
+   * o imágenes JPG/PNG/WEBP/BMP/TIFF/GIF vía OCR), los vectoriza en
+   * `chat_docs` y devuelve un resumen — nunca el contenido ni una ruta en
+   * disco. El archivo original NO se guarda: se procesa en memoria y se
+   * descarta apenas se extrae el texto (a diferencia de las imágenes
+   * pegadas/soltadas para visión vía /chat/attachments, que sí persisten
+   * para que el modelo las pueda releer — el clip y el paste son rutas
+   * distintas para imágenes, ver addFiles en el frontend).
    *
    * Automático por diseño: no hay confirmación intermedia, igual que
    * `/chat/attachments` sube la imagen apenas se pega. El resumen que

@@ -105,12 +105,20 @@ async function viaOpenAI(texts: string[]): Promise<(number[] | null)[]> {
 // ── Ollama (local) ────────────────────────────────────────────────────
 // /api/embed acepta un array, pero en una máquina chica un lote grande se come
 // la RAM: se manda de a pocos y en serie. Vectorizar es barato comparado con
-// generar, así que la lentitud no se nota en el uso normal.
+// generar, así que la lentitud no se nota en el uso normal — EXCEPTO en esta
+// máquina, que corre con 1 vCPU: medido en caliente, un solo chunk de 6000
+// chars tarda ~7.4s (nomic-embed-text, sin GPU) y no es lineal con el
+// tamaño (2900 chars → 2.9s, no 3.7s). Un DOCX de 8 chunks = ~60s reales,
+// no un cuelgue. Como el vector solo necesita el GIST semántico del texto
+// (no cada palabra), se manda un recorte de 4000 chars en vez del chunk
+// completo — el `content` guardado en la fila sigue siendo el fragmento
+// entero de 6000, esto solo acorta lo que ve el modelo de embeddings.
+const OLLAMA_EMBED_INPUT_CAP = 4000;
 async function viaOllama(texts: string[]): Promise<(number[] | null)[]> {
   const out: (number[] | null)[] = [];
   const BATCH = 8;
   for (let i = 0; i < texts.length; i += BATCH) {
-    const chunk = texts.slice(i, i + BATCH).map((t) => (t || " ").slice(0, 8000));
+    const chunk = texts.slice(i, i + BATCH).map((t) => (t || " ").slice(0, OLLAMA_EMBED_INPUT_CAP));
     try {
       const res = await fetch(`${env.OLLAMA_URL}/api/embed`, {
         method: "POST",

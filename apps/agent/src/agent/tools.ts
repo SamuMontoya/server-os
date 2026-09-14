@@ -11,6 +11,7 @@ import { readProjects } from "../vault/projects.js";
 import { supabase } from "../supabase.js";
 import { OWNER } from "../owner.js";
 import { syncDriveFolder, extractFolderId } from "../drive/sync.js";
+import { getFullChatDocument, listChatDocuments } from "../documents/chat-documents.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -119,6 +120,16 @@ const updateProjectNoteTool = tool(
     content: z.string().describe("Texto a anexar (markdown)"),
   },
   async ({ project, content }) => {
+    // Máquina sin vault local (VAULT_PATH=""): `join("", ...)` da una ruta
+    // RELATIVA que Node resuelve contra el cwd del proceso @hermes/agent —
+    // en la práctica, escribe basura dentro del propio repo en vez de fallar
+    // claro. Documentado en .env.example: vacío = solo ejecución, no se
+    // escriben notas (el dueño del vault es quien las persiste).
+    if (!env.VAULT_PATH) {
+      return text(
+        "Esta máquina no tiene vault local (VAULT_PATH sin configurar) — no puedo escribir notas de proyecto acá. Pídele a la máquina dueña del vault que la actualice, o usa save_memory para dejar constancia igual.",
+      );
+    }
     const projects = await readProjects(true);
     const p = projects.find((x) => x.slug.toLowerCase() === project.toLowerCase());
     if (!p) return text(`Proyecto "${project}" no encontrado en el vault.`);
@@ -147,6 +158,11 @@ const searchVaultTool = tool(
     folder: z.string().optional().describe("Subcarpeta del vault (ej: projects)"),
   },
   async ({ query, folder }) => {
+    if (!env.VAULT_PATH) {
+      return text(
+        "Esta máquina no tiene vault local (VAULT_PATH sin configurar) — no hay nada que buscar acá. Prueba search_knowledge, que sí lee el espejo compartido.",
+      );
+    }
     const dir = folder ? join(env.VAULT_PATH, folder) : env.VAULT_PATH;
     try {
       const { stdout } = await execFileAsync(
@@ -168,6 +184,18 @@ const captureIdeaTool = tool(
   "Captura una idea suelta: la escribe en '00 Inbox/' del vault y la espeja como memoria.",
   { content: z.string(), tags: z.array(z.string()).optional() },
   async ({ content, tags }) => {
+    await saveMemory({ content, type: "agent", tags: [...(tags ?? []), "idea"], source: "agent" });
+    // Sin VAULT_PATH, `join("", "00 Inbox")` da una ruta RELATIVA: Node la
+    // resuelve contra el cwd del proceso @hermes/agent y termina escribiendo
+    // basura dentro del propio repo en vez de en el vault de verdad (así se
+    // detectó este bug). Igual que update_project_note/search_vault: en una
+    // máquina "solo ejecución" (.env.example) no se toca el filesystem, la
+    // memoria en Supabase ya quedó guardada arriba.
+    if (!env.VAULT_PATH) {
+      return text(
+        "Guardada como memoria (Supabase) — esta máquina no tiene vault local (VAULT_PATH sin configurar), así que no se escribió el .md en 00 Inbox. La máquina dueña del vault puede volcarla a mano si hace falta.",
+      );
+    }
     const inbox = join(env.VAULT_PATH, "00 Inbox");
     await mkdir(inbox, { recursive: true });
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
@@ -176,7 +204,6 @@ const captureIdeaTool = tool(
       file,
       `---\ncapturada: ${new Date().toISOString()}\ntags: [${(tags ?? []).join(", ")}]\norigen: os\n---\n\n${content}\n`,
     );
-    await saveMemory({ content, type: "agent", tags: [...(tags ?? []), "idea"], source: "agent" });
     return text(`Idea capturada en ${file}`);
   },
 );
@@ -198,6 +225,40 @@ const syncDriveFolderTool = tool(
     }
     return text(
       `Sincronizado ✓ ${result.indexed} documentos indexados/actualizados · ${result.scanned} escaneados · ${result.skipped} sin texto extraíble · ${result.removed} eliminados del índice (ya no están en la carpeta).`,
+    );
+  },
+);
+
+const readChatDocumentTool = tool(
+  "read_chat_document",
+  "Devuelve el texto COMPLETO (todos los fragmentos, en orden) de un documento que el usuario subio a mano en el chat (PDF/DOCX/XLSX/etc). Usala cuando necesites reconstruir un documento fielmente -toda una matriz de auditoria, todas las filas y columnas de una tabla, etc- a diferencia de search_knowledge, que solo trae fragmentos sueltos por similitud semantica y puede repetir el mismo trozo si el documento tiene muchos chunks. Si no sabes el nombre exacto, usa antes list_chat_documents.",
+  {
+    name: z.string().describe("Nombre (o parte del nombre) del archivo subido al chat, o su doc_id exacto"),
+  },
+  async ({ name }) => {
+    const doc = await getFullChatDocument(name);
+    if (!doc) {
+      return text(
+        `No encontre ningun documento subido al chat que coincida con "${name}". Usa list_chat_documents para ver los disponibles.`,
+      );
+    }
+    return text(
+      `# ${doc.name} (${doc.chunkCount} fragmento(s), subido ${doc.createdAt.slice(0, 10)})\n\n${doc.content}`,
+    );
+  },
+);
+
+const listChatDocumentsTool = tool(
+  "list_chat_documents",
+  "Lista los documentos que el usuario subio a mano en el chat (el clip junto al microfono), mas recientes primero -para saber que nombre pasarle a read_chat_document.",
+  { limit: z.number().max(50).optional() },
+  async ({ limit }) => {
+    const docs = await listChatDocuments(limit ?? 20);
+    if (!docs.length) return text("No hay documentos subidos al chat.");
+    return text(
+      docs
+        .map((d) => `- ${d.name} (${d.chunkCount} fragmento(s), ${d.createdAt.slice(0, 10)})`)
+        .join("\n"),
     );
   },
 );
@@ -248,6 +309,8 @@ const ACTIVE_TOOLS: AnyTool[] = [
   captureIdeaTool,
   getRecentActivityTool,
   syncDriveFolderTool,
+  readChatDocumentTool,
+  listChatDocumentsTool,
 ];
 
 export const hermesMcpServer = createSdkMcpServer({

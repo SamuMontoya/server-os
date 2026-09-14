@@ -515,11 +515,16 @@ body::after {
 /* Tablas del markdown. El wrapper scrollea por su cuenta — regla del
    proyecto: el contenido ancho se desborda DENTRO de su caja, nunca empuja
    la página. */
+/* Estilo Claude.ai (pedido de Samu, 2026-09-12): encabezado neutro (no
+   violeta), más aire en las celdas, esquinas más redondeadas. Antes el
+   header llevaba tinte violeta a juego con los links/blocks del resto del
+   markdown — se cambia a gris neutro porque en una TABLA el color compite
+   por atención con los datos, que es lo que importa leer de un vistazo. */
 .md-table-wrap {
   margin: 0.8em 0;
   overflow-x: auto;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 8px;
 }
 .md-table {
   width: 100%;
@@ -530,7 +535,7 @@ body::after {
 }
 .md-table th,
 .md-table td {
-  padding: 6px 10px;
+  padding: 10px 14px;
   vertical-align: top;
   border-bottom: 1px solid var(--line);
   /* El user-agent centra los <th> por defecto: sin esto, una columna SIN
@@ -542,8 +547,8 @@ body::after {
   white-space: normal;
 }
 .md-table thead th {
-  background: rgb(122 132 255 / 0.08);
-  color: var(--violet-hot);
+  background: var(--bg-panel);
+  color: var(--text);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -551,7 +556,7 @@ body::after {
   border-bottom: none;
 }
 .md-table tbody tr:hover td {
-  background: rgb(122 132 255 / 0.04);
+  background: var(--bg-panel);
 }
 
 .md-quote {
@@ -1349,6 +1354,25 @@ html.lab-route body::after {
      lista de mensajes del chat, solo que acá no había caído. */
   padding-bottom: max(28px, calc(20px + env(safe-area-inset-bottom)));
 }
+/* Pull-to-refresh (pedido de Samu 2026-09-12): respaldo manual del sync
+   automático entre dispositivos — ver onRefresh en LabChatsScreen.tsx. Sin
+   transition mientras se arrastra (el dedo manda, tiene que sentirse 1:1);
+   CON transition cuando se suelta y queda fijo en modo "refrescando", para
+   que el colapso final a 0 sea un fundido, no un salto seco. */
+.lab-chats-pull {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.lab-chats-pull--active {
+  transition: height 0.2s ease;
+}
+.lab-chats-pull .lab-chip-spin {
+  width: 18px;
+  height: 18px;
+}
 /* Buscador de chats por título (pedido de Samu 2026-09-06): SOLO se monta
    cuando `.lab-chats-list` de verdad desborda su contenedor (`hasOverflow`
    en LabChatsScreen.tsx) — con pocos chats todos caben a la vista y el input
@@ -2052,6 +2076,53 @@ html.lab-route.lab-kb .lab-inputbar {
   border-radius: 6px;
   /* La burbuja es gris; un PNG con transparencia se vería sucio sin esto. */
   background: #fff;
+}
+
+/* Documentos DENTRO de la burbuja YA ENVIADA: cards al estilo Claude.ai
+   (icono arriba, nombre, formato abajo en una esquina) — a diferencia del
+   chip-píldora del composer (lab-chip--doc, mientras se sube/procesa), esto
+   es solo la constancia visual de lo que ya quedó indexado. Pedido explícito
+   de Samu (2026-09-12): el rediseño va AQUÍ, no en el composer. */
+.lab-bubble-docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 0;
+}
+.lab-bubble-docs:not(:only-child) { margin-bottom: 4px; }
+.lab-doc-card {
+  display: flex;
+  flex-direction: column;
+  width: 132px;
+  min-height: 96px;
+  padding: 10px;
+  border: 1px solid rgba(55, 53, 47, 0.13);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.lab-doc-card-icon { color: #6b6a66; }
+.lab-doc-card-name {
+  flex: 1;
+  margin-top: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #37352f;
+  /* Máximo 3 líneas y corta con "…" — igual que la card de Claude, que
+     trunca el nombre en vez de estirar la card entera. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.lab-doc-card-ext {
+  margin-top: 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #9b9a96;
+  text-transform: uppercase;
 }
 /* La colita: un triángulo recortado con clip-path, del mismo gris que la
    burbuja. `right: -1px` la solapa un pelo con el borde de la burbuja (en vez
