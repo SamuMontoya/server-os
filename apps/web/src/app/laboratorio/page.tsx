@@ -951,8 +951,11 @@ export default function Laboratorio() {
   // Al montar, con el draft vacío, fija el alto real de una línea en vez de
   // dejar el alto por defecto del navegador (más alto → placeholder pegado
   // arriba con hueco debajo, ver .lab-textarea en globals.css).
+  // Con requestAnimationFrame esperamos a que el CSS se aplique en la
+  // hidratación SSR→CSR — sin esto, getBoundingClientRect() puede devolver
+  // valores pre-layout y maxHeight calculado es incorrecto (≤28px).
   useEffect(() => {
-    resizeInput();
+    requestAnimationFrame(() => resizeInput());
   }, []);
 
   /** Reescribe los bloques del mensaje de respuesta `replyId`. */
@@ -2012,6 +2015,17 @@ export default function Laboratorio() {
       root.style.removeProperty("--lab-vp-top");
       root.classList.remove("lab-kb");
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Fallback para desktop: escucha resize del window si visualViewport
+  // no está disponible (algunas versiones de navegadores viejos, o si
+  // `vv` es null por alguna razón). El techo dinámico depende del layout,
+  // así que cambios de tamaño (p. ej. rotación en desktop) deben recalcular.
+  useEffect(() => {
+    const onResize = () => resizeInput();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

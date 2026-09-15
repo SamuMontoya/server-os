@@ -294,7 +294,7 @@ export function ChatPanel({
       maxHeight = Math.max(elHeight, elHeight + reclaimable - GAP);
     }
 
-    el.style.height = "auto";
+    el.style.height = "0px";
     el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
     if (opts?.toEnd) el.scrollTop = el.scrollHeight;
   };
@@ -321,10 +321,14 @@ export function ChatPanel({
   }, [projKey]);
 
   // Al cambiar de tab: scroll abajo y recalcular alto del input.
+  // requestAnimationFrame: en el montaje inicial (hidratación SSR→CSR) el
+  // layout de rootRef/scrollRef/formRef puede no estar asentado todavía en el
+  // primer tick — medirlo un frame después evita un maxHeight calculado de
+  // más chico de lo real (el bug que dejaba el textarea sin crecer).
   useEffect(() => {
     nearBottom.current = true;
     scrollDown(true);
-    resizeInput();
+    requestAnimationFrame(() => resizeInput());
     inputRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.active, projKey]);
