@@ -14,11 +14,8 @@ import {
   saveChatAttachment,
   MAX_ATTACHMENT_BYTES,
 } from "../chat-attachments.js";
-import {
-  ingestUploadedDocuments,
-  MAX_DOCUMENT_BYTES,
-  MAX_DOCUMENTS_PER_UPLOAD,
-} from "../documents/chat-documents.js";
+import { MAX_DOCUMENT_BYTES, MAX_DOCUMENTS_PER_UPLOAD } from "../documents/chat-documents.js";
+import { startChatDocumentJobs, getDocJobs } from "../documents/chat-document-jobs.js";
 // El dictado del composer usaba el mismo STT que las juntas (Scribe → Whisper).
 import { transcribe } from "../stt.js";
 import {
@@ -219,18 +216,25 @@ export function registerChatRoutes(app: Hono): void {
 
   /**
    * Sube uno o varios documentos (PDF/DOCX/XLSX/PPTX/EPUB/TXT/MD/CSV/JSON/SVG
-   * o imágenes JPG/PNG/WEBP/BMP/TIFF/GIF vía OCR), los vectoriza en
-   * `chat_docs` y devuelve un resumen — nunca el contenido ni una ruta en
-   * disco. El archivo original NO se guarda: se procesa en memoria y se
-   * descarta apenas se extrae el texto (a diferencia de las imágenes
-   * pegadas/soltadas para visión vía /chat/attachments, que sí persisten
-   * para que el modelo las pueda releer — el clip y el paste son rutas
-   * distintas para imágenes, ver addFiles en el frontend).
+   * o imágenes JPG/PNG/WEBP/BMP/TIFF/GIF vía OCR) y los pone A VECTORIZAR EN
+   * BACKGROUND — nunca el contenido ni una ruta en disco. El archivo original
+   * NO se guarda: se procesa en memoria y se descarta apenas se extrae el
+   * texto (a diferencia de las imágenes pegadas/soltadas para visión vía
+   * /chat/attachments, que sí persisten para que el modelo las pueda releer —
+   * el clip y el paste son rutas distintas para imágenes, ver addFiles en el
+   * frontend).
+   *
+   * ASÍNCRONO desde 2026-09-15 (auditoría: un PDF de 2MB tardaba ~2-3 min de
+   * Ollama serial en 1 vCPU, y ese tiempo entero bloqueaba este request). Acá
+   * solo se valida y se ENCOLA — responde 202 con los docId en "processing"
+   * apenas los archivos llegaron, sin esperar extracción/chunking/embeddings.
+   * El cliente hace polling a `GET /chat/documents/status` (ver más abajo)
+   * hasta que cada uno quede "ready" o "error" — ver chat-document-jobs.ts
+   * para el motor que corre el trabajo pesado fuera de este ciclo request/
+   * response, mismo patrón que los turnos de chat (chat-turns.ts).
    *
    * Automático por diseño: no hay confirmación intermedia, igual que
-   * `/chat/attachments` sube la imagen apenas se pega. El resumen que
-   * devuelve es lo que el composer usa para anteponer un aviso al mensaje
-   * ("ya indexé X, Y" — ver chat-documents.ts en el frontend).
+   * `/chat/attachments` sube la imagen apenas se pega.
    */
   app.post(
     "/chat/documents",
@@ -262,10 +266,28 @@ export function registerChatRoutes(app: Hono): void {
           buffer: Buffer.from(await f.arrayBuffer()),
         })),
       );
-      const result = await ingestUploadedDocuments(input);
-      return c.json(result);
+      const processing = startChatDocumentJobs(input);
+      return c.json({ processing }, 202);
     },
   );
+
+  /**
+   * Estado de una tanda de documentos subidos al chat, por docId — el
+   * polling que reemplaza la espera bloqueante de antes. `ids` es una lista
+   * separada por comas. Ids desconocidos (nunca existieron o se evictaron
+   * tras 30 min) vuelven como `{ status: "not_found" }` en vez de romper la
+   * respuesta entera: el frontend los trata como error terminal y deja de
+   * insistir.
+   */
+  app.get("/chat/documents/status", (c) => {
+    const raw = c.req.query("ids") ?? "";
+    const ids = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length === 0) return c.json({ error: "ids requerido" }, 400);
+    return c.json({ jobs: getDocJobs(ids) });
+  });
 
   app.post("/chat/turns", async (c) => {
     const b = await c.req

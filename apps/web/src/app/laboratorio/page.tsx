@@ -26,7 +26,11 @@ import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
 import { uuid } from "@/lib/uuid";
 import { isSupportedImage, uploadChatImage } from "@/lib/chat-attachments";
-import { isSupportedDocument, uploadChatDocuments } from "@/lib/chat-documents";
+import {
+  isSupportedDocument,
+  startChatDocumentUpload,
+  fetchChatDocumentStatus,
+} from "@/lib/chat-documents";
 import { OrbeIA } from "@/components/orbe/OrbeIA";
 import {
   loadLab,
@@ -97,16 +101,19 @@ type LabAttachment = {
 /**
  * Documento subido a mano (el clip), mientras vive en el composer.
  *
- * A diferencia de LabAttachment, acá NO hay `id` que llegue después: el
- * servidor procesa y descarta el archivo en el mismo request, así que el
- * estado final es "chunks" (cuántos fragmentos quedaron indexados) o
- * "error". Sin `url` porque no hay miniatura posible ni falta: es un chip de
- * texto, no una imagen.
+ * Ciclo de vida (2026-09-15, subida asíncrona): "uploading" (bytes viajando
+ * al servidor, dura milisegundos) → "processing" (el servidor ya aceptó el
+ * archivo y lo está vectorizando EN BACKGROUND — este estado ya NO bloquea
+ * el envío del mensaje, ver `canSend`) → "done" | "error". `docId` aparece
+ * apenas se conoce (con la respuesta del POST) y es la clave del polling en
+ * `fetchChatDocumentStatus`. Sin `url` porque no hay miniatura posible ni
+ * falta: es un chip de texto, no una imagen.
  */
 type LabDocument = {
   key: string;
   name: string;
-  status: "uploading" | "done" | "error";
+  status: "uploading" | "processing" | "done" | "error";
+  docId?: string;
   chunks?: number;
   truncated?: boolean;
   error?: string;
@@ -1370,9 +1377,13 @@ export default function Laboratorio() {
 
   // ── Documentos subidos a mano (el clip) ────────────────────────────────
   //
-  // A diferencia de addImages, acá la subida ES el procesamiento completo:
-  // cuando el fetch resuelve, el documento YA está trozado, vectorizado y
-  // guardado en chat_docs — no hay un segundo paso. El chip solo informa.
+  // A diferencia de addImages, acá la subida YA NO es el procesamiento
+  // completo (2026-09-15): el POST responde apenas el servidor acepta el
+  // archivo (estado "processing"), y el troceo/vectorizado corre en
+  // background — el chip pasa a "done" cuando el polling de más abajo lo
+  // confirma. Antes el fetch en sí tardaba lo que tarda Ollama en vectorizar
+  // (hasta minutos con un PDF grande) y ESE tiempo bloqueaba tanto el chip
+  // como el envío del mensaje entero.
   //
   // Techo de cordura por mensaje, NO el límite de antes (Samu pidió quitarlo,
   // 2026-09-15: "que deje cargar los documentos que se quiera"). Si de verdad
@@ -1381,12 +1392,18 @@ export default function Laboratorio() {
   const MAX_DOCUMENTS = 30;
   // Cuántas subidas van en vuelo a la vez. Cada archivo es su PROPIO request
   // (ver más abajo) — esto es lo que hace la carga progresiva: el chip de
-  // cada archivo pasa a "listo" en cuanto SU request termina, no cuando
-  // termina el más lento de la tanda (antes era un solo POST con todos los
-  // archivos juntos, así que todos los chips saltaban a la vez al final).
-  // 2 y no más: el servidor corre Ollama en 1 vCPU, más concurrencia no
-  // vectoriza más rápido, solo compite por el mismo core.
-  const DOC_UPLOAD_CONCURRENCY = 2;
+  // cada archivo pasa a "processing" en cuanto SU request termina, no cuando
+  // termina el más lento de la tanda. Con la subida ya desacoplada del
+  // vectorizado, este número ya NO compite por el vCPU de Ollama (ese cuello
+  // de botella ahora vive del lado del servidor, con su propio
+  // INGEST_CONCURRENCY) — es solo cuántos POST pequeños viajan a la vez, así
+  // que puede ser más alto que antes sin ganar ni perder nada de fondo.
+  const DOC_UPLOAD_CONCURRENCY = 6;
+  // Cada cuánto se pregunta `/chat/documents/status` por los que siguen
+  // "processing". No hay SSE para esto (a diferencia de los turnos de chat):
+  // es un polling simple porque la ventana típica son segundos, no minutos
+  // de conversación en vivo.
+  const DOC_STATUS_POLL_MS = 1500;
 
   const addDocuments = (files: File[]) => {
     const docs = files.filter(isSupportedDocument);
@@ -1421,24 +1438,20 @@ export default function Laboratorio() {
     // Cada archivo viaja en SU PROPIO request (antes era uno solo para toda
     // la tanda): el presupuesto de fragmentos ya no se comparte entre
     // archivos (ver MAX_CHUNKS_PER_DOCUMENT en el agente), así que no hay
-    // motivo para atarlos — y subirlos por separado es justo lo que permite
-    // que cada uno reporte "listo" apenas termina, en vez de esperar al más
-    // lento. La concurrencia acotada (no ilimitada) evita mandar 30 requests
-    // de golpe a una máquina de 1 vCPU.
+    // motivo para atarlos. El fetch en sí ahora es RÁPIDO (el servidor solo
+    // acepta y encola, ver startChatDocumentUpload) — lo que sigue
+    // "processing" un rato es el vectorizado en background, que el `useEffect`
+    // de polling de más abajo va confirmando por su cuenta.
     let cursor = 0;
     const runNext = (): void => {
       const upload = uploads[cursor++];
       if (!upload) return;
-      void uploadChatDocuments([upload.file])
-        .then((result) => {
-          const ok = result.ok[0];
-          const fail = result.failed[0];
+      void startChatDocumentUpload(upload.file)
+        .then((queued) => {
           setDocuments((prev) =>
-            prev.map((d) => {
-              if (d.key !== upload.key) return d;
-              if (ok) return { ...d, status: "done" as const, chunks: ok.chunks, truncated: ok.truncated };
-              return { ...d, status: "error" as const, error: fail?.error ?? "no se pudo procesar" };
-            }),
+            prev.map((d) =>
+              d.key === upload.key ? { ...d, status: "processing" as const, docId: queued.docId } : d,
+            ),
           );
         })
         .catch((err: unknown) => {
@@ -1455,6 +1468,52 @@ export default function Laboratorio() {
     for (let i = 0; i < Math.min(DOC_UPLOAD_CONCURRENCY, uploads.length); i++) runNext();
   };
 
+  // Polling de los documentos "processing": mismo espíritu que el heartbeat
+  // de turnos, pero simple (sin SSE) porque acá la ventana es de segundos.
+  // Depende de `documents` a propósito — cada tick reprograma el timer con
+  // la lista fresca de ids en curso, así que un documento que ya llegó a
+  // "done"/"error" (por este mismo tick o por removeDocument) deja de
+  // consultarse solo, sin lógica extra de desuscripción por id.
+  useEffect(() => {
+    const pendingIds = documents
+      .filter((d): d is LabDocument & { docId: string } => d.status === "processing" && !!d.docId)
+      .map((d) => d.docId);
+    if (pendingIds.length === 0) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const jobs = await fetchChatDocumentStatus(pendingIds);
+        if (cancelled) return;
+        setDocuments((prev) =>
+          prev.map((d) => {
+            if (d.status !== "processing" || !d.docId) return d;
+            const job = jobs.find((j) => j.docId === d.docId);
+            if (!job || job.status === "processing") return d;
+            if (job.status === "ready") {
+              return { ...d, status: "done" as const, chunks: job.chunks, truncated: job.truncated };
+            }
+            // "error" o "not_found" (evictado o id que el servidor no reconoce):
+            // ambos son terminales, se muestran igual como error explícito.
+            return {
+              ...d,
+              status: "error" as const,
+              error: job.error ?? "no se pudo procesar (no se encontró el trabajo)",
+            };
+          }),
+        );
+      } catch {
+        // Un fallo de red puntual en el polling no tumba el chip: el
+        // siguiente tick (disparado por el próximo cambio de `documents`,
+        // que este mismo efecto reprograma) reintenta solo.
+      }
+    }, DOC_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- DOC_STATUS_POLL_MS es constante local, no una dep reactiva.
+  }, [documents]);
+
   const removeDocument = (key: string) => {
     // El documento YA fue indexado en el servidor si llegó a "done": quitar
     // el chip solo saca el aviso de ESTE mensaje, no lo des-vectoriza (sigue
@@ -1465,14 +1524,19 @@ export default function Laboratorio() {
 
   /** Alguna imagen todavía subiendo: el envío espera (ver `canSend`). */
   const uploading = attachments.some((a) => !a.id && !a.error);
-  const docsProcessing = documents.some((d) => d.status === "uploading");
+  // Solo bloquea mientras los BYTES viajan al servidor (milisegundos, ver
+  // startChatDocumentUpload). "processing" es el vectorizado en background:
+  // desde 2026-09-15 YA NO bloquea el envío — Samu pidió explícitamente
+  // poder seguir chateando o subir más documentos mientras otros terminan de
+  // indexarse, en vez de esperar a que todos queden "done".
+  const docsUploading = documents.some((d) => d.status === "uploading");
   /** Solo las que el servidor ya aceptó pueden viajar en el turno. */
   const readyIds = attachments.filter((a) => a.id).map((a) => a.id!);
   const canSend =
     (draft.trim().length > 0 || readyIds.length > 0 || documents.length > 0) &&
     !busy &&
     !uploading &&
-    !docsProcessing;
+    !docsUploading;
 
   const handleSend = async () => {
     const text = draft.trim();
@@ -1489,17 +1553,28 @@ export default function Laboratorio() {
     // Ver `dictationDropRef` en el hook de transcripción de abajo.
     endDictation();
 
-    // Los documentos ya quedaron indexados al subirlos (no hay paso 2): acá
-    // solo se arma el aviso de texto para que el modelo sepa que existen y
-    // los busque con search_knowledge si la pregunta los toca. Los que
-    // fallaron (`status === "error"`) no se mencionan — nunca se indexaron.
+    // Los documentos "done" ya quedaron indexados (no hay paso 2): acá se
+    // arma el aviso de texto para que el modelo sepa que existen y los
+    // busque con search_knowledge si la pregunta los toca. Los que fallaron
+    // (`status === "error"`) no se mencionan — nunca se indexaron.
+    //
+    // Desde 2026-09-15 el envío YA NO espera a que todos terminen (ver
+    // `canSend`/`docsUploading`): puede haber documentos "processing" en
+    // vuelo justo cuando se manda el mensaje. Esos SÍ se mencionan aparte —
+    // sin el aviso, el modelo intentaría buscarlos con search_knowledge,
+    // no los encontraría (todavía no hay filas en chat_docs) y respondería
+    // como si no existieran, cuando en realidad solo faltan unos segundos.
     const indexedDocs = documents.filter((d) => d.status === "done");
+    const pendingDocs = documents.filter((d) => d.status === "processing");
     const docNote = indexedDocs.length
       ? `📎 Documento${indexedDocs.length > 1 ? "s" : ""} adjunto${indexedDocs.length > 1 ? "s" : ""} e indexado${indexedDocs.length > 1 ? "s" : ""} en la base de conocimiento (fuente "chat"): ${indexedDocs
           .map((d) => `"${d.name}"${d.chunks && d.chunks > 1 ? ` (${d.chunks} fragmentos)` : ""}`)
           .join(", ")}. Ya es buscable con search_knowledge, sin el archivo original (no se guardó).`
       : "";
-    const finalText = [docNote, text].filter(Boolean).join("\n\n");
+    const pendingNote = pendingDocs.length
+      ? `📎 Todavía terminando de indexar en background: ${pendingDocs.map((d) => `"${d.name}"`).join(", ")}. Si la pregunta depende de ese contenido, avisa que aún no está buscable y que se reintente en un momento.`
+      : "";
+    const finalText = [docNote, pendingNote, text].filter(Boolean).join("\n\n");
 
     const sent = attachments.filter((a) => a.id);
     const userMsg: LabMessage = {
@@ -2357,17 +2432,19 @@ export default function Laboratorio() {
               {documents.map((d) => (
                 <div
                   key={d.key}
-                  className={`lab-chip lab-chip--doc ${d.status === "uploading" ? "lab-chip--uploading" : ""} ${
-                    d.status === "error" ? "lab-chip--error" : ""
-                  }`}
+                  className={`lab-chip lab-chip--doc ${
+                    d.status === "uploading" || d.status === "processing" ? "lab-chip--uploading" : ""
+                  } ${d.status === "error" ? "lab-chip--error" : ""}`}
                   title={
                     d.status === "error"
                       ? d.error
                       : d.status === "uploading"
-                        ? `Procesando ${d.name}…`
-                        : `${d.name} — ${d.chunks} fragmento${d.chunks === 1 ? "" : "s"} indexado${
-                            d.chunks === 1 ? "" : "s"
-                          }${d.truncated ? " (recortado: el archivo era muy grande)" : ""}`
+                        ? `Subiendo ${d.name}…`
+                        : d.status === "processing"
+                          ? `Indexando ${d.name} en background — ya puedes seguir escribiendo o mandar el mensaje`
+                          : `${d.name} — ${d.chunks} fragmento${d.chunks === 1 ? "" : "s"} indexado${
+                              d.chunks === 1 ? "" : "s"
+                            }${d.truncated ? " (recortado: el archivo era muy grande)" : ""}`
                   }
                 >
                   <span className="lab-chip-doc-icon" aria-hidden="true">
@@ -2382,7 +2459,9 @@ export default function Laboratorio() {
                     </svg>
                   </span>
                   <span className="lab-chip-doc-name">{d.name}</span>
-                  {d.status === "uploading" && <span className="lab-chip-spin" aria-hidden="true" />}
+                  {(d.status === "uploading" || d.status === "processing") && (
+                    <span className="lab-chip-spin" aria-hidden="true" />
+                  )}
                   <button
                     type="button"
                     className="lab-chip-x"

@@ -109,18 +109,26 @@ export interface IngestDeps {
   isReady: () => boolean;
 }
 
-const defaultInsertRows = async (rows: ChatDocRow[]): Promise<string | null> => {
+export const defaultInsertRows = async (rows: ChatDocRow[]): Promise<string | null> => {
   if (!supabase) return "Supabase no configurado";
   const { error } = await supabase.from("chat_docs").insert(rows);
   return error ? error.message : null;
 };
 
-/** Procesa UN archivo de punta a punta: extraer → trocear → vectorizar →
- *  guardar. Separado de `ingestUploadedDocuments` para poder correr varios
- *  en paralelo (ver `INGEST_CONCURRENCY`) sin duplicar la lógica. */
-async function ingestOne(
+/**
+ * Procesa UN archivo de punta a punta: extraer → trocear → vectorizar →
+ * guardar. Separado de `ingestUploadedDocuments` para poder correr varios
+ * en paralelo (ver `INGEST_CONCURRENCY`) sin duplicar la lógica.
+ *
+ * Exportada (antes privada) porque `chat-document-jobs.ts` la reusa para el
+ * pipeline asíncrono: el docId ahora lo decide el LLAMADOR (no se genera acá
+ * adentro) para poder registrar el job ANTES de que arranque el trabajo
+ * pesado — el cliente necesita el id ya en la respuesta 202, no al final.
+ */
+export async function ingestOne(
   file: UploadedFile,
   deps: Required<Pick<IngestDeps, "extractText" | "embedBatch" | "insertRows">>,
+  docId: string = randomUUID(),
 ): Promise<{ ok: IngestedDoc } | { failed: IngestFailure }> {
   let text: string;
   try {
@@ -142,7 +150,6 @@ async function ingestOne(
     return { failed: { name: file.name, error: "no se generó ningún fragmento del texto extraído" } };
   }
 
-  const docId = randomUUID();
   const vectors = await deps.embedBatch(pieces.map((p) => `${file.name}\n${p}`));
   // embedBatch nunca lanza: si el motor de embeddings falla (Ollama caído,
   // OpenAI sin key, rate limit, etc.) devuelve `null` por posición en vez de

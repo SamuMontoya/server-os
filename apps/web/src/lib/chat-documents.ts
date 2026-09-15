@@ -1,11 +1,14 @@
 /**
  * Documentos subidos a mano en el composer (el clip junto al micrófono).
  *
- * A diferencia de las imágenes (sube-y-guarda-el-id, ver chat-attachments.ts),
- * acá no hay id que guardar: el archivo se procesa y se descarta del lado del
- * servidor en el mismo request — la subida YA es el procesamiento completo
- * (extraer texto, trocear, vectorizar, guardar en chat_docs). Lo que vuelve
- * es un resumen, no una referencia a nada persistente.
+ * Desde 2026-09-15 la subida es ASÍNCRONA (auditoría: un PDF de 2MB tardaba
+ * ~2-3 min de Ollama serial en el vCPU único del servidor, y ese tiempo
+ * entero bloqueaba el fetch). `POST /chat/documents` ahora responde YA con
+ * el docId en "processing" — el archivo se procesa y se descarta del lado
+ * del servidor en BACKGROUND (extraer texto, trocear, vectorizar, guardar en
+ * chat_docs), y el composer hace polling a `GET /chat/documents/status`
+ * hasta ver "ready" o "error" (ver `fetchChatDocumentStatus`, usado en
+ * laboratorio/page.tsx).
  */
 import { hermesFetch } from "@/lib/hermes";
 
@@ -40,29 +43,56 @@ export function isSupportedDocument(file: File): boolean {
   return ACCEPTED_EXT.some((ext) => name.endsWith(ext));
 }
 
-export interface IngestedDocSummary {
+/** Lo que devuelve el POST apenas acepta el archivo, antes de vectorizarlo. */
+export interface QueuedChatDocument {
   name: string;
   docId: string;
-  chunks: number;
-  chars: number;
-  truncated: boolean;
+  status: "processing";
 }
 
-export interface IngestFailureSummary {
-  name: string;
-  error: string;
+/** Estado de un documento en curso o terminado, tal como lo reporta `/status`. */
+export interface ChatDocumentJobStatus {
+  docId: string;
+  status: "processing" | "ready" | "error" | "not_found";
+  name?: string;
+  chunks?: number;
+  chars?: number;
+  truncated?: boolean;
+  error?: string;
 }
 
-export interface UploadDocumentsResult {
-  ok: IngestedDocSummary[];
-  failed: IngestFailureSummary[];
-}
-
-export async function uploadChatDocuments(files: File[]): Promise<UploadDocumentsResult> {
+/**
+ * Sube UN archivo y devuelve de inmediato con su docId en "processing": el
+ * vectorizado sigue en el servidor, sin bloquear este fetch (antes tardaba
+ * lo mismo que tarda Ollama en vectorizar el documento entero — hasta varios
+ * minutos con un PDF grande). Quien llama debe hacer polling con
+ * `fetchChatDocumentStatus` para saber cuándo queda listo.
+ */
+export async function startChatDocumentUpload(file: File): Promise<QueuedChatDocument> {
   const form = new FormData();
-  for (const f of files) form.append("files", f, f.name);
+  form.append("files", file, file.name);
   const res = await hermesFetch("/chat/documents", { method: "POST", body: form });
-  const data = (await res.json().catch(() => ({}))) as UploadDocumentsResult & { error?: string };
-  if (!res.ok) throw new Error(data.error || `no se pudieron procesar los documentos (${res.status})`);
-  return { ok: data.ok ?? [], failed: data.failed ?? [] };
+  const data = (await res.json().catch(() => ({}))) as {
+    processing?: QueuedChatDocument[];
+    error?: string;
+  };
+  if (!res.ok) throw new Error(data.error || `no se pudo subir el documento (${res.status})`);
+  const queued = data.processing?.[0];
+  if (!queued) throw new Error("el servidor no confirmó la subida");
+  return queued;
+}
+
+/**
+ * Estado de una tanda de documentos por docId — el polling que reemplaza la
+ * espera bloqueante de antes. Ids que el servidor no reconoce (evictados tras
+ * 30 min sin consultarlos, o inválidos) vuelven con `status: "not_found"` en
+ * vez de romper la respuesta entera.
+ */
+export async function fetchChatDocumentStatus(ids: string[]): Promise<ChatDocumentJobStatus[]> {
+  if (ids.length === 0) return [];
+  const qs = ids.map(encodeURIComponent).join(",");
+  const res = await hermesFetch(`/chat/documents/status?ids=${qs}`);
+  const data = (await res.json().catch(() => ({}))) as { jobs?: ChatDocumentJobStatus[]; error?: string };
+  if (!res.ok) throw new Error(data.error || `no se pudo consultar el estado (${res.status})`);
+  return data.jobs ?? [];
 }
