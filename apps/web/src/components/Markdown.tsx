@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, type ReactNode, useContext, useRef, useState } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { useDocViewer } from "./DocViewer";
 
 /**
@@ -329,4 +330,26 @@ export function Markdown({ source, project }: { source: string; project?: string
       <div className="md">{blocks}</div>
     </MdProjectCtx.Provider>
   );
+}
+
+/**
+ * Markdown fuente → HTML real (h1-h4, strong, em, code, table, ul/ol, etc),
+ * para el botón de copiar (Jaime pidió 2026-09-15: pegar en Notion y que
+ * quede formateado — encabezados, negritas y TABLAS reales, no texto plano
+ * ni el markdown crudo con `#`/`|` a la vista).
+ *
+ * Reusa el MISMO parser que pinta en pantalla (`<Markdown>`) en vez de
+ * escribir un segundo conversor de markdown en paralelo: lo que se ve en el
+ * chat es exactamente lo que se copia, sin una segunda implementación que
+ * mantener sincronizada ni sus propios bugs de parseo.
+ *
+ * `renderToStaticMarkup` no ejecuta efectos ni pinta interactividad (no hace
+ * falta: es una foto fija para el portapapeles) — los `useState`/`useContext`
+ * de adentro (CodeBlock, DocRef) corren igual con su valor inicial, sin
+ * romper nada. `DocRef` sale como un <button> de texto plano: un wikilink no
+ * es un link real fuera del chat, así que perder el click en Notion no
+ * pierde nada que sí funcionara ahí.
+ */
+export function markdownToHtml(source: string, project?: string): string {
+  return renderToStaticMarkup(<Markdown source={source} project={project} />);
 }

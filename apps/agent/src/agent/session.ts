@@ -240,6 +240,20 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   let errorSubtype: string | undefined;
   let usage: TurnUsage | undefined;
   let deltasSeen = false;
+  /**
+   * Detectado en vivo (2026-09-15, ver diagnóstico en la conversación de
+   * ese día): una sesión RESUMIDA (`opts.resumeSessionId`) puede quedar
+   * permanentemente sin acceso a ninguna mcp__hermes__* tool si el proceso
+   * @hermes/agent murió a mitad de esa sesión (SIGKILL de un restart,
+   * OOM del cgroup) y luego se resume su transcript. A diferencia de la
+   * carrera de arranque (que se autorresuelve en el siguiente intento), esto
+   * NO se autorresuelve reintentando la MISMA sesión — el CLI nunca vuelve a
+   * negociar las capacidades MCP para un resume. Se comprobó en producción:
+   * 3 llamadas seguidas a distintas tools mcp__hermes__* fallaron todas con
+   * "No such tool available" en la MISMA sesión resumida, incluso con 20s de
+   * espera real entre medias.
+   */
+  let mcpStaleResume = false;
 
   setPresence("working", opts.prompt.slice(0, 120));
 
@@ -418,6 +432,9 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
               typeof block.content === "string"
                 ? block.content
                 : JSON.stringify(block.content ?? "");
+            if (opts.resumeSessionId && /No such tool available: mcp__hermes__/.test(raw)) {
+              mcpStaleResume = true;
+            }
             emit({
               kind: "tool_result",
               taskId: opts.taskId,
@@ -487,6 +504,23 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
           });
         }
       }
+    }
+
+    // MCP de "hermes" muerto para ESTA sesión resumida (ver el comentario
+    // largo de `mcpStaleResume` arriba): mismo remedio que el catch de abajo
+    // para "No conversation found" — sesión nueva, sin resume. Se limita a
+    // cuando el modelo TODAVÍA no dijo nada real (`!deltasSeen && !finalText`):
+    // si ya alcanzó a responder algo coherente pese al tropiezo de la tool,
+    // descartarlo y repetir el turno entero sería peor que dejarlo cerrar
+    // normal — el usuario ya se lo llevó puesto en pantalla.
+    if (mcpStaleResume && opts.resumeSessionId && !deltasSeen && !finalText.trim()) {
+      setPresence("idle");
+      emit({
+        kind: "error",
+        taskId: opts.taskId,
+        detail: "[mcp] sesión resumida sin tools hermes — reintentando con sesión nueva",
+      });
+      return runAgentTurn({ ...opts, resumeSessionId: undefined });
     }
   } catch (err) {
     // Resume de una sesión SDK que ya no existe (transcript limpiado o CLI

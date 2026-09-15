@@ -10,16 +10,27 @@ import { env } from "../env.js";
  * - Write/Edit: solo dentro del vault, ~/dev, ~/Documents y el repo server-os.
  */
 const DENY_PATTERNS: RegExp[] = [
-  /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b/i, // rm -rf / -fr
+  // rm recursivo + forzado: bundled (-rf/-fr), flags separados (-r -f) o
+  // largos (--recursive --force), en cualquier orden/combinación. La versión
+  // anterior solo cazaba el bundle de un solo token (-rf/-fr) — un
+  // auto-ataque encontró que `rm -r -f /` y `rm --recursive --force /`
+  // pasaban derecho porque el regex exigía las dos letras juntas en el MISMO
+  // flag.
+  /\brm\b(?=.*(?:^|\s)(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)(?:\s|$))(?=.*(?:^|\s)(?:-[a-zA-Z]*f[a-zA-Z]*|--force)(?:\s|$))/i,
   /\bsudo\b/i,
-  /\bgit\s+push\s+.*--force/i,
+  // git push forzado: --force o su forma corta -f (el regex viejo solo
+  // cazaba --force; `git push -f` — la que de verdad usa la gente — pasaba
+  // derecho). El [^\n]* limita a la MISMA línea, no a todo lo que viene
+  // después en la cadena (evita falsos positivos en logs/documentación).
+  /\bgit\s+push\b[^\n]*(?:-f\b|--force\b)/i,
   /\bgit\s+reset\s+--hard/i,
   /\bmkfs\b|\bdiskutil\s+erase/i,
   /\bshutdown\b|\breboot\b/i,
   /:\s*\(\)\s*\{.*\};\s*:/, // fork bomb
   /\bchmod\s+-R\s+777\s+\//,
   />\s*\/dev\/sd[a-z]/,
-  /\bcurl\b.*\|\s*(ba)?sh/i, // pipe a shell
+  // pipe a shell: curl Y wget (el regex viejo solo cazaba curl).
+  /\b(curl|wget)\b.*\|\s*(ba)?sh\b/i,
   /\bdrop\s+(table|database)\b/i,
 ];
 

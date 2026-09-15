@@ -21,7 +21,7 @@ import {
   linkWatchTurn,
   unlinkWatchTurn,
 } from "@/lib/chat-turns";
-import { Markdown } from "@/components/Markdown";
+import { Markdown, markdownToHtml } from "@/components/Markdown";
 import { LabSteps } from "@/components/LabSteps";
 import { LabStatusBar } from "@/components/LabStatusBar";
 import { uuid } from "@/lib/uuid";
@@ -149,33 +149,66 @@ function pickHint(seed: string, pool: string[]): string {
 // Copiar un mensaje (mío o de Hermes) ya NO es "mantener presionado" (gesto
 // escondido, sin pista visual) — Samu pidió (2026-09-14) un ícono explícito
 // debajo de cada mensaje mío y debajo de cada respuesta de la IA (cuando
-// termina de streamear), que al tocarlo copia texto plano y se convierte en
-// un check ✓ un rato para confirmar. Mismo mecanismo que ya usa CodeBlock en
+// termina de streamear), que al tocarlo copia y se convierte en un check ✓
+// un rato para confirmar. Mismo mecanismo que ya usa CodeBlock en
 // components/Markdown.tsx para los bloques de código.
+//
+// La respuesta de la IA YA NO se desmaquilla a texto plano al copiar (Jaime
+// pidió 2026-09-15 lo contrario: pegar en Notion y que quede FORMATEADO —
+// encabezados, negritas, tablas reales). Ver `copyRich`/`markdownToHtml`:
+// el markdown fuente viaja como texto/plano de respaldo y el HTML
+// renderizado como texto/html, que es lo que Notion prioriza al pegar.
 
-/** Markdown fuente → texto plano legible para copiar. Mismo criterio de
- *  desmaquillado que `derivePreview` (más abajo, para el subtítulo de la
- *  lista) pero sobre el texto COMPLETO, sin recortar a la primera frase, y
- *  sumando enlaces/wikilinks a su etiqueta (derivePreview no lo necesitaba
- *  por ser solo un adorno corto). El código SÍ se copia — solo se le quita
- *  la valla ``` —, es lo único que de verdad sirve pegar tal cual. */
-function stripMarkdownToPlainText(md: string): string {
-  return md
-    .replace(/```[^\n]*\n?([\s\S]*?)```/g, "$1")
-    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, name: string, alias?: string) => alias ?? name)
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^\s*#{1,6}\s+/gm, "")
-    .replace(/^\s*[-*+]\s+/gm, "")
-    .replace(/^\s*\d+[.)]\s+/gm, "")
-    .replace(/^\s*>\s?/gm, "")
-    .replace(/[*_`]/g, "")
-    .trim();
+/**
+ * Copia AMBAS representaciones al portapapeles: `text/html` (bloques reales
+ * — encabezados, negritas, tablas) y `text/plain` (el markdown fuente tal
+ * cual, por si se pega en un editor de texto plano). Jaime pidió 2026-09-15:
+ * pegar la respuesta en Notion y que quede formateada, no como texto plano
+ * con `#`/`**`/`|` a la vista.
+ *
+ * Notion (como Word, Docs y cualquier editor rico) prioriza `text/html` del
+ * portapapeles sobre `text/plain` al pegar, así que esto es más confiable
+ * que confiar en que Notion adivine el markdown crudo — sobre todo para
+ * tablas, que su autodetección de markdown-en-texto-plano no siempre pilla.
+ *
+ * `ClipboardItem`/`clipboard.write` no está en TODOS los navegadores (Safari
+ * viejo, algunos WebViews): si falla o no existe, cae a `writeText` con el
+ * markdown crudo — sigue siendo más legible que el plano desmaquillado de
+ * antes, y Notion igual auto-convierte bastante de eso al pegarlo.
+ */
+async function copyRich(markdown: string, html: string): Promise<void> {
+  if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([markdown], { type: "text/plain" }),
+        }),
+      ]);
+      return;
+    } catch {
+      // Sigue al fallback de abajo (permiso denegado, API no soportada en
+      // este contexto puntual, etc.).
+    }
+  }
+  await navigator.clipboard.writeText(markdown);
 }
 
 /** Ícono de copiar con la confirmación EN el propio ícono (se vuelve un
  *  check ~1.4s, después vuelve solo) — nunca un toast aparte: así queda
- *  clarísimo CUÁL mensaje se copió cuando hay varios en pantalla. */
-function CopyButton({ getText, label = "Copiar" }: { getText: () => string; label?: string }) {
+ *  clarísimo CUÁL mensaje se copió cuando hay varios en pantalla.
+ *
+ *  `getHtml` es opcional: la burbuja del usuario no lleva markdown (es texto
+ *  tal cual lo escribió), así que copia solo texto plano de siempre. */
+function CopyButton({
+  getText,
+  getHtml,
+  label = "Copiar",
+}: {
+  getText: () => string;
+  getHtml?: () => string;
+  label?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   return (
@@ -188,7 +221,11 @@ function CopyButton({ getText, label = "Copiar" }: { getText: () => string; labe
         const text = getText();
         if (!text) return;
         try {
-          await navigator.clipboard.writeText(text);
+          if (getHtml) {
+            await copyRich(text, getHtml());
+          } else {
+            await navigator.clipboard.writeText(text);
+          }
           setCopied(true);
           if (timerRef.current) clearTimeout(timerRef.current);
           timerRef.current = setTimeout(() => setCopied(false), 1400);
@@ -2353,7 +2390,11 @@ export default function Laboratorio() {
                   puede seguir cambiando y "copiar" copiaría a medias. */}
               {!streaming && answerText.trim() ? (
                 <div className="lab-msg-actions">
-                  <CopyButton getText={() => stripMarkdownToPlainText(answerText)} label="Copiar respuesta" />
+                  <CopyButton
+                    getText={() => answerText}
+                    getHtml={() => markdownToHtml(answerText, selectedProject ?? undefined)}
+                    label="Copiar respuesta"
+                  />
                 </div>
               ) : null}
             </div>
