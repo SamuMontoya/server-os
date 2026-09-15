@@ -2035,8 +2035,9 @@ html.lab-route.lab-kb .lab-inputbar {
    Alineada a la derecha porque es lo que Samu mandó, igual que un chat común. */
 .lab-bubble {
   position: relative;
-  align-self: flex-end;
-  max-width: 78%;
+  /* align-self/max-width ahora los lleva el wrapper .lab-msg-row--user (que
+     también apila el ícono de copiar debajo, contra el mismo borde) — acá
+     sin ancho explícito, se sigue ajustando a su propio contenido. */
   padding: 10px 14px;
   /* La esquina inferior derecha casi a 0: es donde sale la colita. Si queda
      redondeada (como las otras tres), el borde curvo de la burbuja no llega
@@ -2191,28 +2192,45 @@ html.lab-route.lab-kb .lab-inputbar {
 .lab-answer .md-ref {
   color: #2563eb;
 }
-/* Feedback del long-press-para-copiar (mensajes propios y respuestas, ver
-   useLongPressCopy en laboratorio/page.tsx). Flota abajo al centro, encima
-   del inputbar, y no roba toques de lo que está debajo. */
-.lab-copy-toast {
-  position: fixed;
-  left: 50%;
-  bottom: 96px;
-  transform: translateX(-50%);
-  z-index: 40;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: rgba(20, 20, 20, 0.88);
-  color: #fff;
-  font-size: 12.5px;
-  font-family: var(--font-notion);
-  pointer-events: none;
-  animation: lab-copy-toast-in 160ms ease-out;
+/* Fila de un mensaje mío: burbuja + acción de copiar apiladas, ambas contra
+   el mismo borde (derecha) — reemplaza el align-self que antes llevaba
+   .lab-bubble sola, ahora lo lleva la fila. */
+.lab-msg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-@keyframes lab-copy-toast-in {
-  from { opacity: 0; transform: translate(-50%, 6px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
+.lab-msg-row--user {
+  align-self: flex-end;
+  align-items: flex-end;
+  max-width: 78%;
 }
+
+/* Ícono de copiar debajo de un mensaje (mío o de la IA) — reemplaza el
+ * "mantener presionado" (gesto sin ninguna pista visual, 2026-09-14): un
+ * ícono explícito que se convierte en un check al copiar. Mismo lenguaje
+ * visual que .lab-doc-card-icon (SVG a mano, currentColor). */
+.lab-msg-actions {
+  display: flex;
+}
+.lab-copy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #9b9a96;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.lab-copy-btn:hover { background: rgba(55, 53, 47, 0.06); color: #37352f; }
+.lab-copy-btn:active { transform: scale(0.92); }
+.lab-copy-btn-done { color: #2f9e5b; }
+.lab-copy-btn-done:hover { background: rgba(47, 158, 91, 0.1); color: #2f9e5b; }
 /* ── Pasos del turno (LabSteps) ──────────────────────────────────────────
    Un bloque de acciones seguidas. Mientras corre es UNA línea que se releva
    sola (el paso en curso); al pasar a texto o terminar el turno queda un

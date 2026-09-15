@@ -7,13 +7,7 @@
 // empezar a vivir acá — el resto (persistencia entre recargas, reenganche
 // tras bloquear pantalla, multi-tab) llega en ajustes posteriores.
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChatToolStep } from "@hermes/shared";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { useWorkspace } from "@/state/WorkspaceContext";
@@ -145,63 +139,81 @@ function pickHint(seed: string, pool: string[]): string {
   return pool[h % pool.length];
 }
 
-// Mantener presionado un mensaje (mío o de Hermes) lo copia al portapapeles.
-// 500ms de umbral: suficiente para no dispararse con un tap normal (abrir,
-// hacer scroll) pero corto para no sentirse un gesto "escondido". Se cancela
-// si el dedo/mouse se mueve más de UMBRAL_PX (deja de ser un press quieto,
-// pasa a ser scroll o selección de texto) o si suelta antes de tiempo.
-const LONG_PRESS_MS = 500;
-const LONG_PRESS_MOVE_PX = 10;
+// Copiar un mensaje (mío o de Hermes) ya NO es "mantener presionado" (gesto
+// escondido, sin pista visual) — Samu pidió (2026-09-14) un ícono explícito
+// debajo de cada mensaje mío y debajo de cada respuesta de la IA (cuando
+// termina de streamear), que al tocarlo copia texto plano y se convierte en
+// un check ✓ un rato para confirmar. Mismo mecanismo que ya usa CodeBlock en
+// components/Markdown.tsx para los bloques de código.
 
-function useLongPressCopy(getText: () => string, onCopied: () => void) {
+/** Markdown fuente → texto plano legible para copiar. Mismo criterio de
+ *  desmaquillado que `derivePreview` (más abajo, para el subtítulo de la
+ *  lista) pero sobre el texto COMPLETO, sin recortar a la primera frase, y
+ *  sumando enlaces/wikilinks a su etiqueta (derivePreview no lo necesitaba
+ *  por ser solo un adorno corto). El código SÍ se copia — solo se le quita
+ *  la valla ``` —, es lo único que de verdad sirve pegar tal cual. */
+function stripMarkdownToPlainText(md: string): string {
+  return md
+    .replace(/```[^\n]*\n?([\s\S]*?)```/g, "$1")
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, name: string, alias?: string) => alias ?? name)
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s*#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/[*_`]/g, "")
+    .trim();
+}
+
+/** Ícono de copiar con la confirmación EN el propio ícono (se vuelve un
+ *  check ~1.4s, después vuelve solo) — nunca un toast aparte: así queda
+ *  clarísimo CUÁL mensaje se copió cuando hay varios en pantalla. */
+function CopyButton({ getText, label = "Copiar" }: { getText: () => string; label?: string }) {
+  const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const startRef = useRef<{ x: number; y: number } | null>(null);
-  const firedRef = useRef(false);
-
-  const clear = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = null;
-    startRef.current = null;
-  };
-
-  const copy = async () => {
-    const text = getText();
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      onCopied();
-    } catch {
-      // Sin permiso de portapapeles o navegador viejo: no hay mucho más que
-      // hacer acá, se deja pasar en silencio.
-    }
-  };
-
-  return {
-    onPointerDown: (e: ReactPointerEvent) => {
-      // Solo dedo/mouse principal; un pinch o el botón derecho no cuentan.
-      if (e.button !== undefined && e.button !== 0) return;
-      firedRef.current = false;
-      startRef.current = { x: e.clientX, y: e.clientY };
-      timerRef.current = setTimeout(() => {
-        firedRef.current = true;
-        copy();
-      }, LONG_PRESS_MS);
-    },
-    onPointerMove: (e: ReactPointerEvent) => {
-      const start = startRef.current;
-      if (!start) return;
-      const dx = e.clientX - start.x;
-      const dy = e.clientY - start.y;
-      if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_PX) clear();
-    },
-    onPointerUp: clear,
-    onPointerLeave: clear,
-    onPointerCancel: clear,
-    // El long-press ya copió; evita que además dispare un click/selección rara.
-    onContextMenu: (e: ReactMouseEvent) => {
-      if (firedRef.current) e.preventDefault();
-    },
-  };
+  return (
+    <button
+      type="button"
+      className={`lab-copy-btn${copied ? " lab-copy-btn-done" : ""}`}
+      title={copied ? "Copiado" : label}
+      aria-label={copied ? "Copiado" : label}
+      onClick={async () => {
+        const text = getText();
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = setTimeout(() => setCopied(false), 1400);
+        } catch {
+          // Sin permiso de portapapeles o navegador viejo: no hay mucho más
+          // que hacer acá.
+        }
+      }}
+    >
+      {copied ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path
+            d="M4 12.5 9.5 18 20 6.5"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="8" y="8" width="12" height="13" rx="2" stroke="currentColor" strokeWidth="1.6" />
+          <path
+            d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+          />
+        </svg>
+      )}
+    </button>
+  );
 }
 
 // Silueta de Apple Watch (caja + dos orejetas + corona), no un reloj
@@ -219,20 +231,21 @@ function WatchGlyph({ size = 15 }: { size?: number }) {
   );
 }
 
-// Burbuja de un mensaje mío: mantenerla presionada copia el texto tal cual
-// se escribió (sin pasar por Markdown, no lo lleva).
-function UserBubble({ m, onCopied }: { m: LabMessage; onCopied: () => void }) {
-  const press = useLongPressCopy(() => m.content, onCopied);
+// Burbuja de un mensaje mío, con su ícono de copiar debajo (texto tal cual
+// se escribió, sin pasar por Markdown, no lo lleva). El wrapper es el que
+// alinea a la derecha (align-self); la burbuja y la acción quedan apiladas
+// adentro, ambas pegadas al mismo borde.
+function UserBubble({ m }: { m: LabMessage }) {
   return (
-    <div
-      className="lab-bubble"
-      // `data-anchor`: candidato a quedar pegado arriba. Lo llevan
-      // todos los mensajes y bloques; el que manda en cada momento
-      // es el que apunta anchorKeyRef (ver anchorTo).
-      data-anchor={`u${m.id}`}
-      {...press}
-    >
-      {m.images && m.images.length > 0 && (
+    <div className="lab-msg-row lab-msg-row--user">
+      <div
+        className="lab-bubble"
+        // `data-anchor`: candidato a quedar pegado arriba. Lo llevan
+        // todos los mensajes y bloques; el que manda en cada momento
+        // es el que apunta anchorKeyRef (ver anchorTo).
+        data-anchor={`u${m.id}`}
+      >
+        {m.images && m.images.length > 0 && (
         <div className="lab-bubble-images">
           {m.images.map((img, i) => (
             // eslint-disable-next-line @next/next/no-img-element -- object URL local, no un asset de Next.
@@ -275,34 +288,36 @@ function UserBubble({ m, onCopied }: { m: LabMessage; onCopied: () => void }) {
       {/* El texto va en un <span> (no como nodo de texto suelto) para que
           `.lab-bubble-images:not(:only-child)` en globals.css detecte que
           hay hermano: `:only-child` solo cuenta ELEMENTOS, no text nodes. */}
-      {m.content ? <span className="lab-bubble-text">{m.content}</span> : null}
+        {m.content ? <span className="lab-bubble-text">{m.content}</span> : null}
+      </div>
+      {m.content ? (
+        <div className="lab-msg-actions">
+          <CopyButton getText={() => m.content} label="Copiar mensaje" />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-// Un bloque de la respuesta (texto o pasos). Mantenerlo presionado copia
-// SIEMPRE el texto completo de la respuesta (answerText), no solo ese
-// bloque — es lo que uno espera pegar en otro lado.
+// Un bloque de la respuesta (texto o pasos): solo pinta, ya no copia nada
+// (el copiar quedó UNA vez por respuesta completa, ver el CopyButton debajo
+// de `.lab-answer` en el map de mensajes — copiar bloque por bloque no es
+// lo que uno espera pegar en otro lado).
 function AnswerBlock({
   anchor,
   b,
   streaming,
   isLast,
-  answerText,
   project,
-  onCopied,
 }: {
   anchor: string;
   b: LabBlock;
   streaming: boolean;
   isLast: boolean;
-  answerText: string;
   project: string | undefined;
-  onCopied: () => void;
 }) {
-  const press = useLongPressCopy(() => answerText, onCopied);
   return (
-    <div data-anchor={anchor} {...press}>
+    <div data-anchor={anchor}>
       {b.kind === "steps" ? (
         <LabSteps steps={b.steps} live={streaming && isLast} />
       ) : (
@@ -315,17 +330,6 @@ function AnswerBlock({
 export default function Laboratorio() {
   const { selectedProject } = useWorkspace();
   const projKey = selectedProject || "general";
-
-  // Toast mínimo para el feedback de "copiado" del long-press (no reusa
-  // <Toasts/> a propósito: ese componente está atado al feed SSE de eventos
-  // del orquestador, esto es un aviso local y efímero).
-  const [copyToast, setCopyToast] = useState(false);
-  const copyToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flashCopyToast = () => {
-    setCopyToast(true);
-    if (copyToastTimerRef.current) clearTimeout(copyToastTimerRef.current);
-    copyToastTimerRef.current = setTimeout(() => setCopyToast(false), 1400);
-  };
 
   // "Vincular al reloj": mientras está activo, CADA turno que se manda desde
   // este chat se registra en el servidor (POST /watch/link) como "el que
@@ -2131,14 +2135,14 @@ export default function Laboratorio() {
         )}
         {messages.map((m, idx) => {
           if (m.role === "user") {
-            return <UserBubble key={m.id} m={m} onCopied={flashCopyToast} />;
+            return <UserBubble key={m.id} m={m} />;
           }
           const blocks = m.blocks ?? [];
           // Solo el ÚLTIMO mensaje puede estar en curso: es donde escribe el
           // turno activo (busy es global porque solo corre un turno a la vez).
           const streaming = busy && idx === messages.length - 1;
-          // Texto plano de la respuesta (para el copy del long-press): junta
-          // solo los bloques de texto, en orden — los "steps" son un log de
+          // Texto plano de la respuesta (para el ícono de copiar): junta solo
+          // los bloques de texto, en orden — los "steps" son un log de
           // acciones, no algo que Samu quiera pegar en otro lado.
           const answerText = blocks
             .filter((b): b is Extract<LabBlock, { kind: "text" }> => b.kind === "text")
@@ -2156,17 +2160,13 @@ export default function Laboratorio() {
                 // se inserta puede ser el que sube al borde superior, y ni
                 // LabSteps ni Markdown reciben ref. Sin padding ni borde, así
                 // los márgenes de los hijos siguen colapsando igual que antes.
-                // Mantener presionado CUALQUIER bloque de texto copia toda la
-                // respuesta (no solo ese bloque): es lo que Samu espera pegar.
                 <AnswerBlock
                   key={bi}
                   anchor={`${m.id}:${bi}`}
                   b={b}
                   streaming={streaming}
                   isLast={bi === blocks.length - 1}
-                  answerText={answerText}
                   project={selectedProject ?? undefined}
-                  onCopied={flashCopyToast}
                 />
               ))}
               {streaming && blocks.length === 0 ? (
@@ -2181,6 +2181,14 @@ export default function Laboratorio() {
                   <OrbeIA tam="56px" ojos ariaLabel="" />
                 </span>
               ) : null}
+              {/* El ícono de copiar sale UNA vez por respuesta completa, y
+                  solo cuando terminó de streamear — antes de eso answerText
+                  puede seguir cambiando y "copiar" copiaría a medias. */}
+              {!streaming && answerText.trim() ? (
+                <div className="lab-msg-actions">
+                  <CopyButton getText={() => stripMarkdownToPlainText(answerText)} label="Copiar respuesta" />
+                </div>
+              ) : null}
             </div>
           );
         })}
@@ -2189,14 +2197,6 @@ export default function Laboratorio() {
             respuesta aún no ocupa la pantalla, y se encoge según ella crece. */}
         <div ref={spacerRef} className="lab-spacer" aria-hidden="true" />
       </div>
-
-      {/* Feedback del long-press: "Copiado" flota abajo al centro y se apaga
-          solo (ver flashCopyToast). No bloquea toques por debajo. */}
-      {copyToast && (
-        <div className="lab-copy-toast" role="status" aria-live="polite">
-          Copiado
-        </div>
-      )}
 
       <div className="lab-inputbar">
         {showJumpDown && (
