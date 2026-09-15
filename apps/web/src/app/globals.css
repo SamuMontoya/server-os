@@ -1887,7 +1887,13 @@ html.lab-route.lab-kb .lab-inputbar {
 .lab-textarea {
   flex: 1;
   resize: none;
-  max-height: 120px;
+  overflow-y: auto;
+  /* El techo real lo pone resizeInput() en JS (dinámico: crece hasta rozar
+     la barra superior, ver comentario en laboratorio/page.tsx). Este valor
+     es solo la red de seguridad para el primer pintado en SSR, antes de que
+     el JS mida el layout real — generoso a propósito para no recortar de
+     más si el JS tarda un frame. */
+  max-height: 70vh;
   background: transparent;
   color: #37352f;
   font-family: var(--font-notion);

@@ -434,6 +434,13 @@ export default function Laboratorio() {
   const docInputRef = useRef<HTMLInputElement | null>(null);
   const [dropping, setDropping] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Referencias para el techo dinámico del textarea (ver resizeInput): el
+  // papel entero (alto real disponible), la barra superior (dónde termina
+  // el margen que el textarea NO puede invadir) y la barra de input (para
+  // medir su "overhead" — todo lo que mide aparte del propio textarea).
+  const paperRef = useRef<HTMLElement>(null);
+  const topbarRef = useRef<HTMLDivElement>(null);
+  const inputBarRef = useRef<HTMLDivElement>(null);
   // Contenedor scrolleable de la conversación + las piezas del "anclaje
   // arriba" (ver scrollAnchorToTop): la burbuja del último mensaje enviado y
   // el colchón elástico que hay debajo de todo para poder subirla.
@@ -899,15 +906,45 @@ export default function Laboratorio() {
   // llamáramos esto al montar. Reseteando a "0px" el navegador SÍ reporta el
   // scrollHeight real del contenido (una línea), sin el piso de `rows`.
   //
-  // `toEnd`: una vez el textarea toca su techo (120px) el contenido desborda y
-  // el navegador SOLO auto-scrollea al caret cuando el usuario teclea. Al
-  // dictar no hay caret moviéndose, así que la última línea quedaba oculta y
-  // había que hacer scroll a mano. Con `toEnd` se pega el scroll al fondo.
+  // `toEnd`: una vez el textarea toca su techo el contenido desborda y el
+  // navegador SOLO auto-scrollea al caret cuando el usuario teclea. Al dictar
+  // no hay caret moviéndose, así que la última línea quedaba oculta y había
+  // que hacer scroll a mano. Con `toEnd` se pega el scroll al fondo.
+  //
+  // Techo dinámico (antes era un fijo de 120px): el textarea crece con cada
+  // línea nueva hasta que su borde de arriba está a punto de tocar la barra
+  // superior — ahí se frena y el contenido de más entra en scroll interno.
+  // `.lab-messages` (flex:1, overflow-y:auto) es quien le cede el espacio: al
+  // crecer el composer, la lista de mensajes se encoge por su cuenta, así que
+  // acá solo hace falta calcular hasta dónde puede crecer SIN pisar la barra.
+  //
+  // overhead = todo lo que mide `.lab-inputbar` aparte del propio textarea
+  // (padding, miniaturas de imágenes si hay, pie de estado, fila mic/enviar
+  // sobrante). No cambia con el alto del textarea, así que medirlo "tal cual
+  // está ahora" — antes de tocar nada — alcanza para cualquier estado.
   const resizeInput = (opts?: { toEnd?: boolean }) => {
     const el = inputRef.current;
     if (!el) return;
+    const paper = paperRef.current;
+    const topbar = topbarRef.current;
+    const bar = inputBarRef.current;
+
+    const GAP = 12; // aire antes de chocar con la barra de arriba
+    const MIN = 28; // una línea (ver comentario de .lab-textarea)
+    let maxHeight = 120; // red de seguridad si algo no midió aún
+
+    if (paper && topbar && bar) {
+      const paperRect = paper.getBoundingClientRect();
+      const topbarRect = topbar.getBoundingClientRect();
+      const barRect = bar.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const overhead = barRect.height - elRect.height;
+      const disponible = paperRect.bottom - topbarRect.bottom - overhead - GAP;
+      maxHeight = Math.max(MIN, disponible);
+    }
+
     el.style.height = "0px";
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
     if (opts?.toEnd) el.scrollTop = el.scrollHeight;
   };
 
@@ -1954,6 +1991,10 @@ export default function Laboratorio() {
         // esto es, literalmente, el scroll manual que Samu tenía que hacer,
         // hecho por nosotros y en el momento correcto.
         if (window.scrollY !== 0) window.scrollTo(0, 0);
+        // El techo dinámico del textarea (ver resizeInput) depende del alto
+        // real del papel — cambia con el teclado y con la rotación, así que
+        // hay que recalcularlo cada vez que este efecto recalcula --lab-vh.
+        resizeInput();
       });
     };
 
@@ -1971,6 +2012,7 @@ export default function Laboratorio() {
       root.style.removeProperty("--lab-vp-top");
       root.classList.remove("lab-kb");
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -2010,7 +2052,10 @@ export default function Laboratorio() {
   );
 
   return (
-    <main className={`lab-paper${showChats ? " lab-paper--chats-open" : ""}`}>
+    <main
+      ref={paperRef}
+      className={`lab-paper${showChats ? " lab-paper--chats-open" : ""}`}
+    >
       {/* Barra superior: antes tenía la flecha de "volver" (quitada el
           2026-08-29 para dejar la pantalla en blanco puro). Vuelve, con el
           icono cambiado por un menú hamburguesa que abre la lista de chats
@@ -2021,7 +2066,7 @@ export default function Laboratorio() {
           Samu lo quiso en el Navbar de siempre, esquina superior derecha —
           el sitio de "crear" en cualquier app, y accesible sin tener que
           abrir la lista primero. */}
-      <div className="lab-topbar">
+      <div ref={topbarRef} className="lab-topbar">
         <button
           type="button"
           className="lab-menu-btn"
@@ -2231,7 +2276,7 @@ export default function Laboratorio() {
         <div ref={spacerRef} className="lab-spacer" aria-hidden="true" />
       </div>
 
-      <div className="lab-inputbar">
+      <div ref={inputBarRef} className="lab-inputbar">
         {showJumpDown && (
           <button
             type="button"

@@ -151,6 +151,12 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Techo dinámico del textarea (ver resizeInput): el contenedor raíz (alto
+  // fijo, siempre el mismo debajo del TopBar de afuera) y el form del
+  // composer (para medir su "overhead" — todo lo que mide aparte del propio
+  // textarea).
+  const rootRef = useRef<HTMLDivElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const claudeInFlight = useRef(false);
   // Dictado: texto base y tab destino capturados al arrancar el mic.
   const dictationBaseRef = useRef("");
@@ -251,19 +257,56 @@ export function ChatPanel({
     });
   };
 
-  // Textarea auto-crecible (hasta ~5 líneas).
+  // Textarea auto-crecible (antes tope fijo de ~5 líneas / 120px).
   //
-  // `toEnd`: al tocar el techo de 120px el contenido desborda, y el navegador
-  // solo persigue al caret cuando se teclea — no cuando el value cambia por JS
-  // (dictado). Sin esto la última línea dictada quedaba fuera de vista y había
-  // que hacer scroll a mano dentro del input.
+  // `toEnd`: al tocar el techo el contenido desborda, y el navegador solo
+  // persigue al caret cuando se teclea — no cuando el value cambia por JS
+  // (dictado). Sin esto la última línea dictada quedaba fuera de vista y
+  // había que hacer scroll a mano dentro del input.
+  //
+  // Techo dinámico: crece hasta que el composer está a punto de comerse el
+  // área de mensajes por completo (que es, en la práctica, "hasta tocar la
+  // barra de arriba" — `.rootRef` tiene alto fijo, siempre el mismo debajo
+  // del TopBar de afuera). El truco: el alto TOTAL de rootRef es constante
+  // pase lo que pase adentro, así que "cuánto puede crecer el textarea" es
+  // exactamente "cuánto puede encogerse `scrollRef` (mensajes, flex:1)" más
+  // lo que el textarea ya mide ahora. En el hero (mensajes ocultos, sin
+  // participar del flex) esa cuenta da 0, así que se suma también el aire
+  // libre que quede entre el composer y el borde de abajo de rootRef —
+  // exactamente una de las dos siempre vale 0 y la otra es la real, por eso
+  // el `Math.max` entre ambas resuelve los dos casos sin distinguirlos.
   const resizeInput = (opts?: { toEnd?: boolean }) => {
     const el = inputRef.current;
     if (!el) return;
+    const root = rootRef.current;
+    const messages = scrollRef.current;
+    const form = formRef.current;
+
+    const GAP = 12;
+    let maxHeight = 120; // red de seguridad si algo no midió aún
+
+    if (root && messages && form) {
+      const rootRect = root.getBoundingClientRect();
+      const messagesRect = messages.getBoundingClientRect();
+      const formRect = form.getBoundingClientRect();
+      const elHeight = el.getBoundingClientRect().height;
+      const reclaimable = Math.max(messagesRect.height, rootRect.bottom - formRect.bottom);
+      maxHeight = Math.max(elHeight, elHeight + reclaimable - GAP);
+    }
+
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
     if (opts?.toEnd) el.scrollTop = el.scrollHeight;
   };
+
+  // El techo dinámico depende del layout (rootRef/scrollRef/formRef): un
+  // resize de ventana (desktop) puede correrlo sin que el draft cambie.
+  useEffect(() => {
+    const onResize = () => resizeInput();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Cambio de proyecto en foco: guarda los tabs actuales y restaura los suyos.
   useEffect(() => {
@@ -694,7 +737,7 @@ export function ChatPanel({
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-full flex-col">
+    <div ref={rootRef} className="flex h-full flex-col">
       {/* Barra de tabs: historial · tabs (una conversación c/u) · nuevo */}
       {/* Tira de tabs: en el hero estorba (una sola conversación vacía no
           necesita gestor de pestañas). Reaparece al primer mensaje. */}
@@ -954,6 +997,7 @@ export function ChatPanel({
           más importante de la vista, así que se lee como objeto. El anillo de
           foco vive aquí (focus-within), no en el textarea. */}
       <form
+        ref={formRef}
         className="hud-field mt-3 flex items-end gap-3 rounded-lg border border-line-2 bg-panel-2 px-4 py-3 shadow-[0_22px_60px_-20px_rgb(0_0_0_/_0.85)] transition-colors focus-within:border-violet/60"
         onSubmit={(e) => {
           e.preventDefault();
@@ -987,7 +1031,7 @@ export function ChatPanel({
                   ? `pregunta sobre ${projectName ?? selectedProject}…`
                   : "ordena algo…"
           }
-          className="chat-textarea max-h-[120px] flex-1 resize-none bg-transparent text-base leading-snug outline-none placeholder:opacity-40 break-words"
+          className="chat-textarea max-h-[70vh] flex-1 resize-none overflow-y-auto bg-transparent text-base leading-snug outline-none placeholder:opacity-40 break-words"
           disabled={active.busy}
         />
 
