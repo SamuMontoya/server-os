@@ -25,15 +25,35 @@ import { embedBatch, EMB } from "../embeddings.js";
 
 /** Tope por archivo: un PDF grande cabe de sobra; algo mal etiquetado no. */
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
-/** Tope por subida: más de esto y una sola tanda se vuelve cara sin ser más útil. */
-export const MAX_DOCUMENTS_PER_UPLOAD = 5;
 /**
- * Tope de FRAGMENTOS por subida (no de archivos): 5 PDFs de 80 páginas cada
- * uno serían cientos de llamadas de embedding en un hardware sin GPU. Se
- * reparte proporcional entre los archivos de la tanda y lo que no entra se
- * nota como "truncado", nunca se pierde en silencio.
+ * Tope de archivos por REQUEST HTTP (sanidad del body, no la experiencia de
+ * subida): el composer (ver laboratorio/page.tsx, `addDocuments`) ya no
+ * manda una tanda entera en un solo POST — sube cada archivo por su cuenta
+ * (progresivo, con concurrencia acotada), así que en la práctica esto casi
+ * siempre es 1. Se deja alto por si algo más llama al endpoint con varios a
+ * la vez; antes era 5 y ESE era el techo que Samu pedía quitar (2026-09-15:
+ * "que deje cargar los documentos que se quiera").
  */
-export const MAX_TOTAL_CHUNKS_PER_UPLOAD = 60;
+export const MAX_DOCUMENTS_PER_UPLOAD = 40;
+/**
+ * Tope de FRAGMENTOS **por documento** (antes era un presupuesto COMPARTIDO
+ * entre todos los archivos de una misma subida — penalizaba subir varios
+ * juntos sin motivo real. Ahora que cada archivo casi siempre viaja en su
+ * propio request, el límite natural es por archivo). Un PDF de 80 páginas
+ * cabe de sobra; uno de cientos de páginas se recorta y se avisa como
+ * "truncado", nunca se pierde en silencio.
+ */
+export const MAX_CHUNKS_PER_DOCUMENT = 60;
+/**
+ * Cuántos archivos se procesan EN PARALELO cuando llegan varios en la MISMA
+ * subida (llamada directa al endpoint con `files` de más de 1 elemento). En
+ * este hardware (1 vCPU) el cómputo de Ollama es serial de todos modos — la
+ * ganancia real es que la EXTRACCIÓN (parseo de PDF/DOCX, OCR) del siguiente
+ * archivo se solapa con la espera de red del embedding del anterior, en vez
+ * de quedar 100% en fila. 2 y no más: con 1 vCPU, más concurrencia solo
+ * compite por el mismo core sin ganar nada.
+ */
+export const INGEST_CONCURRENCY = 2;
 
 /** Mismo criterio que drive/extract.ts — aquí solo para el mensaje de error. */
 const SUPPORTED_LABEL =
@@ -95,6 +115,70 @@ const defaultInsertRows = async (rows: ChatDocRow[]): Promise<string | null> => 
   return error ? error.message : null;
 };
 
+/** Procesa UN archivo de punta a punta: extraer → trocear → vectorizar →
+ *  guardar. Separado de `ingestUploadedDocuments` para poder correr varios
+ *  en paralelo (ver `INGEST_CONCURRENCY`) sin duplicar la lógica. */
+async function ingestOne(
+  file: UploadedFile,
+  deps: Required<Pick<IngestDeps, "extractText" | "embedBatch" | "insertRows">>,
+): Promise<{ ok: IngestedDoc } | { failed: IngestFailure }> {
+  let text: string;
+  try {
+    text = await deps.extractText(file.buffer, file.mimeType, file.name);
+  } catch (err) {
+    return { failed: { name: file.name, error: (err as Error).message } };
+  }
+  const content = sanitizeExtractedText(text).trim();
+  if (!content) {
+    return {
+      failed: { name: file.name, error: `sin texto extraíble (¿formato soportado? ${SUPPORTED_LABEL})` },
+    };
+  }
+
+  let pieces = chunkText(content);
+  const truncated = pieces.length > MAX_CHUNKS_PER_DOCUMENT;
+  if (truncated) pieces = pieces.slice(0, MAX_CHUNKS_PER_DOCUMENT);
+  if (pieces.length === 0) {
+    return { failed: { name: file.name, error: "no se generó ningún fragmento del texto extraído" } };
+  }
+
+  const docId = randomUUID();
+  const vectors = await deps.embedBatch(pieces.map((p) => `${file.name}\n${p}`));
+  // embedBatch nunca lanza: si el motor de embeddings falla (Ollama caído,
+  // OpenAI sin key, rate limit, etc.) devuelve `null` por posición en vez de
+  // tumbar el batch entero (ver embeddings.ts). Si NO se chequea acá, esa
+  // fila se inserta con embedding null — pasa como "ok" en la respuesta
+  // pero `match_knowledge` la filtra con `where embedding is not null`, así
+  // que queda indexada en apariencia y en realidad es invisible para
+  // search_knowledge. Mejor fallar el archivo entero y que el usuario
+  // reintente, que mentir "ya es buscable".
+  if (vectors.length !== pieces.length || vectors.some((v) => v === null)) {
+    return {
+      failed: {
+        name: file.name,
+        error: "no se pudo vectorizar (motor de embeddings no disponible); reintenta la subida",
+      },
+    };
+  }
+  const rows: ChatDocRow[] = pieces.map((p, i) => ({
+    doc_id: docId,
+    chunk_index: i,
+    chunk_count: pieces.length,
+    name: file.name,
+    mime_type: file.mimeType || null,
+    content: p,
+    content_hash: createHash("sha1").update(p).digest("hex"),
+    [EMB.col]: vectors[i],
+  }));
+
+  const insertError = await deps.insertRows(rows);
+  if (insertError) {
+    return { failed: { name: file.name, error: `no se pudo guardar: ${insertError}` } };
+  }
+
+  return { ok: { name: file.name, docId, chunks: pieces.length, chars: content.length, truncated } };
+}
+
 export async function ingestUploadedDocuments(
   files: UploadedFile[],
   deps: Partial<IngestDeps> = {},
@@ -112,67 +196,24 @@ export async function ingestUploadedDocuments(
     return { ok, failed };
   }
 
-  let chunkBudget = MAX_TOTAL_CHUNKS_PER_UPLOAD;
-
-  for (const file of files) {
-    let text: string;
-    try {
-      text = await extract(file.buffer, file.mimeType, file.name);
-    } catch (err) {
-      failed.push({ name: file.name, error: (err as Error).message });
-      continue;
+  // Concurrencia acotada, no `Promise.all` desatado: en 1 vCPU (esta
+  // máquina) no hay CPU de sobra que repartir, pero SÍ hay tiempo muerto de
+  // red mientras se espera la respuesta de Ollama/Supabase — es ahí donde
+  // el archivo siguiente gana adelantando su extracción. Con más de
+  // `INGEST_CONCURRENCY` en vuelo no se gana nada, solo se compite por el
+  // mismo core.
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(INGEST_CONCURRENCY, files.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      const file = files[i];
+      if (!file) return;
+      const result = await ingestOne(file, { extractText: extract, embedBatch: embed, insertRows });
+      if ("ok" in result) ok.push(result.ok);
+      else failed.push(result.failed);
     }
-    const content = sanitizeExtractedText(text).trim();
-    if (!content) {
-      failed.push({ name: file.name, error: `sin texto extraíble (¿formato soportado? ${SUPPORTED_LABEL})` });
-      continue;
-    }
-
-    let pieces = chunkText(content);
-    const truncated = pieces.length > chunkBudget;
-    if (truncated) pieces = pieces.slice(0, Math.max(0, chunkBudget));
-    if (pieces.length === 0) {
-      failed.push({ name: file.name, error: "se quedó sin cupo de fragmentos en esta subida (demasiados archivos grandes a la vez)" });
-      continue;
-    }
-    chunkBudget -= pieces.length;
-
-    const docId = randomUUID();
-    const vectors = await embed(pieces.map((p) => `${file.name}\n${p}`));
-    // embedBatch nunca lanza: si el motor de embeddings falla (Ollama caído,
-    // OpenAI sin key, rate limit, etc.) devuelve `null` por posición en vez de
-    // tumbar el batch entero (ver embeddings.ts). Si NO se chequea acá, esa
-    // fila se inserta con embedding null — pasa como "ok" en la respuesta
-    // pero `match_knowledge` la filtra con `where embedding is not null`, así
-    // que queda indexada en apariencia y en realidad es invisible para
-    // search_knowledge. Mejor fallar el archivo entero y que el usuario
-    // reintente, que mentir "ya es buscable".
-    if (vectors.length !== pieces.length || vectors.some((v) => v === null)) {
-      failed.push({
-        name: file.name,
-        error: "no se pudo vectorizar (motor de embeddings no disponible); reintenta la subida",
-      });
-      continue;
-    }
-    const rows: ChatDocRow[] = pieces.map((p, i) => ({
-      doc_id: docId,
-      chunk_index: i,
-      chunk_count: pieces.length,
-      name: file.name,
-      mime_type: file.mimeType || null,
-      content: p,
-      content_hash: createHash("sha1").update(p).digest("hex"),
-      [EMB.col]: vectors[i],
-    }));
-
-    const insertError = await insertRows(rows);
-    if (insertError) {
-      failed.push({ name: file.name, error: `no se pudo guardar: ${insertError}` });
-      continue;
-    }
-
-    ok.push({ name: file.name, docId, chunks: pieces.length, chars: content.length, truncated });
-  }
+  });
+  await Promise.all(workers);
 
   return { ok, failed };
 }

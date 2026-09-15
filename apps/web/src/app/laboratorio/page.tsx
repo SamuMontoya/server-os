@@ -1333,53 +1333,86 @@ export default function Laboratorio() {
   // A diferencia de addImages, acá la subida ES el procesamiento completo:
   // cuando el fetch resuelve, el documento YA está trozado, vectorizado y
   // guardado en chat_docs — no hay un segundo paso. El chip solo informa.
-  const MAX_DOCUMENTS = 5;
+  //
+  // Techo de cordura por mensaje, NO el límite de antes (Samu pidió quitarlo,
+  // 2026-09-15: "que deje cargar los documentos que se quiera"). Si de verdad
+  // se excede, se avisa con un chip de error explícito — antes el exceso se
+  // recortaba en silencio (`docs.slice(0, room)` sin más).
+  const MAX_DOCUMENTS = 30;
+  // Cuántas subidas van en vuelo a la vez. Cada archivo es su PROPIO request
+  // (ver más abajo) — esto es lo que hace la carga progresiva: el chip de
+  // cada archivo pasa a "listo" en cuanto SU request termina, no cuando
+  // termina el más lento de la tanda (antes era un solo POST con todos los
+  // archivos juntos, así que todos los chips saltaban a la vez al final).
+  // 2 y no más: el servidor corre Ollama en 1 vCPU, más concurrencia no
+  // vectoriza más rápido, solo compite por el mismo core.
+  const DOC_UPLOAD_CONCURRENCY = 2;
 
   const addDocuments = (files: File[]) => {
     const docs = files.filter(isSupportedDocument);
     if (docs.length === 0) return;
     const room = Math.max(0, MAX_DOCUMENTS - documents.length);
     const batch = docs.slice(0, room);
+    const rechazados = docs.length - batch.length;
+
+    if (rechazados > 0) {
+      setDocuments((prev) => [
+        ...prev,
+        {
+          key: uuid(),
+          name: `${rechazados} archivo${rechazados === 1 ? "" : "s"} no se ${
+            rechazados === 1 ? "subió" : "subieron"
+          }`,
+          status: "error" as const,
+          error: `máximo ${MAX_DOCUMENTS} documentos por mensaje — quita alguno para subir más`,
+        },
+      ]);
+    }
     if (batch.length === 0) return;
 
     // Pares (key local, archivo) fijados ANTES del fetch: así el callback no
-    // tiene que adivinar qué chip corresponde a qué resultado buscando por
-    // nombre (dos archivos podrían llamarse igual).
+    // tiene que adivinar qué chip corresponde a qué resultado.
     const uploads = batch.map((file) => ({ key: uuid(), file }));
     setDocuments((prev) => [
       ...prev,
       ...uploads.map((u) => ({ key: u.key, name: u.file.name, status: "uploading" as const })),
     ]);
 
-    // Un solo request para toda la tanda: el servidor reparte el cupo de
-    // fragmentos entre los archivos (MAX_TOTAL_CHUNKS_PER_UPLOAD), así que
-    // subirlos juntos es lo que le permite repartir bien ese presupuesto.
-    void uploadChatDocuments(uploads.map((u) => u.file))
-      .then((result) => {
-        // El servidor procesa en el ORDEN en que llegaron los archivos, y
-        // devuelve ok/failed sin conservar ese orden — pero los nombres de
-        // esta tanda son las claves con las que se busca cada resultado.
-        setDocuments((prev) =>
-          prev.map((d) => {
-            const upload = uploads.find((u) => u.key === d.key);
-            if (!upload) return d; // no es de esta tanda
-            const ok = result.ok.find((r) => r.name === upload.file.name);
-            if (ok) return { ...d, status: "done" as const, chunks: ok.chunks, truncated: ok.truncated };
-            const fail = result.failed.find((r) => r.name === upload.file.name);
-            return { ...d, status: "error" as const, error: fail?.error ?? "no se pudo procesar" };
-          }),
-        );
-      })
-      .catch((err: unknown) => {
-        const keys = new Set(uploads.map((u) => u.key));
-        setDocuments((prev) =>
-          prev.map((d) =>
-            keys.has(d.key)
-              ? { ...d, status: "error" as const, error: err instanceof Error ? err.message : "no se pudo subir" }
-              : d,
-          ),
-        );
-      });
+    // Cada archivo viaja en SU PROPIO request (antes era uno solo para toda
+    // la tanda): el presupuesto de fragmentos ya no se comparte entre
+    // archivos (ver MAX_CHUNKS_PER_DOCUMENT en el agente), así que no hay
+    // motivo para atarlos — y subirlos por separado es justo lo que permite
+    // que cada uno reporte "listo" apenas termina, en vez de esperar al más
+    // lento. La concurrencia acotada (no ilimitada) evita mandar 30 requests
+    // de golpe a una máquina de 1 vCPU.
+    let cursor = 0;
+    const runNext = (): void => {
+      const upload = uploads[cursor++];
+      if (!upload) return;
+      void uploadChatDocuments([upload.file])
+        .then((result) => {
+          const ok = result.ok[0];
+          const fail = result.failed[0];
+          setDocuments((prev) =>
+            prev.map((d) => {
+              if (d.key !== upload.key) return d;
+              if (ok) return { ...d, status: "done" as const, chunks: ok.chunks, truncated: ok.truncated };
+              return { ...d, status: "error" as const, error: fail?.error ?? "no se pudo procesar" };
+            }),
+          );
+        })
+        .catch((err: unknown) => {
+          setDocuments((prev) =>
+            prev.map((d) =>
+              d.key === upload.key
+                ? { ...d, status: "error" as const, error: err instanceof Error ? err.message : "no se pudo subir" }
+                : d,
+            ),
+          );
+        })
+        .finally(runNext);
+    };
+    for (let i = 0; i < Math.min(DOC_UPLOAD_CONCURRENCY, uploads.length); i++) runNext();
   };
 
   const removeDocument = (key: string) => {

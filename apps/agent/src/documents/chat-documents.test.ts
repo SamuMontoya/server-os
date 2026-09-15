@@ -12,7 +12,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ingestUploadedDocuments,
-  MAX_TOTAL_CHUNKS_PER_UPLOAD,
+  MAX_CHUNKS_PER_DOCUMENT,
+  INGEST_CONCURRENCY,
   type UploadedFile,
   type IngestDeps,
   type ChatDocRow,
@@ -166,30 +167,30 @@ test("edge: insertRows devuelve error de Supabase → falla ese archivo con el m
   assert.match(result.failed[0].error, /duplicate key value/);
 });
 
-test("edge: el presupuesto de fragmentos por tanda se reparte y lo que no entra se marca truncado", async () => {
-  // Cada archivo pide más chunks de los que caben en el presupuesto total.
+test("edge: el presupuesto de fragmentos es POR DOCUMENTO y lo que no entra se marca truncado", async () => {
   const chunkSize = 6_000;
-  const bigText = "z".repeat(chunkSize * (MAX_TOTAL_CHUNKS_PER_UPLOAD + 5)); // De sobra para agotar el cupo
+  const bigText = "z".repeat(chunkSize * (MAX_CHUNKS_PER_DOCUMENT + 5)); // De sobra para agotar el cupo
   const { deps } = depsWith({ extractText: async () => bigText });
   const result = await ingestUploadedDocuments([file("unico-gigante.txt")], deps);
   assert.equal(result.failed.length, 0);
-  assert.equal(result.ok[0].chunks, MAX_TOTAL_CHUNKS_PER_UPLOAD);
+  assert.equal(result.ok[0].chunks, MAX_CHUNKS_PER_DOCUMENT);
   assert.equal(result.ok[0].truncated, true);
 });
 
-test("edge: el segundo archivo se queda sin cupo si el primero agotó el presupuesto de fragmentos", async () => {
+test("edge: el presupuesto de fragmentos NO se comparte entre archivos — cada uno tiene el suyo (2026-09-15, antes uno gigante le quitaba cupo a los demás)", async () => {
   const chunkSize = 6_000;
-  const bigText = "z".repeat(chunkSize * (MAX_TOTAL_CHUNKS_PER_UPLOAD + 5));
+  const bigText = "z".repeat(chunkSize * (MAX_CHUNKS_PER_DOCUMENT + 5));
   const { deps } = depsWith({
     extractText: async (_buf, _mime, name) => (name === "primero.txt" ? bigText : "poco texto"),
   });
   const result = await ingestUploadedDocuments([file("primero.txt"), file("segundo.txt")], deps);
-  assert.equal(result.ok.length, 1);
-  assert.equal(result.ok[0].name, "primero.txt");
-  assert.equal(result.ok[0].chunks, MAX_TOTAL_CHUNKS_PER_UPLOAD);
-  assert.equal(result.failed.length, 1);
-  assert.equal(result.failed[0].name, "segundo.txt");
-  assert.match(result.failed[0].error, /cupo de fragmentos/);
+  assert.equal(result.failed.length, 0);
+  const primero = result.ok.find((r) => r.name === "primero.txt")!;
+  const segundo = result.ok.find((r) => r.name === "segundo.txt")!;
+  assert.equal(primero.chunks, MAX_CHUNKS_PER_DOCUMENT);
+  assert.equal(primero.truncated, true);
+  assert.equal(segundo.chunks, 1);
+  assert.equal(segundo.truncated, false);
 });
 
 test("edge: archivos con el mismo nombre en la misma tanda no se pisan entre sí (doc_id distinto)", async () => {
@@ -220,4 +221,32 @@ test("edge: mezcla de éxito y fallo en la misma tanda no contamina el resultado
   assert.equal(result.ok[0].name, "bueno.txt");
   assert.equal(result.failed.length, 1);
   assert.equal(result.failed[0].name, "malo.pdf");
+});
+
+test("edge: nunca hay más de INGEST_CONCURRENCY extracciones en vuelo a la vez (2026-09-15: antes era 100% serial)", async () => {
+  let enVuelo = 0;
+  let picoMaximo = 0;
+  const { deps } = depsWith({
+    extractText: async () => {
+      enVuelo++;
+      picoMaximo = Math.max(picoMaximo, enVuelo);
+      await new Promise((r) => setTimeout(r, 5));
+      enVuelo--;
+      return "algo de texto";
+    },
+  });
+  const files = Array.from({ length: INGEST_CONCURRENCY * 3 }, (_, i) => file(`doc-${i}.txt`));
+  const result = await ingestUploadedDocuments(files, deps);
+  assert.equal(result.ok.length, files.length);
+  // Sube por encima de 1 (hay paralelismo real)...
+  assert.ok(picoMaximo > 1, `esperaba paralelismo > 1, midió ${picoMaximo}`);
+  // ...pero nunca más allá del tope fijado.
+  assert.ok(picoMaximo <= INGEST_CONCURRENCY, `esperaba <= ${INGEST_CONCURRENCY}, midió ${picoMaximo}`);
+});
+
+test("edge: con un solo archivo no hace falta paralelismo, sigue funcionando igual", async () => {
+  const { deps } = depsWith();
+  const result = await ingestUploadedDocuments([file("solo.txt")], deps);
+  assert.equal(result.ok.length, 1);
+  assert.equal(result.failed.length, 0);
 });
