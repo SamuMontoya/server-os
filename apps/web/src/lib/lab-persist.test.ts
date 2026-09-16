@@ -57,6 +57,138 @@ test("las imágenes NO se persisten: sus object URLs mueren con la página", () 
   assert.equal(out?.byChat[key].messages[0].images, undefined);
 });
 
+// ── Documentos como card (auditoría de Jaime 2026-09-16) ────────────────
+
+test("los documentos SÍ se persisten, a diferencia de las imágenes: no hay object URL que se muera", () => {
+  const key = chatStorageKey("general", "c1");
+  const conDoc = hilo("c1", {
+    messages: [
+      { id: 1, role: "user", content: "", docs: [{ name: "informe.pdf", status: "done", chunks: 3, truncated: false }] },
+    ],
+  });
+  const out = ida({ [key]: conDoc });
+  assert.deepEqual(out?.byChat[key].messages[0].docs, [
+    { name: "informe.pdf", status: "done", chunks: 3, truncated: false },
+  ]);
+});
+
+test("un documento 'processing' al enviar también se persiste con su estado", () => {
+  const key = chatStorageKey("general", "c1");
+  const conDoc = hilo("c1", {
+    messages: [{ id: 1, role: "user", content: "revisa esto", docs: [{ name: "grande.docx", status: "processing" }] }],
+  });
+  const out = ida({ [key]: conDoc });
+  assert.deepEqual(out?.byChat[key].messages[0].docs, [{ name: "grande.docx", status: "processing" }]);
+  assert.equal(out?.byChat[key].messages[0].content, "revisa esto");
+});
+
+test("mensaje con imagen Y documentos a la vez: ambos sobreviven, cada uno en su campo", () => {
+  const key = chatStorageKey("general", "c1");
+  const mixto = hilo("c1", {
+    messages: [
+      {
+        id: 1,
+        role: "user",
+        content: "mira estos",
+        images: [{ url: "blob:x", name: "foto.png" }],
+        docs: [
+          { name: "a.pdf", status: "done", chunks: 1 },
+          { name: "b.xlsx", status: "done", chunks: 2, truncated: true },
+        ],
+      },
+    ],
+  });
+  const out = ida({ [key]: mixto });
+  assert.equal(out?.byChat[key].messages[0].images, undefined);
+  assert.equal(out?.byChat[key].messages[0].docs?.length, 2);
+  assert.equal(out?.byChat[key].messages[0].docs?.[1].truncated, true);
+});
+
+test("un mensaje sin documentos no gana el campo de la nada (undefined, no [])", () => {
+  const key = chatStorageKey("general", "c1");
+  const out = ida({ [key]: hilo("c1") });
+  assert.equal(out?.byChat[key].messages[0].docs, undefined);
+});
+
+test("un documento en 'error' (falló DESPUÉS de enviado) se persiste igual — auditoría 2026-09-16", () => {
+  const key = chatStorageKey("general", "c1");
+  const conError = hilo("c1", {
+    messages: [{ id: 1, role: "user", content: "", docs: [{ name: "roto.pdf", status: "error" }] }],
+  });
+  const out = ida({ [key]: conError });
+  assert.deepEqual(out?.byChat[key].messages[0].docs, [{ name: "roto.pdf", status: "error" }]);
+});
+
+test("más de MAX_DOCS_PER_MESSAGE documentos: se recorta la lista, no se pierde el mensaje entero", () => {
+  const key = chatStorageKey("general", "c1");
+  const muchos = hilo("c1", {
+    messages: [
+      {
+        id: 1,
+        role: "user",
+        content: "",
+        docs: Array.from({ length: 50 }, (_, i) => ({ name: `doc-${i}.pdf`, status: "done" as const, chunks: 1 })),
+      },
+    ],
+  });
+  const out = ida({ [key]: muchos });
+  assert.ok(out, "el mensaje debe sobrevivir, no tirar el localStorage entero");
+  assert.ok((out!.byChat[key].messages[0].docs?.length ?? 0) <= 20, "el array de documentos debe quedar acotado");
+});
+
+test("un nombre de archivo larguísimo se trunca al persistir", () => {
+  const key = chatStorageKey("general", "c1");
+  const nombreGigante = "x".repeat(5000) + ".pdf";
+  const conNombreLargo = hilo("c1", {
+    messages: [{ id: 1, role: "user", content: "", docs: [{ name: nombreGigante, status: "done" }] }],
+  });
+  const out = ida({ [key]: conNombreLargo });
+  const nombreGuardado = out?.byChat[key].messages[0].docs?.[0].name ?? "";
+  assert.ok(nombreGuardado.length < nombreGigante.length);
+});
+
+test("un 'docs' corrupto (no-array) descarta ESE hilo pero no tumba el resto", () => {
+  const kMalo = chatStorageKey("general", "malo");
+  const kBueno = chatStorageKey("general", "bueno");
+  const raw = JSON.stringify({
+    v: 3,
+    savedAt: AHORA,
+    byChat: {
+      [kMalo]: {
+        id: "malo",
+        updatedAt: AHORA,
+        sdkSessionId: null,
+        sessionKey: "x",
+        messages: [{ id: 1, role: "user", content: "hola", docs: "no-es-un-array" }],
+        draft: "",
+        model: null,
+      },
+      [kBueno]: hilo("bueno"),
+    },
+    activeByProject: {},
+  });
+  const out = parseLab(raw, AHORA);
+  assert.equal(out?.byChat[kMalo], undefined);
+  assert.equal(out?.byChat[kBueno].messages.length, 2);
+});
+
+test("un documento con 'status' desconocido descarta el hilo, no lo pinta como 'done' a ciegas", () => {
+  const key = chatStorageKey("general", "c1");
+  const raw = JSON.stringify({
+    v: 3,
+    savedAt: AHORA,
+    byChat: {
+      [key]: {
+        ...hilo("c1"),
+        messages: [{ id: 1, role: "user", content: "", docs: [{ name: "x.pdf", status: "algo-inventado" }] }],
+      },
+    },
+    activeByProject: {},
+  });
+  const out = parseLab(raw, AHORA);
+  assert.equal(out?.byChat[key], undefined);
+});
+
 test("un hilo virgen no ocupa cuota", () => {
   const key = chatStorageKey("general", "c1");
   assert.equal(serializeLab({ [key]: hilo("c1", { messages: [], draft: "" }) }, {}, AHORA), null);

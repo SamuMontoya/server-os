@@ -45,8 +45,27 @@ export type LabMessage = {
    *  el archivo original nunca se guardó, así que acá no hay url que
    *  mostrar — solo el resumen (nombre, fragmentos) para la card de la
    *  burbuja. A diferencia de `images`, esto SÍ sobrevive el recorte de
-   *  `trimMessage` (no depende de object URLs). */
-  docs?: { name: string; chunks: number; truncated?: boolean }[];
+   *  `trimMessage` (no depende de object URLs).
+   *
+   *  `status` (2026-09-16, auditoría de Jaime): antes solo se guardaban los
+   *  `indexedDocs` ("done") — uno que seguía "processing" justo al enviar no
+   *  dejaba NINGÚN rastro visual en la burbuja (solo el `pendingNote` de
+   *  texto que viaja al MODELO, invisible para Samu), aunque el mensaje
+   *  siguiera mencionándolo. Ahora ambos estados entran, y `UserBubble` los
+   *  distingue (ver `.lab-doc-card--processing`). `"error"`: el vectorizado
+   *  falló DESPUÉS de enviado (detectado por el polling de
+   *  `sentPendingDocs` en page.tsx) — sin esto la card se quedaba en
+   *  "processing" mintiendo para siempre que eventualmente sería buscable.
+   *  `docId`: solo mientras sigue "processing", es lo que ese polling usa
+   *  para saber qué preguntarle al servidor; se borra al llegar a un estado
+   *  terminal. */
+  docs?: {
+    name: string;
+    status: "done" | "processing" | "error";
+    chunks?: number;
+    truncated?: boolean;
+    docId?: string;
+  }[];
 };
 
 /** Turno del motor que este hilo dejó corriendo (agent/chat-turns.ts). */
@@ -153,12 +172,28 @@ function trimBlocks(blocks: LabBlock[] | undefined): LabBlock[] | undefined {
   return blocks.map((b) => (b.kind === "text" ? { kind: "text" as const, text: trimText(b.text) } : b));
 }
 
+/** Tope de documentos por mensaje y de cuánto nombre se guarda de cada uno
+ *  (auditoría 2026-09-16): a diferencia de `images`, `docs` no se descartaba
+ *  entero al persistir — un mensaje con MAX_DOCUMENTS de por sí (ver
+ *  `page.tsx`) más nombres largos podía dejar `serializeLab` sin forma de
+ *  bajar de `MAX_BYTES` ni en el cap más chico, y eso tira el localStorage
+ *  COMPLETO vía `saveLab`, no solo ese mensaje. */
+const MAX_DOCS_PER_MESSAGE = 20;
+const MAX_DOC_NAME_CHARS = 200;
+
+function trimDocs(docs: LabMessage["docs"]): LabMessage["docs"] {
+  if (!docs) return docs;
+  return docs.slice(0, MAX_DOCS_PER_MESSAGE).map((d) =>
+    d.name.length <= MAX_DOC_NAME_CHARS ? d : { ...d, name: `${d.name.slice(0, MAX_DOC_NAME_CHARS)}…` },
+  );
+}
+
 function trimMessage(m: LabMessage): LabMessage {
   // Los `images[].url` son object URLs LOCALES: se revocan al desmontar la
   // página (ver laboratorio/page.tsx), así que tras recargar apuntarían a un
   // blob muerto. Persistirlos dejaría una imagen rota — se descartan.
   const { images: _images, ...rest } = m;
-  return { ...rest, content: trimText(m.content), blocks: trimBlocks(m.blocks) };
+  return { ...rest, content: trimText(m.content), blocks: trimBlocks(m.blocks), docs: trimDocs(m.docs) };
 }
 
 function trimThread(thread: LabThread, maxMessages = MAX_MESSAGES): LabThread {
@@ -231,13 +266,44 @@ export function serializeLab(
   return raw.length <= MAX_BYTES ? raw : null;
 }
 
+/** Un `docs`/`images` corrupto no puede colarse como válido: `UserBubble`
+ *  hace `.map()` directo sin re-validar y no hay ErrorBoundary alrededor de
+ *  la lista de mensajes — algo como un `docs` que resultara ser un string
+ *  (pasaría cualquier chequeo laxo de "existe") tiraría el render del HILO
+ *  ENTERO, no solo esa burbuja (hallazgo de la auditoría 2026-09-16). */
+function isValidDocs(v: unknown): v is NonNullable<LabMessage["docs"]> {
+  if (v === undefined) return true;
+  if (!Array.isArray(v)) return false;
+  return v.every(
+    (d) =>
+      d &&
+      typeof d === "object" &&
+      typeof (d as { name?: unknown }).name === "string" &&
+      ["done", "processing", "error"].includes((d as { status?: unknown }).status as string),
+  );
+}
+
+function isValidImages(v: unknown): v is NonNullable<LabMessage["images"]> {
+  if (v === undefined) return true;
+  if (!Array.isArray(v)) return false;
+  return v.every(
+    (i) =>
+      i &&
+      typeof i === "object" &&
+      typeof (i as { url?: unknown }).url === "string" &&
+      typeof (i as { name?: unknown }).name === "string",
+  );
+}
+
 function isMessage(m: unknown): m is LabMessage {
   if (!m || typeof m !== "object") return false;
   const c = m as LabMessage;
   return (
     typeof c.id === "number" &&
     (c.role === "user" || c.role === "assistant") &&
-    typeof c.content === "string"
+    typeof c.content === "string" &&
+    isValidDocs(c.docs) &&
+    isValidImages(c.images)
   );
 }
 

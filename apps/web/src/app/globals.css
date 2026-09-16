@@ -2179,8 +2179,12 @@ html.lab-route.lab-kb .lab-inputbar {
 }
 /* 4px pedidos por Samu (2026-08-31). Antes decía 16px pero NUNCA se aplicaba:
    el texto se renderizaba como nodo de texto suelto y `:only-child` solo mira
-   elementos, así que las imágenes SÍ eran only-child → 0px. Ver lab-bubble-text. */
-.lab-bubble-images:not(:only-child) { margin-bottom: 4px; }
+   elementos, así que las imágenes SÍ eran only-child → 0px. Ver lab-bubble-text.
+   `:not(:last-child)` en vez de `:not(:only-child)` (2026-09-16): con imagen +
+   doc + texto a la vez (hasta TRES hermanos) `:only-child` nunca se cumplía
+   para ninguno de los dos adjuntos, así que solo el último quedaba separado
+   del texto. */
+.lab-bubble-images:not(:last-child) { margin-bottom: 4px; }
 .lab-bubble-images img {
   display: block;
   max-width: 200px;
@@ -2203,7 +2207,7 @@ html.lab-route.lab-kb .lab-inputbar {
   gap: 6px;
   margin-bottom: 0;
 }
-.lab-bubble-docs:not(:only-child) { margin-bottom: 4px; }
+.lab-bubble-docs:not(:last-child) { margin-bottom: 4px; }
 .lab-doc-card {
   display: flex;
   flex-direction: column;
@@ -2242,6 +2246,21 @@ html.lab-route.lab-kb .lab-inputbar {
   letter-spacing: 0.03em;
   color: #9b9a96;
   text-transform: uppercase;
+}
+/* "processing" = todavía indexando en background al momento de enviar (ver
+   sentDocs en laboratorio/page.tsx, 2026-09-16): la card se atenúa entera y
+   la esquina de la extensión pasa a ser un spinner, mismo lenguaje que ya
+   usa `.lab-chip--doc` en el composer. */
+.lab-doc-card--processing { opacity: 0.6; }
+.lab-doc-card-spin {
+  align-self: flex-end;
+  margin-top: 8px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(55, 53, 47, 0.2);
+  border-top-color: #37352f;
+  border-radius: 50%;
+  animation: lab-chip-spin 0.7s linear infinite;
 }
 /* La colita: un triángulo recortado con clip-path, del mismo gris que la
    burbuja. `right: -1px` la solapa un pelo con el borde de la burbuja (en vez

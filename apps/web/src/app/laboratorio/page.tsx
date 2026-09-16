@@ -312,16 +312,34 @@ function UserBubble({ m }: { m: LabMessage }) {
       {m.docs && m.docs.length > 0 && (
         <div className="lab-bubble-docs">
           {m.docs.map((d, i) => {
+            // Nombre a mostrar: sin caracteres de control bidi (truco para
+            // disfrazar la extensión real de un archivo) y con respaldo si
+            // queda vacío/solo espacios.
+            const displayName = d.name.replace(/[‪-‮⁦-⁩]/g, "").trim() || "(sin nombre)";
             // "Gránulo 1.docx" → "DOCX"; sin punto → "ARCHIVO".
-            const dot = d.name.lastIndexOf(".");
-            const ext = dot > -1 ? d.name.slice(dot + 1).toUpperCase() : "ARCHIVO";
+            const dot = displayName.lastIndexOf(".");
+            const ext = dot > -1 ? displayName.slice(dot + 1).toUpperCase() : "ARCHIVO";
+            const processing = d.status === "processing";
+            const failed = d.status === "error";
+            const estado = processing
+              ? `Indexando ${displayName} en background…`
+              : failed
+                ? `${displayName} — no se pudo indexar`
+                : `${displayName}${
+                    d.chunks
+                      ? ` — ${d.chunks} fragmento${d.chunks === 1 ? "" : "s"} indexado${d.chunks === 1 ? "" : "s"}`
+                      : ""
+                  }${d.truncated ? " (recortado: el archivo era muy grande)" : ""}`;
             return (
               <div
                 key={i}
-                className="lab-doc-card"
-                title={`${d.name} — ${d.chunks} fragmento${d.chunks === 1 ? "" : "s"} indexado${
-                  d.chunks === 1 ? "" : "s"
-                }${d.truncated ? " (recortado: el archivo era muy grande)" : ""}`}
+                className={`lab-doc-card ${processing ? "lab-doc-card--processing" : ""} ${
+                  failed ? "lab-doc-card--error" : ""
+                }`}
+                title={estado}
+                // `title` no es confiable en lector de pantalla ni alcanzable
+                // en touch — el estado real vive acá también.
+                aria-label={estado}
               >
                 <span className="lab-doc-card-icon" aria-hidden="true">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -334,15 +352,19 @@ function UserBubble({ m }: { m: LabMessage }) {
                     <path d="M14 3v5h5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
                   </svg>
                 </span>
-                <span className="lab-doc-card-name">{d.name}</span>
-                <span className="lab-doc-card-ext">{ext}</span>
+                <span className="lab-doc-card-name">{displayName}</span>
+                {processing ? (
+                  <span className="lab-doc-card-spin" aria-hidden="true" />
+                ) : (
+                  <span className="lab-doc-card-ext">{ext}</span>
+                )}
               </div>
             );
           })}
         </div>
       )}
       {/* El texto va en un <span> (no como nodo de texto suelto) para que
-          `.lab-bubble-images:not(:only-child)` en globals.css detecte que
+          `.lab-bubble-images:not(:last-child)` en globals.css detecte que
           hay hermano: `:only-child` solo cuenta ELEMENTOS, no text nodes. */}
         {m.content ? <span className="lab-bubble-text">{m.content}</span> : null}
       </div>
@@ -487,6 +509,11 @@ export default function Laboratorio() {
   // Imágenes pegadas que todavía no se han enviado.
   const [attachments, setAttachments] = useState<LabAttachment[]>([]);
   const [documents, setDocuments] = useState<LabDocument[]>([]);
+  /** Documentos "processing" que YA SE MANDARON (ver handleSend): el
+   *  composer los vacía de `documents` al enviar (`setDocuments([])`), así
+   *  que sin este segundo tracking la card de esa burbuja se quedaba
+   *  "indexando…" congelada para siempre (auditoría 2026-09-16). */
+  const [sentPendingDocs, setSentPendingDocs] = useState<{ msgId: number; docId: string }[]>([]);
   const docInputRef = useRef<HTMLInputElement | null>(null);
   const [dropping, setDropping] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -661,13 +688,29 @@ export default function Laboratorio() {
   // quedó trabajando, `resumePending` lo reengancha y se pone al día de una,
   // no palabra por palabra. Ver DECISIONES.md si algún día hace falta más.
 
+  /** Rótulo de respaldo para un mensaje SIN texto (solo imagen y/o
+   *  documento, 2026-09-16): un mensaje "solo documento" pasó a tener
+   *  `content: ""` (antes el 📎 vivía metido ahí) — igual que YA le pasaba a
+   *  uno "solo imagen" de toda la vida. Sin esto, ambos casos se ven en la
+   *  lista como "Chat nuevo" para siempre (deriveTitle) o sin subtítulo
+   *  (derivePreview) aunque el chat esté vivo y tenga adjuntos. */
+  const attachmentSummary = (m: LabMessage): string => {
+    const docs = m.docs?.length ?? 0;
+    if (docs > 0) return docs === 1 ? m.docs![0].name : `${docs} documentos`;
+    const imgs = m.images?.length ?? 0;
+    if (imgs > 0) return imgs === 1 ? "Imagen" : `${imgs} imágenes`;
+    return "";
+  };
+
   /** Fallback del nombre de un chat: primeras palabras del primer mensaje.
    *  Solo se usa mientras el título de haiku no ha llegado (o si falló) —
    *  ver `nameChat` y el campo `title` de LabThread. */
   const deriveTitle = (msgs: LabMessage[]): string => {
-    const first = msgs.find((m) => m.role === "user" && m.content.trim());
+    const first = msgs.find(
+      (m) => m.role === "user" && (m.content.trim() || m.images?.length || m.docs?.length),
+    );
     if (!first) return "Chat nuevo";
-    const flat = first.content.trim().replace(/\s+/g, " ");
+    const flat = (first.content.trim() || attachmentSummary(first)).replace(/\s+/g, " ");
     return flat.length > 42 ? `${flat.slice(0, 42)}…` : flat;
   };
 
@@ -694,7 +737,7 @@ export default function Laboratorio() {
               .filter((b): b is { kind: "text"; text: string } => b.kind === "text")
               .map((b) => b.text)
               .join("\n")
-          : m.content;
+          : m.content || attachmentSummary(m);
       const clean = text
         .replace(/```[\s\S]*?```/g, " ") // bloques de código: no resumen nada
         .replace(/^\s*#{1,6}\s+/gm, "") // encabezados
@@ -1622,6 +1665,57 @@ export default function Laboratorio() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- DOC_STATUS_POLL_MS es constante local, no una dep reactiva.
   }, [documents]);
 
+  // Mismo polling que el de arriba, pero para documentos que YA VIAJARON en
+  // un mensaje (ver `sentPendingDocs`): parchea la entrada correspondiente
+  // dentro de `messages` en vez del composer (vacío hace rato) — es lo que
+  // hace que la card pase de "indexando…" a done/error sola.
+  useEffect(() => {
+    if (sentPendingDocs.length === 0) return;
+    const ids = sentPendingDocs.map((d) => d.docId);
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const jobs = await fetchChatDocumentStatus(ids);
+        if (cancelled) return;
+        const resolvedIds = new Set<string>();
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (!m.docs?.length) return m;
+            let changed = false;
+            const nextDocs = m.docs.map((d) => {
+              if (d.status !== "processing" || !d.docId) return d;
+              const pending = sentPendingDocs.some((p) => p.msgId === m.id && p.docId === d.docId);
+              if (!pending) return d;
+              const job = jobs.find((j) => j.docId === d.docId);
+              if (!job || job.status === "processing") return d;
+              changed = true;
+              resolvedIds.add(d.docId);
+              if (job.status === "ready") {
+                return { name: d.name, status: "done" as const, chunks: job.chunks, truncated: job.truncated };
+              }
+              return { name: d.name, status: "error" as const };
+            });
+            return changed ? { ...m, docs: nextDocs } : m;
+          }),
+        );
+        // SIEMPRE se reescribe (aunque no se resuelva nada): `.filter()`
+        // devuelve un array nuevo igual, y ES ese cambio de referencia el que
+        // reprograma el próximo tick (mismo mecanismo implícito que ya usa
+        // el polling del composer con `setDocuments`, arriba).
+        setSentPendingDocs((prev) => prev.filter((p) => !resolvedIds.has(p.docId)));
+        if (resolvedIds.size > 0) schedulePersist();
+      } catch {
+        // Fallo de red puntual: el próximo tick (reprogramado por este mismo
+        // efecto mientras `sentPendingDocs` siga sin resolverse) reintenta solo.
+      }
+    }, DOC_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- DOC_STATUS_POLL_MS es constante local; schedulePersist es estable por ref.
+  }, [sentPendingDocs]);
+
   const removeDocument = (key: string) => {
     // El documento YA fue indexado en el servidor si llegó a "done": quitar
     // el chip solo saca el aviso de ESTE mensaje, no lo des-vectoriza (sigue
@@ -1685,8 +1779,16 @@ export default function Laboratorio() {
     const finalText = [docNote, pendingNote, text].filter(Boolean).join("\n\n");
 
     const sent = attachments.filter((a) => a.id);
+    // La card se arma con done + processing (nunca "error" — un documento
+    // que falló no deja rastro en el mensaje, igual que una imagen con error
+    // nunca entra a `images`). Antes solo entraban los "done": uno que
+    // seguía indexando justo al enviar (ver `canSend`/`docsUploading`, ya NO
+    // bloquea el envío desde 2026-09-15) quedaba sin card, invisible en la
+    // burbuja aunque el `pendingNote` de arriba SÍ se lo mencionara al modelo.
+    const sentDocs = documents.filter((d) => d.status === "done" || d.status === "processing");
+    const msgId = Date.now();
     const userMsg: LabMessage = {
-      id: Date.now(),
+      id: msgId,
       role: "user",
       // La burbuja muestra solo lo que el usuario escribió — el aviso de
       // documentos (`docNote`) va aparte en `docs` como card, y a la red
@@ -1694,11 +1796,28 @@ export default function Laboratorio() {
       // necesita el texto plano, la burbuja necesita la card bonita.
       content: text,
       ...(sent.length ? { images: sent.map((a) => ({ url: a.url, name: a.name })) } : {}),
-      ...(indexedDocs.length
-        ? { docs: indexedDocs.map((d) => ({ name: d.name, chunks: d.chunks ?? 1, truncated: d.truncated })) }
+      ...(sentDocs.length
+        ? {
+            docs: sentDocs.map((d) => ({
+              name: d.name,
+              status: d.status as "done" | "processing",
+              chunks: d.chunks,
+              truncated: d.truncated,
+              ...(d.status === "processing" && d.docId ? { docId: d.docId } : {}),
+            })),
+          }
         : {}),
     };
-    const replyMsg: LabMessage = { id: Date.now() + 1, role: "assistant", content: "", blocks: [] };
+    // Sin esto, un doc "processing" en este mensaje se queda con la card de
+    // "indexando…" congelada para siempre en cuanto `setDocuments([])` vacíe
+    // el composer más abajo (auditoría 2026-09-16, ver `sentPendingDocs`).
+    const stillProcessing = sentDocs.filter(
+      (d): d is LabDocument & { docId: string } => d.status === "processing" && !!d.docId,
+    );
+    if (stillProcessing.length) {
+      setSentPendingDocs((prev) => [...prev, ...stillProcessing.map((d) => ({ msgId, docId: d.docId }))]);
+    }
+    const replyMsg: LabMessage = { id: msgId + 1, role: "assistant", content: "", blocks: [] };
     // Enviar SIEMPRE re-engancha el auto-anclaje: aunque Samu estuviera
     // leyendo arriba, mandar un mensaje es pedir explícitamente ver lo nuevo.
     userPinnedRef.current = false;
