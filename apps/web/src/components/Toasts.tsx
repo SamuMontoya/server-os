@@ -70,7 +70,7 @@ export function Toasts({ events }: { events: AgentActivityEvent[] }) {
           <div
             key={t.id}
             role="status"
-            className={`hud-in pointer-events-auto cursor-pointer rounded-sm border bg-[rgba(8,10,22,0.92)] px-3 py-2 text-xs leading-snug text-text backdrop-blur ${
+            className={`hud-in pointer-events-auto cursor-pointer overflow-hidden wrap-anywhere rounded-sm border bg-[rgba(8,10,22,0.92)] px-3 py-2 text-xs leading-snug text-text backdrop-blur ${
               t.kind === "ok" ? "border-green glow-box-green" : "border-red glow-box-red"
             }`}
             onClick={() => {

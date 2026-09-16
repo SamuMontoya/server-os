@@ -143,3 +143,133 @@ test("un chat activo no se descarta por cuota aunque sea el más viejo", () => {
   const out = ida(byChat, { general: "viejo-activo" });
   assert.ok(out?.byChat[activeKey], "el chat activo debe sobrevivir el recorte");
 });
+
+// ── Papelera (pedido de Jaime 2026-09-16) ────────────────────────────────
+
+test("un chat trashed va y vuelve con su status y trashedAt intactos", () => {
+  const key = chatStorageKey("general", "c1");
+  const out = ida({ [key]: hilo("c1", { status: "trashed", trashedAt: AHORA }) });
+  assert.equal(out?.byChat[key].status, "trashed");
+  assert.equal(out?.byChat[key].trashedAt, AHORA);
+});
+
+test("un chat trashed SIN mensajes ni draft igual ocupa cuota (worthKeeping)", () => {
+  const key = chatStorageKey("general", "c1");
+  const raw = serializeLab(
+    { [key]: hilo("c1", { messages: [], draft: "", status: "trashed", trashedAt: AHORA }) },
+    {},
+    AHORA,
+  );
+  assert.notEqual(raw, null, "un trashed no debe descartarse por estar 'vacío'");
+  const out = parseLab(raw, AHORA);
+  assert.equal(out?.byChat[key].status, "trashed");
+});
+
+test("un trashed de hace 29 días sobrevive; uno de hace 31 se purga solo al hidratar", () => {
+  const key29 = chatStorageKey("general", "c29");
+  const key31 = chatStorageKey("general", "c31");
+  const veintinueveDias = 29 * 24 * 60 * 60 * 1000;
+  const treintaYUnDias = 31 * 24 * 60 * 60 * 1000;
+  const raw = serializeLab(
+    {
+      [key29]: hilo("c29", { status: "trashed", trashedAt: AHORA - veintinueveDias }),
+      [key31]: hilo("c31", { status: "trashed", trashedAt: AHORA - treintaYUnDias }),
+    },
+    {},
+    AHORA,
+  );
+  const out = parseLab(raw, AHORA);
+  assert.ok(out?.byChat[key29], "29 días: todavía dentro del plazo de 30");
+  assert.equal(out?.byChat[key31], undefined, "31 días: ya venció, se descarta al hidratar");
+});
+
+test("con cuota apretada, un chat activo desaloja a uno trashed antes que a otro activo", () => {
+  const trashedKey = chatStorageKey("general", "trashed-viejo");
+  const byChat: Record<string, LabThread> = {
+    [trashedKey]: hilo("trashed-viejo", {
+      status: "trashed",
+      trashedAt: AHORA, // el más "reciente" de todos, pero trashed igual pierde
+    }),
+  };
+  // 40 chats activos genuinos (el techo exacto, MAX_CHATS) más viejos que el
+  // trashed en updatedAt — si la papelera compitiera en igualdad de
+  // condiciones, alguno de estos perdería su lugar en vez del trashed.
+  for (let i = 0; i < 40; i++) {
+    const k = chatStorageKey("general", `activo-${i}`);
+    byChat[k] = hilo(`activo-${i}`, { updatedAt: AHORA - 1000 + i });
+  }
+  const out = ida(byChat);
+  assert.equal(out?.byChat[trashedKey], undefined, "el trashed debe ser el primero en caer por cuota");
+  for (let i = 0; i < 40; i++) {
+    assert.ok(out?.byChat[chatStorageKey("general", `activo-${i}`)], `activo-${i} no debió perderse`);
+  }
+});
+
+test("un trashed con status corrupto pero SIN trashedAt válido no queda inmortal: arranca su cuenta desde ahora", () => {
+  // Bug real encontrado en la auditoría 2026-09-16: un JSON viejo/corrupto
+  // con `status: "trashed"` pero `trashedAt` ausente (o roto, ej. un string)
+  // hacía que `trashedAt` quedara `undefined` para siempre — la condición de
+  // purga exige un número, así que NUNCA se cumplía y el chat se quedaba en
+  // la papelera de por vida, sin fecha de vencimiento. La corrección: sin
+  // una fecha real que confiar, se lo trata como recién eliminado (empieza
+  // su propio conteo de 30 días desde `now`), en vez de inmortal.
+  const key = chatStorageKey("general", "c1");
+  const raw = JSON.stringify({
+    v: 3,
+    savedAt: AHORA,
+    byChat: {
+      [key]: { ...hilo("c1"), status: "trashed", trashedAt: "no-es-un-numero" },
+    },
+    activeByProject: {},
+  });
+  const out = parseLab(raw, AHORA);
+  assert.equal(out?.byChat[key].status, "trashed");
+  assert.equal(out?.byChat[key].trashedAt, AHORA, "sin fecha real, arranca el conteo desde 'now'");
+  // Y ahora sí purga a los 30 días de ESE arranque, en vez de nunca.
+  const treintaYUnDias = 31 * 24 * 60 * 60 * 1000;
+  const raw2 = serializeLab(
+    { [key]: { ...hilo("c1"), status: "trashed", trashedAt: AHORA } },
+    {},
+    AHORA,
+  );
+  const outVencido = parseLab(raw2, AHORA + treintaYUnDias);
+  assert.equal(outVencido?.byChat[key], undefined, "con trashedAt saneado, el plazo de 30 días sí corta");
+});
+
+test("papelera + turno pendiente: sdkSessionId/sessionKey/pendingTurn sobreviven trashear y restaurar", () => {
+  // Ida y vuelta pura (serializeLab/parseLab) de un chat trashed que TENÍA un
+  // turno corriendo en el servidor al momento de borrarlo: `restoreChat` en
+  // laboratorio/page.tsx solo pela `status`/`trashedAt` del objeto y deja el
+  // resto intacto, así que lo que persiste acá es lo que decide si
+  // `resumePending` puede reengancharse después de restaurar. Si
+  // `sdkSessionId`, `sessionKey` o `pendingTurn` se corrompieran en el viaje,
+  // restaurar un chat con un turno vivo dejaría el reenganche roto.
+  const key = chatStorageKey("general", "c1");
+  const conTurno = hilo("c1", {
+    status: "trashed",
+    trashedAt: AHORA,
+    sdkSessionId: "sdk-en-vuelo",
+    sessionKey: "sesion-en-vuelo",
+    pendingTurn: { id: "turno-vivo", seq: 7 },
+  });
+  const out = ida({ [key]: conTurno });
+  assert.equal(out?.byChat[key].status, "trashed");
+  assert.equal(out?.byChat[key].sdkSessionId, "sdk-en-vuelo");
+  assert.equal(out?.byChat[key].sessionKey, "sesion-en-vuelo");
+  assert.deepEqual(out?.byChat[key].pendingTurn, { id: "turno-vivo", seq: 7 });
+});
+
+test("un chat trashed que además sigue como 'activo por proyecto' nunca se descarta (defensivo)", () => {
+  // No debería pasar en la práctica (restaurar/abrir limpia status), pero si
+  // pasara, el chat que Samu tiene abierto ahora mismo no puede desaparecer.
+  const key = chatStorageKey("general", "raro");
+  const byChat: Record<string, LabThread> = {
+    [key]: hilo("raro", { status: "trashed", trashedAt: AHORA, updatedAt: 0 }),
+  };
+  for (let i = 0; i < 50; i++) {
+    const k = chatStorageKey("general", `nuevo-${i}`);
+    byChat[k] = hilo(`nuevo-${i}`, { updatedAt: AHORA + i });
+  }
+  const out = ida(byChat, { general: "raro" });
+  assert.ok(out?.byChat[key], "el chat activo-por-proyecto sobrevive aunque esté marcado trashed");
+});

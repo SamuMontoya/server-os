@@ -88,6 +88,18 @@ export interface LabThread {
    *  `listChatsForProject`). Solo local (no viaja al servidor / otro
    *  dispositivo): es una anotación de ESTE navegador, no un dato del chat. */
   seenAt?: number;
+  /** Papelera (pedido de Jaime 2026-09-16). `undefined`/`"active"` = chat
+   *  normal; `"trashed"` = eliminado, vive en la sección Papelera de
+   *  LabChatsScreen hasta que se restaura o se purga solo a los 30 días (ver
+   *  `trashedAt` y `TRASH_RETENTION_MS` más abajo). Espejo del `status` de la
+   *  migración 032 en el servidor (chat-threads.ts del agente) — mismo
+   *  nombre de campo a propósito, para no traducir mentalmente entre las dos
+   *  capas. */
+  status?: "active" | "trashed";
+  /** `Date.now()` de cuando se eliminó. Solo tiene sentido con
+   *  `status === "trashed"`; de ahí sale la cuenta regresiva que ve Samu
+   *  (LabChatsScreen) y el corte de purga local (ver `TRASH_RETENTION_MS`). */
+  trashedAt?: number;
 }
 
 /** Estado completo del laboratorio: todos los chats + cuál está activo por proyecto. */
@@ -122,6 +134,13 @@ const MAX_MESSAGES = 60;
 const MAX_CHARS_PER_BLOCK = 12_000;
 const MAX_BYTES = 900_000;
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+/** Mismo plazo que `TRASH_RETENTION_MS` del servidor (chat-threads.ts del
+ *  agente) — duplicado a propósito, ver el comentario gemelo en
+ *  LabChatsScreen.tsx. Un chat trashed que ya pasó este plazo se descarta al
+ *  hidratar (`parseLab`), como si ya lo hubiera purgado el servidor: es un
+ *  self-purge local de respaldo, no depende de que el job del agente haya
+ *  corrido para que la papelera de ESTE navegador deje de arrastrarlo. */
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function trimText(text: string): string {
   return text.length <= MAX_CHARS_PER_BLOCK
@@ -146,9 +165,17 @@ function trimThread(thread: LabThread, maxMessages = MAX_MESSAGES): LabThread {
   return { ...thread, messages: thread.messages.slice(-maxMessages).map(trimMessage) };
 }
 
-/** Nada que guardar: un hilo virgen no merece ocupar cuota. */
+/** Nada que guardar: un hilo virgen no merece ocupar cuota. Un chat trashed
+ *  SIEMPRE se guarda mientras no haya expirado (ver `parseLab`) aunque su
+ *  contenido esté vacío por el recorte — es lo único que la papelera tiene
+ *  para mostrar y restaurar. */
 function worthKeeping(thread: LabThread): boolean {
-  return thread.messages.length > 0 || thread.draft.trim().length > 0 || !!thread.pendingTurn;
+  return (
+    thread.status === "trashed" ||
+    thread.messages.length > 0 ||
+    thread.draft.trim().length > 0 ||
+    !!thread.pendingTurn
+  );
 }
 
 export function serializeLab(
@@ -158,16 +185,24 @@ export function serializeLab(
 ): string | null {
   // Los chats activos (los que se retoman al volver) nunca se descartan por
   // cuota aunque sean los más viejos: perder EL que se está viendo ahora
-  // mismo sería mucho peor que perder uno archivado de hace días.
+  // mismo sería mucho peor que perder uno archivado de hace días. Los
+  // trashed van SIEMPRE al final (pedido de Jaime 2026-09-16): la papelera es
+  // "best effort" — si hace falta espacio, se sacrifica antes que cualquier
+  // chat de verdad. El corte real de 30 días vive en `parseLab`; esto solo
+  // decide el ORDEN cuando hay que elegir qué se descarta por cuota.
   const activeIds = new Set(Object.values(activeByProject));
+  const tier = (t: LabThread): 0 | 1 | 2 =>
+    activeIds.has(t.id) ? 2 : t.status === "trashed" ? 0 : 1;
   const entries = Object.entries(byChat)
     .filter(([, t]) => worthKeeping(t))
     .map(([k, t]) => [k, trimThread(t)] as const)
     .sort((a, b) => {
-      const aActive = activeIds.has(a[1].id) ? 1 : 0;
-      const bActive = activeIds.has(b[1].id) ? 1 : 0;
-      if (aActive !== bActive) return bActive - aActive; // activos primero
-      return b[1].updatedAt - a[1].updatedAt; // luego los más recientes
+      const aTier = tier(a[1]);
+      const bTier = tier(b[1]);
+      if (aTier !== bTier) return bTier - aTier;
+      const aTime = a[1].status === "trashed" ? (a[1].trashedAt ?? a[1].updatedAt) : a[1].updatedAt;
+      const bTime = b[1].status === "trashed" ? (b[1].trashedAt ?? b[1].updatedAt) : b[1].updatedAt;
+      return bTime - aTime; // luego los más recientes (o los trashed más nuevos)
     })
     .slice(0, MAX_CHATS);
   if (entries.length === 0) return null;
@@ -227,6 +262,20 @@ export function parseLab(raw: string | null, now: number): HydratedLab | null {
     for (const [k, t] of Object.entries(data.byChat)) {
       if (!t || typeof t.id !== "string" || !t.id) continue;
       if (!Array.isArray(t.messages) || !t.messages.every(isMessage)) continue;
+      const status: "active" | "trashed" = t.status === "trashed" ? "trashed" : "active";
+      // Un trashed necesita SIEMPRE una fecha de corte propia para que el
+      // self-purge de abajo pueda hacer su cuenta. Antes, si `trashedAt` no
+      // era un número (JSON viejo/corrupto con `status: "trashed"` pero sin
+      // ese campo, o con un valor roto), quedaba `undefined` para siempre: la
+      // condición de purga exige un número, así que NUNCA se cumplía y el
+      // chat se quedaba en la papelera para la eternidad, sin fecha de
+      // vencimiento — el peor de los dos mundos (ni activo ni purgable). Sin
+      // fecha real que confiar, se lo trata como recién eliminado (arranca su
+      // propio conteo de 30 días desde AHORA) en vez de inmortal.
+      const trashedAt = status === "trashed" ? (typeof t.trashedAt === "number" ? t.trashedAt : now) : undefined;
+      if (status === "trashed" && now - (trashedAt as number) > TRASH_RETENTION_MS) {
+        continue;
+      }
       byChat[k] = {
         id: t.id,
         ...(typeof t.title === "string" && t.title.trim() ? { title: t.title } : {}),
@@ -238,6 +287,7 @@ export function parseLab(raw: string | null, now: number): HydratedLab | null {
         model: typeof t.model === "string" ? t.model : null,
         pendingTurn: isPendingTurn(t.pendingTurn) ? t.pendingTurn : undefined,
         seenAt: typeof t.seenAt === "number" ? t.seenAt : undefined,
+        ...(status === "trashed" ? { status, trashedAt } : {}),
       };
     }
     if (Object.keys(byChat).length === 0) return null;

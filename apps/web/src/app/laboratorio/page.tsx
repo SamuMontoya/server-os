@@ -47,9 +47,21 @@ import {
   fetchRemoteThread,
   pushRemoteThread,
   pushRemoteDelete,
+  pushRemoteRestore,
   pushRemoteActive,
 } from "@/lib/lab-sync";
-import { LabChatsScreen, type LabChatSummary } from "@/components/LabChatsScreen";
+import {
+  LabChatsScreen,
+  type LabChatSummary,
+  type LabTrashedChatSummary,
+} from "@/components/LabChatsScreen";
+
+/** Mismo plazo que el servidor (TRASH_RETENTION_MS en chat-threads.ts del
+ *  agente) y que lab-persist.ts — duplicado a propósito, ver el comentario
+ *  gemelo en ese archivo. Acá solo se usa para no MOSTRAR en la papelera algo
+ *  que ya venció pero que el `chatsRef` en memoria todavía no limpió (el
+ *  self-purge real ocurre al hidratar, en `parseLab`). */
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 import { waitForInitialSession } from "@/lib/auth/token";
 
 /**
@@ -796,6 +808,10 @@ export default function Laboratorio() {
     }
     for (const [key, t] of chatsRef.current) {
       if (!key.startsWith(`${pk}::`)) continue;
+      // Papelera (pedido de Jaime 2026-09-16): un chat trashed sigue viviendo
+      // en `chatsRef` (ver `deleteChat`), pero no es un chat "de verdad" para
+      // esta lista — tiene su propia sección en `listTrashedChatsForProject`.
+      if (t.status === "trashed") continue;
       if (t.messages.length === 0) continue;
       out.push({
         id: t.id,
@@ -812,6 +828,27 @@ export default function Laboratorio() {
       });
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  };
+
+  /** La papelera de un proyecto: chats trashed que no vencieron todavía (ver
+   *  TRASH_RETENTION_MS arriba). El chat EN FOCO nunca puede estar acá —
+   *  `deleteChat` lo saca de foco (`loadAnyOtherChat`) en el mismo golpe en
+   *  que lo marca trashed, así que a esta altura ya vive solo en `chatsRef`,
+   *  igual que cualquier otro chat de fondo. */
+  const listTrashedChatsForProject = (pk: string): LabTrashedChatSummary[] => {
+    const now = Date.now();
+    const out: LabTrashedChatSummary[] = [];
+    for (const [key, t] of chatsRef.current) {
+      if (!key.startsWith(`${pk}::`)) continue;
+      if (t.status !== "trashed") continue;
+      const trashedAt = t.trashedAt ?? t.updatedAt;
+      // Respaldo defensivo: si por lo que sea sigue en el mapa pasado el
+      // plazo (el self-purge real vive en `parseLab`, al hidratar), que al
+      // menos no se PINTE como si le quedara tiempo.
+      if (now - trashedAt > TRASH_RETENTION_MS) continue;
+      out.push({ id: t.id, title: t.title || deriveTitle(t.messages), trashedAt });
+    }
+    return out.sort((a, b) => b.trashedAt - a.trashedAt);
   };
 
   /** Reemplaza lo que hay en `messages`/`draft`/etc. por el chat `id` (o uno
@@ -857,10 +894,12 @@ export default function Laboratorio() {
 
   /** El primer chat del proyecto que encuentre en `chatsRef`, o uno nuevo en
    *  blanco si no queda ninguno — para no dejar el Laboratorio sin chat
-   *  activo tras borrar el que se estaba viendo. */
+   *  activo tras borrar el que se estaba viendo. Salta los trashed (ver
+   *  `deleteChat`): abrir un chat recién eliminado como "el siguiente chat"
+   *  sería resucitarlo por la puerta de atrás, sin pasar por `restoreChat`. */
   const loadAnyOtherChat = () => {
     for (const [key, t] of chatsRef.current) {
-      if (key.startsWith(`${projKey}::`)) {
+      if (key.startsWith(`${projKey}::`) && t.status !== "trashed") {
         loadChatIntoState(t.id, t);
         return;
       }
@@ -894,19 +933,51 @@ export default function Laboratorio() {
     schedulePersist();
   };
 
-  /** Swipe a la izquierda: eliminar. No cancela el turno en el servidor si
-   *  seguía vivo (igual que cerrar un tab en ChatPanel) — solo se deja de
-   *  escuchar y de guardar localmente. */
+  /**
+   * Swipe a la izquierda: eliminar. Ya NO lo borra de `chatsRef` — lo manda a
+   * la papelera (pedido de Jaime 2026-09-16: 30 días de gracia + restaurar,
+   * ver `restoreChat` y TRASH_RETENTION_MS). No cancela el turno en el
+   * servidor si seguía vivo (igual que cerrar un tab en ChatPanel): solo se
+   * deja de escuchar; el turno sigue corriendo huérfano hasta que cierre
+   * solo, y si Samu restaura el chat antes de que eso pase, se reengancha
+   * como cualquier chat de fondo (ver `resumePending`).
+   */
   const deleteChat = (id: string) => {
     pushRemoteDelete(id);
+    const trashedAt = Date.now();
     if (id === activeChatIdRef.current) {
+      // El chat EN FOCO no tiene entrada propia en `chatsRef` todavía (vive
+      // en los refs de arriba) — hay que crearla YA marcada trashed, antes
+      // de saltar a otro chat, o se perdería sin dejar rastro.
+      chatsRef.current.set(chatStorageKey(projKey, id), buildThread({ status: "trashed", trashedAt }));
       unfollowRef.current?.();
       unfollowRef.current = null;
       loadAnyOtherChat();
       pushRemoteActive(projKey, activeChatIdRef.current);
     } else {
-      chatsRef.current.delete(chatStorageKey(projKey, id));
+      const key = chatStorageKey(projKey, id);
+      const existing = chatsRef.current.get(key);
+      if (existing) chatsRef.current.set(key, { ...existing, status: "trashed", trashedAt });
     }
+    schedulePersist();
+    bumpChatsVersion();
+  };
+
+  /**
+   * Papelera → "Restaurar": vuelve el chat a `active` y lo deja donde
+   * cualquier chat de fondo vive (`chatsRef`, visible en la lista principal).
+   * A propósito NO lo abre de una — restaurar es "recuperarlo", no "seguir
+   * hablando ahí mismo"; Samu lo abre con un toque normal si quiere seguir.
+   * Si el id ya no existe (p. ej. se restauró desde otro dispositivo y este
+   * navegador nunca llegó a enterarse) no hace nada: no hay qué restaurar.
+   */
+  const restoreChat = (id: string) => {
+    const key = chatStorageKey(projKey, id);
+    const existing = chatsRef.current.get(key);
+    if (!existing || existing.status !== "trashed") return;
+    const { status: _status, trashedAt: _trashedAt, ...restored } = existing;
+    chatsRef.current.set(key, restored);
+    pushRemoteRestore(id);
     schedulePersist();
     bumpChatsVersion();
   };
@@ -1851,6 +1922,46 @@ export default function Laboratorio() {
     schedulePersist();
   };
 
+  /**
+   * Papelera cross-device (pedido de Jaime 2026-09-16): trae los chats
+   * eliminados en OTRO dispositivo con la misma cuenta, para que "Restaurar"
+   * no dependa de haber sido ESTE navegador el que los borró. Solo AGREGA lo
+   * que no se conoce localmente todavía — nunca pisa una entrada que ya está
+   * en `chatsRef` (activa o trashed), sea cual sea su estado acá: el mirror
+   * del servidor es un complemento, no la fuente de verdad de este
+   * navegador (mismo espíritu que `syncThreadsFromServer`, pero sin la
+   * lógica de "gana el más reciente" — un chat ya trashed no compite con
+   * nada, solo puede aparecer o no). Corre una sola vez al montar.
+   */
+  const syncTrashFromServer = async () => {
+    const remote = await fetchRemoteThreads(projKey, "trashed");
+    if (!remote) return;
+    let changed = false;
+    for (const meta of remote.threads) {
+      const key = chatStorageKey(projKey, meta.id);
+      if (chatsRef.current.has(key)) continue; // ya lo sabíamos, gana lo local
+      const full = await fetchRemoteThread(meta.id);
+      if (!full) continue;
+      chatsRef.current.set(key, {
+        ...full,
+        status: "trashed",
+        trashedAt: meta.deletedAt ?? meta.updatedAt,
+      });
+      changed = true;
+    }
+    // Sin este guardado, lo que se acaba de traer de otro dispositivo vive
+    // solo en `chatsRef` (memoria): si Samu cierra la pestaña antes de
+    // cualquier otra acción que dispare `schedulePersist` (mandar un mensaje,
+    // borrar, restaurar), este chat trashed desaparece de localStorage sin
+    // haber llegado a guardarse ni una vez, aunque ya se pintó en la
+    // Papelera. `syncThreadsFromServer` (arriba) sí lo hace — esto iguala el
+    // mismo cuidado para el mirror de la papelera.
+    if (changed) {
+      bumpChatsVersion();
+      schedulePersist();
+    }
+  };
+
   // Al montar: recuperar lo que quedó corriendo (equivalente a lo que
   // ChatPanel hace al abrir el dashboard). Al desmontar se cierra el stream
   // (no se cancela el turno: sigue vivo en el servidor) para no seguir
@@ -1867,7 +1978,10 @@ export default function Laboratorio() {
     // (sesión ya tibia, red local) esa ventana es de milisegundos y nunca se
     // nota; en un arranque frío de iPad es justo la ventana que se pierde.
     // Ver waitForInitialSession en lib/auth/token.ts para el porqué completo.
-    void waitForInitialSession().then(() => syncThreadsFromServer());
+    void waitForInitialSession().then(() => {
+      void syncThreadsFromServer();
+      void syncTrashFromServer();
+    });
     // El hilo inicial (hidratado de localStorage antes del primer render, ver
     // `initRef`) nunca pasa por `loadChatIntoState` — sin esto, reabrir la
     // app con una conversación larga arrancaba en el tope en vez del fondo.
@@ -2304,7 +2418,16 @@ export default function Laboratorio() {
           // mismo `waitForInitialSession` de por medio, por si el gesto pasa
           // justo en el arranque frío en el que el automático puede perder
           // la carrera — ver el comentario largo en syncThreadsFromServer.
-          onRefresh={() => waitForInitialSession().then(() => syncThreadsFromServer())}
+          // También refresca la papelera (syncTrashFromServer): el pull es
+          // "traeme lo último de mi cuenta", no solo los chats activos.
+          onRefresh={() =>
+            waitForInitialSession().then(() => {
+              void syncThreadsFromServer();
+              void syncTrashFromServer();
+            })
+          }
+          trashedChats={listTrashedChatsForProject(projKey)}
+          onRestore={restoreChat}
         />
       )}
       <div

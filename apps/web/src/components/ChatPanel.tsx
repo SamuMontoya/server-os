@@ -870,7 +870,7 @@ export function ChatPanel({
           // JUSTO bajo el saludo en vez de clavado al fondo del viewport.
           hideEmptyHint && empty
             ? "hidden"
-            : "hud-scroll-hide min-h-0 flex-1 space-y-6 overflow-y-auto pr-1"
+            : "hud-scroll-hide min-h-0 flex-1 space-y-6 overflow-y-auto overflow-x-hidden pr-1"
         }
       >
         {/* Con hero (home vacío) el saludo ya dice todo esto: repetirlo aquí
@@ -899,7 +899,7 @@ export function ChatPanel({
           if (m.role === "user") {
             return (
               <div key={i} className="flex justify-end">
-                <div className="max-w-[78%] rounded-lg border border-line bg-violet/10 px-3.5 py-2.5 text-base leading-relaxed whitespace-pre-wrap">
+                <div className="max-w-[78%] min-w-0 rounded-lg border border-line bg-violet/10 px-3.5 py-2.5 text-base leading-relaxed whitespace-pre-wrap wrap-anywhere">
                   {m.content}
                 </div>
               </div>

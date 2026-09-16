@@ -27,6 +27,16 @@
  * ver `CHATS_BATCH_SIZE` + IntersectionObserver más abajo), y 2) un buscador
  * por título que solo aparece una vez que la lista de verdad desborda el
  * contenedor y hace falta scrollear para encontrar algo.
+ *
+ * Papelera (pedido de Jaime 2026-09-16): swipe a la izquierda ya no borra un
+ * chat de una — lo manda a la papelera (`status: "trashed"` en LabThread, ver
+ * lab-persist.ts) con 30 días de gracia antes de que `laboratorio/page.tsx`
+ * lo purgue solo (mismo plazo que el servidor, ver TRASH_RETENTION_MS en
+ * chat-threads.ts del agente). Esta pantalla solo pinta la sección
+ * colapsable al fondo de la lista (cerrada por defecto: es un rincón de
+ * "por si acaso", no algo que se consulte seguido) con el tiempo restante de
+ * cada uno y el botón "Restaurar" — sordo, como el resto del componente, a
+ * cómo se calcula ese plazo o qué pasa al restaurar.
  */
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
@@ -38,6 +48,17 @@ import { OrbeIA } from "@/components/orbe/OrbeIA";
  *  monta cientos de filas de una: solo pinta de más cuando el "centinela"
  *  del fondo entra en pantalla (ver scroll infinito, abajo). */
 const CHATS_BATCH_SIZE = 24;
+
+/** Un chat en la papelera: alcanza con título + cuándo se borró — no lleva
+ *  `preview`/`running`/`unread` porque un chat trashed no se puede abrir, así
+ *  que ninguno de esos datos tiene dónde mostrarse. */
+export interface LabTrashedChatSummary {
+  id: string;
+  title: string;
+  /** `Date.now()` de cuando se eliminó — de ahí sale la cuenta regresiva de
+   *  30 días (ver `formatExpiry`) y el orden (más reciente primero). */
+  trashedAt: number;
+}
 
 export interface LabChatSummary {
   id: string;
@@ -69,6 +90,9 @@ interface Props {
    *  esperar o sospecha que algo quedó desactualizado. Opcional: sin él
    *  (pantallas de prueba) el gesto simplemente no hace nada. */
   onRefresh?: () => Promise<void> | void;
+  /** Vacío = no se pinta ninguna sección de papelera (ver `TrashSection`). */
+  trashedChats?: LabTrashedChatSummary[];
+  onRestore?: (id: string) => void;
 }
 
 /** Cuánto hay que arrastrar (px) antes de que soltar cuente como gesto,
@@ -102,6 +126,88 @@ function formatWhen(ts: number): string {
   const months = Math.floor(days / 30);
   if (months < 12) return `Hace ${months} mes${months === 1 ? "" : "es"}`;
   return `Hace ${Math.floor(months / 12)} a`;
+}
+
+/** Mismo plazo que `TRASH_RETENTION_MS` del servidor (chat-threads.ts del
+ *  agente) — duplicado a propósito: es una constante de UI (cuenta regresiva
+ *  visible), no lógica de negocio que deba importarse desde el backend. Si
+ *  algún día cambia el plazo, hay que tocar los dos lados (búscalo por este
+ *  comentario). */
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** "Se elimina hoy" / "Se elimina en 1 día" / "Se elimina en 12 días" — la
+ *  cuenta regresiva de cada fila de la papelera. Redondea hacia ARRIBA
+ *  (`Math.ceil`) para no decir "0 días" mientras todavía falta una fracción
+ *  de día real: es mejor pecar de conservador ("hoy") que prometer más
+ *  tiempo del que en verdad queda. */
+function formatExpiry(trashedAt: number): string {
+  const msLeft = trashedAt + TRASH_RETENTION_MS - Date.now();
+  const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+  if (daysLeft <= 0) return "Se elimina hoy";
+  if (daysLeft === 1) return "Se elimina en 1 día";
+  return `Se elimina en ${daysLeft} días`;
+}
+
+/**
+ * Sección colapsable al fondo de la lista con los chats eliminados —
+ * cerrada por defecto (pedido implícito de no ensuciar la vista principal
+ * con algo que se consulta poco). Cada fila es SOLO título + cuenta
+ * regresiva + botón "Restaurar": a diferencia de `SwipeableCard`, un chat
+ * trashed no se puede abrir (no hay turno ni mensajes que mostrar en esta
+ * pantalla — `laboratorio/page.tsx` ya lo sacó de `chatsRef` "en vivo"), así
+ * que no lleva gesto de swipe ni `onClick` propio.
+ */
+function TrashSection({
+  chats,
+  onRestore,
+}: {
+  chats: LabTrashedChatSummary[];
+  onRestore: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const sorted = useMemo(() => [...chats].sort((a, b) => b.trashedAt - a.trashedAt), [chats]);
+
+  if (sorted.length === 0) return null;
+
+  return (
+    <div className="lab-chats-trash">
+      <button
+        type="button"
+        className="lab-chats-trash-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls="lab-chats-trash-list"
+      >
+        <span className="lab-chats-trash-label">Papelera</span>
+        <span className="lab-chats-trash-count">{sorted.length}</span>
+        <span
+          className={`lab-chats-trash-chevron ${open ? "lab-chats-trash-chevron--open" : ""}`}
+          aria-hidden="true"
+        >
+          ▾
+        </span>
+      </button>
+      {open && (
+        <ul className="lab-chats-trash-list" id="lab-chats-trash-list">
+          {sorted.map((c) => (
+            <li key={c.id} className="lab-chats-trash-row">
+              <div className="lab-chats-trash-info">
+                <span className="lab-chats-trash-title">{c.title}</span>
+                <span className="lab-chats-trash-expiry">{formatExpiry(c.trashedAt)}</span>
+              </div>
+              <button
+                type="button"
+                className="lab-chats-trash-restore"
+                onClick={() => onRestore(c.id)}
+              >
+                Restaurar
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** Una card deslizable: izquierda = `onSwipeLeft` (eliminar). Debajo de la
@@ -245,7 +351,16 @@ const PULL_COMMIT_PX = 60;
  *  toda proporción. */
 const PULL_MAX_PX = 90;
 
-export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete, onRefresh }: Props) {
+export function LabChatsScreen({
+  chats,
+  activeId,
+  onClose,
+  onOpen,
+  onDelete,
+  onRefresh,
+  trashedChats,
+  onRestore,
+}: Props) {
   // Escape para salir. La ✕ propia de esta pantalla ya no existe (la
   // hamburguesa del Navbar hace de toggle), pero con teclado Escape sigue
   // siendo lo que uno espera de un role="dialog".
@@ -268,6 +383,11 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete, onR
   // sobre el orbe grande o el buscador, que están por fuera del scroll.
   // Atarlo solo a la lista lo dejaba mudo la mitad de las veces.
   const screenRef = useRef<HTMLDivElement | null>(null);
+  // Sin chats activos pero CON papelera (p. ej. se acaba de borrar el único
+  // chat que había): no cae en el estado "vacío" de abajo — ese mensaje
+  // ("Aún no hay chats aquí") sería falso mientras la papelera sí tiene algo
+  // que mostrar (y restaurar).
+  const trashed = trashedChats ?? [];
 
   // ── Pull-to-refresh ─────────────────────────────────────────────────
   // Deslizar hacia abajo desde el TOPE de la lista (scrollTop === 0) vuelve
@@ -449,7 +569,7 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete, onR
           "+" era duplicar los mismos dos controles en las mismas dos
           esquinas. El hueco de la barra lo reserva el padding-top de
           .lab-chats-screen. */}
-      {chats.length === 0 ? (
+      {chats.length === 0 && trashed.length === 0 ? (
         <div className="lab-chats-empty">
           <OrbeIA tam="132px" ojos ariaLabel="OS" />
           <p className="lab-chats-empty-title">Aún no hay chats aquí</p>
@@ -513,6 +633,10 @@ export function LabChatsScreen({ chats, activeId, onClose, onOpen, onDelete, onR
                 Sin resultados para “{query.trim()}”.
               </p>
             )}
+            {/* La papelera no se filtra por `query`: buscar es para encontrar
+                un chat con el que seguir hablando, no para escarbar en lo
+                que ya se eliminó. */}
+            <TrashSection chats={trashed} onRestore={onRestore ?? (() => {})} />
           </div>
         </>
       )}

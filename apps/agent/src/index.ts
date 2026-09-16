@@ -24,6 +24,7 @@ import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { registerVaultRoutes } from "./routes/vault.js";
 import { registerSystemRoutes } from "./routes/system.js";
 import { registerChatThreadsRoutes } from "./routes/chat-threads.js";
+import { purgeExpiredTrashedThreads } from "./chat-threads.js";
 
 const app = new Hono();
 
@@ -160,6 +161,11 @@ registerJob("presence-heartbeat", 30_000, pushPresence, () =>
 // Índice semántico del vault: por hash — si nada cambió, 0 llamadas a OpenAI.
 registerJob("vault-knowledge-sync", 10 * 60_000, syncVaultKnowledge, (r) =>
   r ? `${r.indexed} notas vectorizadas, ${r.removed} eliminadas (${r.scanned} escaneadas)` : null,
+);
+// Papelera de chats (migración 032): lo que lleva ahí más de 30 días se borra
+// de verdad. Cada hora alcanza de sobra — no es una cuenta regresiva fina.
+registerJob("chat-trash-purge", 60 * 60_000, () => purgeExpiredTrashedThreads(), (r) =>
+  r ? `${r.purged} chat(s) purgado(s) de la papelera` : null,
 );
 // Bind explícito: sin API key SOLO loopback (antes escuchaba en todas las
 // interfaces con la LAN sin auth); con key se abre a 0.0.0.0 para que otra

@@ -56,3 +56,4 @@ apps/agent/native/window-helper
 SOUL.md
 !docs/SOUL.example.md
 .build-logs/
+.vercel

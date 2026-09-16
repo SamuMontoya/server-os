@@ -30,7 +30,7 @@ export function OrquestadorView() {
   return (
     <div className="flex min-h-0 flex-1 gap-3">
       {/* ── Centro ───────────────────────────────────────────── */}
-      <section className="relative flex min-h-0 flex-1 flex-col items-center">
+      <section className="relative flex min-h-0 min-w-0 flex-1 flex-col items-center">
         <div
           className={`flex w-full min-h-0 flex-1 flex-col ${ws.tab === "consola" ? "" : "hidden"} max-w-[760px]`}
         >

@@ -108,7 +108,7 @@ export function MemoryView({ memories, online }: { memories: Memory[]; online: b
           )}
 
           {/* Resultados o memorias recientes */}
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+          <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pr-1">
             {hits === null ? (
               <>
                 <div className="mb-2">
@@ -157,8 +157,10 @@ export function MemoryView({ memories, online }: { memories: Memory[]; online: b
                           {h.created_at?.slice(0, 10) ?? ""}
                         </span>
                       </div>
-                      <p className="mt-1 text-xs font-medium text-text">{h.title}</p>
-                      <p className={`mt-0.5 text-xs text-text-dim ${open ? "" : "line-clamp-2"}`}>
+                      <p className="mt-1 text-xs font-medium text-text wrap-anywhere">{h.title}</p>
+                      <p
+                        className={`mt-0.5 text-xs text-text-dim wrap-anywhere ${open ? "" : "line-clamp-2"}`}
+                      >
                         {h.content}
                       </p>
                       {h.source === "vault" && (

@@ -19,6 +19,9 @@ export interface RemoteThreadMeta {
   model: string | null;
   sdkSessionId: string | null;
   pendingTurn: PendingLabTurn | null;
+  /** Papelera (migración 032 del agente) — ver ThreadMeta en chat-threads.ts. */
+  status: "active" | "trashed";
+  deletedAt: number | null;
 }
 
 interface RemoteThreadList {
@@ -33,9 +36,21 @@ interface RemoteFullThread extends RemoteThreadMeta {
   draft: string;
 }
 
-export async function fetchRemoteThreads(project: string): Promise<RemoteThreadList | null> {
+/**
+ * `status` (papelera, migración 032 del agente): "active" trae los chats de
+ * verdad (comportamiento de siempre, default); "trashed" trae la papelera de
+ * OTROS dispositivos de la misma cuenta — usado por `syncTrashFromServer` en
+ * laboratorio/page.tsx para que restaurar/ver lo eliminado no dependa de
+ * haber sido ESTE navegador el que lo borró.
+ */
+export async function fetchRemoteThreads(
+  project: string,
+  status: "active" | "trashed" = "active",
+): Promise<RemoteThreadList | null> {
   try {
-    const res = await hermesFetch(`/chat/threads?project=${encodeURIComponent(project)}`);
+    const res = await hermesFetch(
+      `/chat/threads?project=${encodeURIComponent(project)}&status=${status}`,
+    );
     if (!res.ok) return null;
     return (await res.json()) as RemoteThreadList;
   } catch {
@@ -91,8 +106,24 @@ export function pushRemoteThread(project: string, thread: LabThread): void {
   }).catch(() => {});
 }
 
+/** Ya NO borra de verdad del lado del servidor (ver migración 032 en
+ *  chat-threads.ts del agente): manda el chat a `trashed` con la hora del
+ *  borrado. Mismo fire-and-forget de siempre — lo local (`status: "trashed"`
+ *  en lab-persist.ts) manda la UI sin esperar a esta llamada. */
 export function pushRemoteDelete(id: string): void {
   void hermesFetch(`/chat/threads/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+}
+
+/** Papelera: saca un chat de `trashed` en el servidor. Igual de
+ *  fire-and-forget que `pushRemoteDelete` — si falla (sin red, sin sesión),
+ *  el chat sigue restaurado LOCALMENTE (lo que ve Samu) y el mirror del
+ *  servidor queda desincronizado hasta el próximo `pushRemoteThread` de ese
+ *  chat, exactamente la misma tolerancia a fallos que el resto de este
+ *  módulo. */
+export function pushRemoteRestore(id: string): void {
+  void hermesFetch(`/chat/threads/${encodeURIComponent(id)}/restore`, { method: "POST" }).catch(
+    () => {},
+  );
 }
 
 export function pushRemoteActive(project: string, chatId: string): void {

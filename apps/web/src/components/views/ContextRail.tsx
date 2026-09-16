@@ -59,7 +59,7 @@ function Row({
         <span className="block truncate text-sm text-text transition-colors group-enabled:group-hover:text-violet">
           {title}
         </span>
-        {sub && <span className="mt-0.5 block text-2xs text-text-faint">{sub}</span>}
+        {sub && <span className="mt-0.5 block truncate text-2xs text-text-faint">{sub}</span>}
       </span>
       {value != null && <span className="shrink-0 text-2xs text-text-dim">{value}</span>}
     </button>

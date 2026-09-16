@@ -50,7 +50,13 @@ export function TopBar() {
           <span
             className={`h-1.5 w-1.5 rounded-full ${online ? "bg-green shadow-[0_0_8px_var(--color-green)]" : "bg-red"}`}
           />
-          {online ? "En línea" : "Desconectado"}
+          {/* En una pantalla realmente angosta (~320px, el ancho de un iPhone SE
+              1ª gen) este texto + el resto del header ya no cabían junto al
+              rail de 60px: el header entero se salía un puñado de px por la
+              derecha sin dar scrollbar (contenido recortado e invisible, peor
+              que un scroll). Se esconde SOLO la etiqueta (el punto de estado
+              se queda) por debajo de ese ancho — nadie más lo nota. */}
+          <span className="max-[340px]:hidden">{online ? "En línea" : "Desconectado"}</span>
         </span>
         <SpeakToggle />
       </div>

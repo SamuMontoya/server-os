@@ -400,7 +400,7 @@ export function ClaudeTerminal({
 
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto rounded-sm bg-bg/60 p-2 font-mono text-xs leading-relaxed"
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto rounded-sm bg-bg/60 p-2 font-mono text-xs leading-relaxed"
       >
         {lines.length === 0 && status !== "running" && (
           <p
@@ -418,7 +418,7 @@ export function ClaudeTerminal({
         {lines.map((l, i) => {
           const st = STYLE[l.kind] ?? STYLE.raw;
           return (
-            <div key={i} className={`whitespace-pre-wrap break-words ${st.className}`}>
+            <div key={i} className={`whitespace-pre-wrap wrap-anywhere ${st.className}`}>
               {st.glyph && <span className="mr-1.5 opacity-80">{st.glyph}</span>}
               {l.text}
             </div>

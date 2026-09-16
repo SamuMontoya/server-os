@@ -1657,6 +1657,112 @@ html.lab-route body::after {
    poblado mientras corre (cae a "Pensando…" si `chat.preview` no tiene nada
    todavía, ver JSX), pero es solo texto — el avatar ya dice "esto sigue
    vivo". */
+
+/* ── Papelera (pedido de Jaime 2026-09-16) ────────────────────────────────
+   Sección colapsable al fondo de `.lab-chats-list` (mismo scroll que los
+   chats activos, ver LabChatsScreen.tsx: TrashSection no abre su propio
+   contenedor con scroll propio) con los chats eliminados y su cuenta
+   regresiva de 30 días. Cerrada por defecto: nunca compite en jerarquía
+   visual con la lista de chats de verdad. */
+.lab-chats-trash {
+  flex-shrink: 0;
+  margin-top: 8px;
+  /* Mismo filete que separa cada chatcard — la papelera es "una fila más"
+     de la lista, solo que colapsable. */
+  border-top: 1px solid rgba(55, 53, 47, 0.09);
+}
+.lab-chats-trash-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 44px;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.lab-chats-trash-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #908f8b;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.lab-chats-trash-count {
+  font-size: 11.5px;
+  color: #908f8b;
+  background: rgba(55, 53, 47, 0.07);
+  border-radius: 999px;
+  padding: 1px 7px;
+  min-width: 18px;
+  text-align: center;
+}
+.lab-chats-trash-chevron {
+  margin-left: auto;
+  color: #908f8b;
+  font-size: 11px;
+  transition: transform 0.15s ease-out;
+}
+.lab-chats-trash-chevron--open {
+  transform: rotate(180deg);
+}
+.lab-chats-trash-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 8px;
+}
+.lab-chats-trash-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px;
+  border-bottom: 1px solid rgba(55, 53, 47, 0.06);
+}
+.lab-chats-trash-row:last-child {
+  border-bottom: none;
+}
+.lab-chats-trash-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.lab-chats-trash-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #6f6e69;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Chat eliminado: título tachado — la misma señal visual que cualquier
+     app usa para "esto ya no está activo". */
+  text-decoration: line-through;
+  text-decoration-color: rgba(111, 110, 105, 0.4);
+}
+.lab-chats-trash-expiry {
+  font-size: 11px;
+  color: #a8a7a2;
+}
+.lab-chats-trash-restore {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2f6fed;
+  background: rgba(47, 111, 237, 0.08);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.lab-chats-trash-restore:hover {
+  background: rgba(47, 111, 237, 0.14);
+}
+
 /* Barra de input al pie del Laboratorio. Ya NO es `fixed` con un `bottom`
    calculado a mano: es el último hijo del papel con `margin-top: auto`, así
    que se pega al borde inferior de lo que el papel mida en cada momento.
@@ -1981,6 +2087,7 @@ html.lab-route.lab-kb .lab-inputbar {
   flex-direction: column;
   gap: 8px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 8px 20px 4px;
 }
 /* ── Chat en blanco ──────────────────────────────────────────────────────
@@ -2116,6 +2223,11 @@ html.lab-route.lab-kb .lab-inputbar {
   font-weight: 600;
   line-height: 1.3;
   color: #37352f;
+  /* Un nombre de archivo sin espacios (hash, "informe_final_v2.pdf") no
+     tenía dónde partirse: se quedaba todo en el renglón 1 y se cortaba a
+     media palabra en vez de repartirse en las 3 líneas permitidas. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
   /* Máximo 3 líneas y corta con "…" — igual que la card de Claude, que
      trunca el nombre en vez de estirar la card entera. */
   display: -webkit-box;
@@ -2550,6 +2662,14 @@ html.lab-route.lab-kb .lab-inputbar {
    auto-crecido a veces deja una línea más ancha que la caja durante el
    primer render; forzar el wrap aquí es la red de seguridad. */
 .chat-textarea {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+/* Mismo quirk, mismo parche: el composer de /laboratorio (`.lab-textarea`)
+   es el gemelo de `.chat-textarea` (mismo auto-resize, mismo `flex:1`) y le
+   faltaba esta protección — auditoría 2026-09-15/16 del bug de scroll
+   horizontal en el chat. */
+.lab-textarea {
   overflow-wrap: anywhere;
   word-break: break-word;
 }

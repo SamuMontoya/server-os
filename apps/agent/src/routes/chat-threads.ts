@@ -5,6 +5,7 @@ import {
   getThread,
   upsertThread,
   deleteThread,
+  restoreThread,
   getActiveChat,
   setActiveChat,
   type UpsertThreadInput,
@@ -18,15 +19,24 @@ import {
  * configurado) estas rutas responden "no hay nada"/no-op en vez de error: el
  * laboratorio sigue funcionando 100% local vía localStorage, que es su
  * comportamiento de siempre — esto es un mirror ADICIONAL, no un reemplazo.
+ *
+ * Papelera (migración 032): `DELETE /chat/threads/:id` ya no borra la fila,
+ * la manda a `trashed` (ver deleteThread). `?status=trashed` en el GET trae
+ * la papelera en vez de los activos, y `POST /chat/threads/:id/restore` la
+ * saca de ahí. La purga de los 30 días corre sola por el job en index.ts, sin
+ * ruta HTTP propia.
  */
 export function registerChatThreadsRoutes(app: Hono): void {
   app.get("/chat/threads", async (c) => {
     const userId = withUser(c).get("userId");
     const project = c.req.query("project") || "general";
+    const status = c.req.query("status") === "trashed" ? "trashed" : "active";
     if (!userId) return c.json({ threads: [], activeId: null });
     const [threads, activeId] = await Promise.all([
-      listThreadsMeta(userId, project),
-      getActiveChat(userId, project),
+      listThreadsMeta(userId, project, { status }),
+      // El "chat activo" solo es un concepto de la lista de activos — la
+      // papelera no tiene uno.
+      status === "active" ? getActiveChat(userId, project) : Promise.resolve(null),
     ]);
     return c.json({ threads, activeId });
   });
@@ -53,6 +63,13 @@ export function registerChatThreadsRoutes(app: Hono): void {
     if (!userId) return c.json({ ok: true });
     await deleteThread(userId, c.req.param("id"));
     return c.json({ ok: true });
+  });
+
+  app.post("/chat/threads/:id/restore", async (c) => {
+    const userId = withUser(c).get("userId");
+    if (!userId) return c.json({ ok: false });
+    const ok = await restoreThread(userId, c.req.param("id"));
+    return c.json({ ok });
   });
 
   app.put("/chat/active", async (c) => {
