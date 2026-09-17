@@ -118,7 +118,11 @@ export async function savePreference(key: string, value: unknown): Promise<strin
 
 export async function listPreferences(): Promise<Record<string, unknown>> {
   if (!supabase) return {};
-  const { data } = await supabase.from("preferences").select("key,value").limit(50);
+  const { data } = await supabase
+    .from("preferences")
+    .select("key,value")
+    .order("updated_at", { ascending: false })
+    .limit(50);
   return Object.fromEntries((data ?? []).map((r) => [r.key, r.value]));
 }
 
