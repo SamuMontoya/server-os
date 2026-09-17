@@ -25,7 +25,7 @@ function text(t: string) {
 
 const saveMemoryTool = tool(
   "save_memory",
-  `Guarda una memoria persistente en Supabase (compartida entre todas las máquinas de ${OWNER}). Úsala al aprender algo nuevo sobre ${OWNER}, sus proyectos o al terminar tareas significativas.`,
+  `Guarda una memoria persistente en Supabase (compartida entre todas las máquinas de ${OWNER}). Úsala al aprender algo nuevo sobre ${OWNER}, sus proyectos o al terminar tareas significativas. OJO: solo se recupera por búsqueda semántica/recencia del turno — NO garantiza aparecer en cada conversación futura. Si ${OWNER} pide recordar una REGLA DE COMPORTAMIENTO O FORMATO que aplica siempre (sin importar el tema), usa save_preference en vez de esta — esa sí se inyecta garantizado en cada turno.`,
   {
     content: z.string().describe("El contenido de la memoria, autocontenido y claro"),
     type: z.enum(MEMORY_TYPES).describe(`user=sobre ${OWNER}, feedback=correcciones, project=proyectos, reference=links/recursos, daily=diario, agent=aprendizajes propios`),
@@ -86,7 +86,7 @@ const searchMemoryTool = tool(
 
 const savePreferenceTool = tool(
   "save_preference",
-  `Guarda una preferencia de ${OWNER} (clave-valor). Ej: key='package_manager', value='pnpm'.`,
+  `Guarda una preferencia GLOBAL de ${OWNER} (clave-valor), que se inyecta garantizado en el system prompt de CADA turno futuro (a diferencia de save_memory, que depende de búsqueda semántica y puede no aparecer). Úsala para reglas de comportamiento/formato que valen siempre, sin scope de proyecto — ej: key='formato_tablas', value='siempre markdown, nunca ASCII'; key='package_manager', value='pnpm'. Si ${OWNER} dice "recuerda que...", "de ahora en adelante...", "siempre haz/no hagas X" sobre algo transversal, llama esta tool EN ESE MISMO TURNO, antes de responder que quedó anotado.`,
   { key: z.string(), value: z.string() },
   async ({ key, value }) => text(await savePreference(key, value)),
 );
