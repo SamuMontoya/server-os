@@ -517,25 +517,24 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     // `mcpUnavailable` arriba): cubre TANTO la sesión resumida tras un
     // restart COMO el primer turno de una sesión nueva — código, no prompt,
     // así no depende de que el modelo decida reintentar solo. Guardas:
-    // - `!deltasSeen && !finalText.trim()`: si el modelo ya alcanzó a
-    //   responder algo (aunque sea "no tengo acceso"), descartarlo y repetir
-    //   el turno entero sería peor que dejarlo cerrar normal — el usuario ya
-    //   se lo llevó puesto en pantalla. Esto es una limitación conocida: un
-    //   modelo que CONTESTA en vez de fallar en silencio no dispara el
-    //   retry. Mitigado en el prompt (system-prompt.ts) pidiéndole al modelo
-    //   que no responda nada si la tool no está antes de reintentar — este
-    //   código es el respaldo determinístico para cuando eso no alcanza.
+    // - `toolCalls === 0`: el modelo NUNCA intentó usar una herramienta
+    //   hermes — su respuesta es puro "no tengo acceso" / "tool no
+    //   disponible" / lo que sea. Si ya hizo un tool_call real (aunque
+    //   después falló), descartarlo y repetir el turno entero sería peor que
+    //   dejarlo cerrar normal. Con `toolCalls === 0` capturamos ambos casos:
+    //   respuesta silenciosa (deltasSeen=false) Y respuesta que HABLA del
+    //   problema (deltasSeen=true).
     // - `!opts._mcpRetried`: sin esta bandera, si el reintento CHOCA con el
     //   mismo problema (el proceso nuevo también arranca en la ventana de
     //   carrera), se reintentaría para siempre.
-    if (mcpUnavailable && !opts._mcpRetried && !deltasSeen && !finalText.trim()) {
+    if (mcpUnavailable && !opts._mcpRetried && toolCalls === 0) {
       setPresence("idle");
       emit({
         kind: "error",
         taskId: opts.taskId,
         detail: opts.resumeSessionId
           ? "[mcp] sesión resumida sin tools hermes — reintentando con sesión nueva"
-          : "[mcp] tools hermes no disponibles en este turno — reintentando una vez",
+          : "[mcp] tools hermes no disponibles — reintentando una vez",
       });
       return runAgentTurn({ ...opts, resumeSessionId: undefined, _mcpRetried: true });
     }
