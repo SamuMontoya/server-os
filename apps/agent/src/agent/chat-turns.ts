@@ -20,7 +20,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { escalateSession, nextTier, routeTurn, type Tier } from "./router.js";
-import type { ChatToolStep } from "@hermes/shared";
+import type { ChatToolStep, GeneratedFile } from "@hermes/shared";
 import { runAgentTurn, saveSdkSession } from "./session.js";
 import { appendTurn } from "../conversations.js";
 import { attachmentNote } from "../chat-attachments.js";
@@ -33,6 +33,7 @@ export type TurnEventKind =
   | "model" // el router eligió modelo (y puede volver a emitirse al escalar)
   | "delta" // texto
   | "tool" // paso agéntico
+  | "file" // el agente generó un archivo nuevo en el servidor
   | "retry" // se cayó y se está reintentando (el cliente lo puede decir)
   | "done"
   | "error"
@@ -44,6 +45,7 @@ export interface TurnEvent {
   kind: TurnEventKind;
   text?: string;
   tool?: ChatToolStep;
+  file?: GeneratedFile;
   sessionId?: string;
   /** En `model`: alias del modelo ("sonnet"|"haiku") y su esfuerzo. */
   model?: string;
@@ -78,6 +80,8 @@ export interface ChatTurn {
   /** Texto acumulado ÍNTEGRO — no se recorta nunca; es lo que ve quien vuelve. */
   text: string;
   steps: ChatToolStep[];
+  /** Archivos que el agente generó durante el turno (ver session.ts onFile). */
+  files: GeneratedFile[];
   sdkSessionId?: string;
   /**
    * Modelo con el que corre/corrió el turno. Vive en el turno (no solo en el
@@ -222,6 +226,7 @@ export interface TurnRunnerArgs {
   onDelta: (text: string) => void;
   onSession: (sessionId: string) => void;
   onTool: (step: ChatToolStep) => void;
+  onFile: (file: GeneratedFile) => void;
   onModel: (model: string, effort?: string) => void;
 }
 
@@ -346,6 +351,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       status: "running",
       text: "",
       steps: [],
+      files: [],
       attempts: 0,
       startedAt: deps.now(),
     };
@@ -447,6 +453,10 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             onTool: (tool) => {
               turn.steps.push(tool);
               emitEvent(turn.id, { kind: "tool", tool });
+            },
+            onFile: (file) => {
+              turn.files.push(file);
+              emitEvent(turn.id, { kind: "file", file });
             },
             onModel: (model, effort) => {
               // Sin cambio no se emite: el escalado repite la llamada y no vale
@@ -645,6 +655,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
       onDelta: args.onDelta,
       onSession: args.onSession,
       onTool: args.onTool,
+      onFile: args.onFile,
       onModel: args.onModel,
     });
     return {

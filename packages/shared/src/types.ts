@@ -283,6 +283,26 @@ export interface ChatToolStep {
   target?: string;
 }
 
+/**
+ * Un archivo que el agente generó en el servidor (Write, o un script/Bash
+ * que lo dejó en el cwd del turno) — feature pedida por Jaime 2026-09-17:
+ * "cuando se generen archivos nuevos... debe renderizarse una card con el
+ * nombre y el icono de descargar e iniciar la descarga automática".
+ *
+ * `id` es opaco (UUID de un registro en memoria del agente, ver
+ * `generated-files.ts`) — la ruta absoluta en disco NUNCA viaja al cliente
+ * (mismo principio que `ChatAttachment` en chat-attachments.ts: "regalar el
+ * layout del servidor" es un riesgo innecesario). El cliente arma la URL de
+ * descarga como `GET /files/download?id=<id>`.
+ */
+export interface GeneratedFile {
+  id: string;
+  /** Nombre de archivo (basename) — lo que se muestra en la card. */
+  name: string;
+  mime: string;
+  size: number;
+}
+
 export type TaskStatus = "running" | "done" | "error";
 
 export interface HermesTask {

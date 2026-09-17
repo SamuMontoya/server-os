@@ -24,6 +24,7 @@ import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { registerVaultRoutes } from "./routes/vault.js";
 import { registerSystemRoutes } from "./routes/system.js";
 import { registerChatThreadsRoutes } from "./routes/chat-threads.js";
+import { registerFilesRoutes } from "./routes/files.js";
 import { purgeExpiredTrashedThreads } from "./chat-threads.js";
 
 const app = new Hono();
@@ -140,6 +141,7 @@ registerClaudeRunsRoutes(app); // /claude/run*, /claude/sessions/*, /claude/limi
 registerKnowledgeRoutes(app); // /knowledge/*, /memories/recent
 registerVaultRoutes(app); // /projects*, /vault/doc
 registerChatThreadsRoutes(app); // /chat/threads*, /chat/active — continuidad entre dispositivos
+registerFilesRoutes(app); // /files/download — archivos que el agente generó
 
 // ── Boot ───────────────────────────────────────────────────────────────
 startSystemSampler(); // sampler de CPU (5s) para GET /system

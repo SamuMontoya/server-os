@@ -422,6 +422,7 @@ test("turnVisibleTo: solo choca cuando AMBOS lados tienen userId y no coinciden"
     status: "done",
     text: "hola",
     steps: [],
+    files: [],
     attempts: 1,
     startedAt: 0,
     ...(userId ? { userId } : {}),

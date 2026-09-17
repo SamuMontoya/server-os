@@ -42,7 +42,13 @@ const ALLOWED_WRITE_ROOTS = [
   resolve(HOME, "server-os"),
 ].filter(Boolean);
 
-function pathAllowed(p: string): boolean {
+/**
+ * Exportada (además de usarse acá dentro) para `generated-files.ts`: la
+ * detección de archivos generados necesita el MISMO criterio de "ruta
+ * confiable" que ya gobierna qué puede escribir Write/Edit — no un segundo
+ * criterio que pueda divergir con el tiempo.
+ */
+export function pathAllowed(p: string): boolean {
   const abs = resolve(p.startsWith("~") ? p.replace("~", HOME) : p);
   return ALLOWED_WRITE_ROOTS.some((root) => abs.startsWith(root + "/") || abs === root);
 }

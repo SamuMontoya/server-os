@@ -1,12 +1,15 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
-import type { ChatToolStep, HermesTask } from "@hermes/shared";
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+import type { ChatToolStep, GeneratedFile, HermesTask } from "@hermes/shared";
 import { env } from "../env.js";
 import { emit } from "../events.js";
 import { setPresence } from "../presence.js";
 import { supabase } from "../supabase.js";
 import { buildTurnContext, systemPromptFor } from "./system-prompt.js";
 import { checkTool } from "./guardrails.js";
+import { registerGeneratedFile } from "../generated-files.js";
 import { hermesMcpServer, HERMES_TOOL_NAMES } from "./tools.js";
 import {
   TIERS,
@@ -87,6 +90,12 @@ export interface RunTurnOptions {
   /** Avisa cada tool_use del turno (la consola los pinta como pasos). */
   onTool?: (step: ChatToolStep) => void;
   /**
+   * Avisa cada archivo NUEVO que el agente dejó en disco (Write directo, o
+   * un Bash que generó algo en el cwd del turno) — la consola lo pinta como
+   * card de descarga. Ver `generated-files.ts` para el registro id→ruta.
+   */
+  onFile?: (file: GeneratedFile) => void;
+  /**
    * Avisa QUÉ modelo va a correr este turno, en cuanto el router lo decide.
    * Se dispara otra vez en el escalado (la recursión vuelve a pasar por aquí),
    * así que el cliente ve el salto de esfuerzo tal como pasa de verdad.
@@ -123,6 +132,61 @@ function toolTarget(input: Record<string, unknown>): string {
     if (typeof v === "string" && v.trim()) return v.trim().slice(0, 120);
   }
   return "";
+}
+
+// ── Detección de archivos generados (onFile) ────────────────────────────
+//
+// `Write` es fácil: el input TRAE la ruta exacta (input.file_path), nunca
+// hay que adivinar. `Bash` es el caso difícil — un `pandoc informe.md -o
+// informe.pdf` o un script propio no dejan ninguna señal estructurada, así
+// que la única forma barata de detectarlo sin parsear el comando a ciegas
+// es un snapshot del cwd ANTES y DESPUÉS de la llamada, y comparar. Acotado
+// a propósito: solo el cwd del turno (no recursivo — evita el costo/riesgo
+// de escanear un repo entero), solo archivos (no directorios), y solo
+// extensiones de "entregable" (SAFE_FILE_EXTENSIONS) — un .ts/.py/.js que
+// cambió porque el agente edita código es la inmensa mayoría de los
+// side-effects de Bash, y spamear una card por CADA uno sería ruido, no
+// una feature. Un archivo se cuenta como "nuevo" si el nombre no estaba
+// antes O si su mtime cambió (para agarrar el caso real de "regenera el
+// PDF" sobre un archivo que ya existía).
+const SAFE_FILE_EXTENSIONS = new Set([
+  ".pdf",
+  ".docx",
+  ".pptx",
+  ".xlsx",
+  ".csv",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".svg",
+  ".mp4",
+  ".mp3",
+  ".zip",
+  ".json",
+  ".txt",
+  ".md",
+  ".html",
+  ".ics",
+]);
+
+/** name → mtimeMs de los archivos "entregables" en el primer nivel de `dir`. */
+async function snapshotDeliverables(dir: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name.startsWith(".")) continue;
+      const ext = entry.name.slice(entry.name.lastIndexOf(".")).toLowerCase();
+      if (!SAFE_FILE_EXTENSIONS.has(ext)) continue;
+      const info = await stat(join(dir, entry.name)).catch(() => null);
+      if (info) out.set(entry.name, info.mtimeMs);
+    }
+  } catch {
+    // cwd inexistente/sin permiso: no hay nada que detectar, no es un error.
+  }
+  return out;
 }
 
 export interface RunTurnResult {
@@ -261,6 +325,23 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
    * abajo cubre AMBOS casos (session.mcpUnavailable), no solo el resume.
    */
   let mcpUnavailable = false;
+  /**
+   * Snapshots pendientes para detectar archivos generados por `Bash` (ver
+   * `snapshotDeliverables` abajo), correlacionados por el `id` REAL del
+   * tool_use — el mismo que el SDK pone en `tool_result.tool_use_id` — NO
+   * por posición/orden de llegada.
+   *
+   * Encontrado en auditoría adversaria (2026-09-17): una cola FIFO
+   * posicional asume que los tool_result llegan en el MISMO orden que sus
+   * tool_use, pero el propio SDK documenta que "PostToolUse may run
+   * concurrently for parallel tool calls" — si el modelo dispara Bash +
+   * otra tool en el mismo turno y la otra resuelve primero, un `.shift()`
+   * posicional saca el snapshot EQUIVOCADO: corre el diff antes de que Bash
+   * termine (falso negativo) o compara contra el cwd de una tool que no
+   * tiene nada que ver. Correlacionar por id es correcto sin importar el
+   * orden real de resolución.
+   */
+  const pendingBashSnapshots = new Map<string, Promise<Map<string, number>>>();
 
   setPresence("working", opts.prompt.slice(0, 120));
 
@@ -426,6 +507,23 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
               detail: JSON.stringify(input).slice(0, 300),
             });
             opts.onTool?.({ name: block.name as string, target: toolTarget(input) });
+
+            // Write: la ruta viene EXACTA en el input, sin adivinar nada.
+            if (block.name === "Write" && typeof input.file_path === "string") {
+              void registerGeneratedFile(input.file_path).then((file) => {
+                if (file) opts.onFile?.(file);
+              });
+            }
+            // Bash: snapshot ANTES del cwd del turno, guardado bajo el id DE
+            // ESTE tool_use — el diff con el snapshot de DESPUÉS pasa cuando
+            // llegue el tool_result con el MISMO tool_use_id (ver el bloque
+            // `m.type === "user"` más abajo), nunca por posición.
+            if (block.name === "Bash" && typeof block.id === "string") {
+              pendingBashSnapshots.set(
+                block.id,
+                snapshotDeliverables(opts.cwd || env.VAULT_PATH || process.cwd()),
+              );
+            }
           }
         }
         continue;
@@ -447,6 +545,39 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
               taskId: opts.taskId,
               detail: raw.slice(0, 200),
             });
+
+            // Cierra el par con el tool_use que le corresponde POR ID (ver el
+            // comentario de `pendingBashSnapshots` arriba — nunca por orden
+            // de llegada). Si era un Bash, compara contra el snapshot de
+            // ANTES — lo que sea nuevo o tenga mtime distinto es un archivo
+            // generado.
+            const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+            const before = toolUseId ? pendingBashSnapshots.get(toolUseId) : undefined;
+            if (toolUseId) pendingBashSnapshots.delete(toolUseId);
+            if (before) {
+              const cwd = opts.cwd || env.VAULT_PATH || process.cwd();
+              void before.then(async (beforeMap) => {
+                const afterMap = await snapshotDeliverables(cwd);
+                for (const [name, mtime] of afterMap) {
+                  if (beforeMap.get(name) === mtime) continue;
+                  // Asentado: un Bash puede lanzar un proceso que sigue
+                  // escribiendo tras "terminar" (& en background, un
+                  // conversor tipo soffice/ffmpeg) — comparar el tamaño dos
+                  // veces con una pausa corta evita registrar (y ofrecer para
+                  // descarga) un archivo a medio escribir. No es una garantía
+                  // absoluta, pero cubre el caso común sin bloquear el turno
+                  // más que unos ms.
+                  const path = join(cwd, name);
+                  const first = await stat(path).catch(() => null);
+                  if (!first) continue;
+                  await new Promise((r) => setTimeout(r, 300));
+                  const second = await stat(path).catch(() => null);
+                  if (!second || second.size !== first.size || second.mtimeMs !== first.mtimeMs) continue;
+                  const file = await registerGeneratedFile(path);
+                  if (file) opts.onFile?.(file);
+                }
+              });
+            }
           }
         }
         continue;
