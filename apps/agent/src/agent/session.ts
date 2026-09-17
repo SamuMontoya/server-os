@@ -66,6 +66,12 @@ export interface RunTurnOptions {
   precargarContexto?: boolean;
   /** Interno: marca el reintento del escalado para no reintentar en bucle. */
   _escalated?: boolean;
+  /**
+   * Interno: marca que este turno YA reintentó una vez por tools hermes no
+   * disponibles (ver `mcpUnavailable` más abajo) — evita bucle infinito si el
+   * segundo intento choca con el mismo problema.
+   */
+  _mcpRetried?: boolean;
   taskId?: string;
   /** Slug del proyecto en foco: centra el system prompt en él. */
   project?: string;
@@ -241,19 +247,20 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   let usage: TurnUsage | undefined;
   let deltasSeen = false;
   /**
-   * Detectado en vivo (2026-09-15, ver diagnóstico en la conversación de
-   * ese día): una sesión RESUMIDA (`opts.resumeSessionId`) puede quedar
-   * permanentemente sin acceso a ninguna mcp__hermes__* tool si el proceso
-   * @hermes/agent murió a mitad de esa sesión (SIGKILL de un restart,
-   * OOM del cgroup) y luego se resume su transcript. A diferencia de la
-   * carrera de arranque (que se autorresuelve en el siguiente intento), esto
-   * NO se autorresuelve reintentando la MISMA sesión — el CLI nunca vuelve a
-   * negociar las capacidades MCP para un resume. Se comprobó en producción:
-   * 3 llamadas seguidas a distintas tools mcp__hermes__* fallaron todas con
-   * "No such tool available" en la MISMA sesión resumida, incluso con 20s de
-   * espera real entre medias.
+   * Detectado en vivo (2026-09-15, sesión resumida tras un restart) Y
+   * confirmado de nuevo el 2026-09-17 con e2e reales: NO es solo un problema
+   * de sesiones RESUMIDAS. 4/4 turnos con sesión NUEVA (sin resume, primer
+   * turno) fallaron igual con "No such tool available: mcp__hermes__" — el
+   * modelo respondía "no tengo acceso" o incluso "OK" sin haber llamado la
+   * tool. La instrucción de system-prompt.ts ("reintenta esa MISMA llamada
+   * una vez, en silencio") es de PROMPT, no de código: depende de que el
+   * modelo decida reintentar, y en la práctica no lo hace de forma
+   * confiable. Antes esta bandera solo se armaba (y solo importaba) con
+   * `opts.resumeSessionId` puesto — un turno fresco nunca la disparaba.
+   * Ahora se arma siempre que el tool_result trae el error, y el retry de
+   * abajo cubre AMBOS casos (session.mcpUnavailable), no solo el resume.
    */
-  let mcpStaleResume = false;
+  let mcpUnavailable = false;
 
   setPresence("working", opts.prompt.slice(0, 120));
 
@@ -432,8 +439,8 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
               typeof block.content === "string"
                 ? block.content
                 : JSON.stringify(block.content ?? "");
-            if (opts.resumeSessionId && /No such tool available: mcp__hermes__/.test(raw)) {
-              mcpStaleResume = true;
+            if (/No such tool available: mcp__hermes__/.test(raw)) {
+              mcpUnavailable = true;
             }
             emit({
               kind: "tool_result",
@@ -506,21 +513,31 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
       }
     }
 
-    // MCP de "hermes" muerto para ESTA sesión resumida (ver el comentario
-    // largo de `mcpStaleResume` arriba): mismo remedio que el catch de abajo
-    // para "No conversation found" — sesión nueva, sin resume. Se limita a
-    // cuando el modelo TODAVÍA no dijo nada real (`!deltasSeen && !finalText`):
-    // si ya alcanzó a responder algo coherente pese al tropiezo de la tool,
-    // descartarlo y repetir el turno entero sería peor que dejarlo cerrar
-    // normal — el usuario ya se lo llevó puesto en pantalla.
-    if (mcpStaleResume && opts.resumeSessionId && !deltasSeen && !finalText.trim()) {
+    // MCP de "hermes" no disponible en ESTE turno (ver el comentario largo de
+    // `mcpUnavailable` arriba): cubre TANTO la sesión resumida tras un
+    // restart COMO el primer turno de una sesión nueva — código, no prompt,
+    // así no depende de que el modelo decida reintentar solo. Guardas:
+    // - `!deltasSeen && !finalText.trim()`: si el modelo ya alcanzó a
+    //   responder algo (aunque sea "no tengo acceso"), descartarlo y repetir
+    //   el turno entero sería peor que dejarlo cerrar normal — el usuario ya
+    //   se lo llevó puesto en pantalla. Esto es una limitación conocida: un
+    //   modelo que CONTESTA en vez de fallar en silencio no dispara el
+    //   retry. Mitigado en el prompt (system-prompt.ts) pidiéndole al modelo
+    //   que no responda nada si la tool no está antes de reintentar — este
+    //   código es el respaldo determinístico para cuando eso no alcanza.
+    // - `!opts._mcpRetried`: sin esta bandera, si el reintento CHOCA con el
+    //   mismo problema (el proceso nuevo también arranca en la ventana de
+    //   carrera), se reintentaría para siempre.
+    if (mcpUnavailable && !opts._mcpRetried && !deltasSeen && !finalText.trim()) {
       setPresence("idle");
       emit({
         kind: "error",
         taskId: opts.taskId,
-        detail: "[mcp] sesión resumida sin tools hermes — reintentando con sesión nueva",
+        detail: opts.resumeSessionId
+          ? "[mcp] sesión resumida sin tools hermes — reintentando con sesión nueva"
+          : "[mcp] tools hermes no disponibles en este turno — reintentando una vez",
       });
-      return runAgentTurn({ ...opts, resumeSessionId: undefined });
+      return runAgentTurn({ ...opts, resumeSessionId: undefined, _mcpRetried: true });
     }
   } catch (err) {
     // Resume de una sesión SDK que ya no existe (transcript limpiado o CLI
