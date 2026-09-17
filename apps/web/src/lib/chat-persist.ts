@@ -73,16 +73,48 @@ export const SCHEMA_VERSION = 1;
 const MAX_PROJECTS = 6;
 const MAX_TABS_PER_PROJECT = 8;
 const MAX_MESSAGES_PER_TAB = 60;
-/** Un mensaje larguísimo (un volcado de logs) no puede llevarse la cuota. */
-const MAX_CHARS_PER_MESSAGE = 12_000;
+/**
+ * Un mensaje larguísimo (un volcado de logs) no puede llevarse la cuota.
+ *
+ * Bug real (2026-09-17, reporte de Jaime en jaime-os — gemelo de este
+ * archivo): "las palabras quedan incompletas — en la segunda queda 'herr'
+ * en vez de 'herramienta' y dice '[…recortado]'". Causa raíz: este tope
+ * era 12.000 — muy por debajo de un guión de clase completo (diapositivas
+ * + notas del presentador, que Jaime pide COMPLETAS por SOP) que fácil
+ * pasa esa marca, y el corte era un `slice()` ciego a mitad de carácter.
+ * Subido a 10× (120.000 ≈ 15% del presupuesto total `MAX_BYTES` de abajo,
+ * deja margen de sobra para el resto de la conversación) y el corte ahora
+ * respeta el borde de palabra (ver `cutAtWordBoundary`) — sigue siendo un
+ * recorte con pérdida si de verdad se pasa, pero ya no mutila una palabra
+ * a la mitad. Mismo fix en jaime-os/src/lib/chat-persist.ts.
+ */
+const MAX_CHARS_PER_MESSAGE = 120_000;
 /** Techo duro del blob. Por encima se recorta más y se reintenta. */
-const MAX_BYTES = 900_000;
+// Subido de 900k a 2M junto con MAX_CHARS_PER_MESSAGE (auditoría adversaria
+// 2026-09-17): sin esto, unos pocos mensajes largos disparaban el cap ladder
+// de abajo directo al escalón más chico — mismo fix en jaime-os.
+const MAX_BYTES = 2_000_000;
 /** Días sin tocar un proyecto → no vale la pena rehidratarlo. */
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
+/**
+ * Corta `text` a lo sumo en `max` caracteres, retrocediendo hasta el último
+ * espacio/salto de línea dentro de una ventana razonable (200 caracteres)
+ * para no partir una palabra por la mitad. Si no hay ningún espacio cerca
+ * (una sola "palabra" gigantesca, ej. un hash o una URL larguísima) se
+ * rinde y corta tal cual — preferible a arrastrar de más.
+ */
+function cutAtWordBoundary(text: string, max: number): string {
+  const slice = text.slice(0, max);
+  const ventana = slice.slice(-200);
+  const espacio = Math.max(ventana.lastIndexOf(" "), ventana.lastIndexOf("\n"));
+  if (espacio === -1) return slice;
+  return slice.slice(0, slice.length - 200 + espacio);
+}
+
 function trimMessage(m: ChatMessage): ChatMessage {
   if (m.content.length <= MAX_CHARS_PER_MESSAGE) return m;
-  return { ...m, content: `${m.content.slice(0, MAX_CHARS_PER_MESSAGE)}\n\n[…recortado]` };
+  return { ...m, content: `${cutAtWordBoundary(m.content, MAX_CHARS_PER_MESSAGE)}\n\n[…recortado]` };
 }
 
 /**
@@ -134,7 +166,7 @@ export function serializeChat(
   let raw = JSON.stringify(payload);
   // Todavía muy grande: se recorta más fuerte antes de rendirse. Perder los
   // mensajes viejos es mejor que no guardar nada.
-  for (const cap of [30, 12, 4]) {
+  for (const cap of [45, 30, 20, 12, 6]) {
     if (raw.length <= MAX_BYTES) break;
     payload.byProject = Object.fromEntries(
       Object.entries(payload.byProject).map(([project, state]) => [

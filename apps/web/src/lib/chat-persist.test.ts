@@ -93,12 +93,34 @@ test("recortar mensajes corre los pasos con ellos", () => {
   assert.deepEqual(trimmed.steps[3], [{ name: "B", target: "" }], "y el que queda se recoloca");
 });
 
-test("un mensaje gigante se recorta en vez de tirar la cuota", () => {
-  const t = tab({ messages: [{ role: "assistant", content: "x".repeat(50_000) }] });
+test("un mensaje gigante (volcado de logs, sin espacios) se recorta en vez de tirar la cuota", () => {
+  const t = tab({ messages: [{ role: "assistant", content: "x".repeat(500_000) }] });
   const back = roundTrip({ general: state([t]) })!;
   const content = back.general.tabs[0].messages[0].content;
-  assert.ok(content.length < 20_000, `quedó en ${content.length}`);
+  assert.ok(content.length < 130_000, `quedó en ${content.length}`);
   assert.match(content, /recortado/);
+});
+
+// Bug real (2026-09-17, gemelo de jaime-os/src/lib/chat-persist.test.ts): un
+// guión de clase completo (~80.000 caracteres, muy por debajo del viejo tope
+// de 12.000) llegaba MUTILADO a mitad de palabra tras cualquier recarga.
+test("un guión largo pero realista (80.000 caracteres) NO se recorta", () => {
+  const guion = "La palabra herramienta aparece muchas veces. ".repeat(1_740); // ~80.5k
+  const t = tab({ messages: [{ role: "assistant", content: guion }] });
+  const back = roundTrip({ general: state([t]) })!;
+  const content = back.general.tabs[0].messages[0].content;
+  assert.equal(content, guion, "no debió tocarse: está bajo el tope nuevo");
+});
+
+test("cuando SÍ hace falta recortar, el corte respeta el borde de palabra (no parte 'herramienta' en 'herr')", () => {
+  const relleno = "x ".repeat(59_998); // 119.996 caracteres, termina en espacio
+  const contenido = `${relleno}herramienta útil para terminar el guión`;
+  const t = tab({ messages: [{ role: "assistant", content: contenido }] });
+  const back = roundTrip({ general: state([t]) })!;
+  const content = back.general.tabs[0].messages[0].content;
+  assert.match(content, /recortado/);
+  const sinMarcador = content.replace(/\n\n\[…recortado\]$/, "");
+  assert.doesNotMatch(sinMarcador, /herr$/, "no debe cortar 'herramienta' a mitad (bug real reportado)");
 });
 
 test("una conversación enorme se guarda igual, recortada", () => {

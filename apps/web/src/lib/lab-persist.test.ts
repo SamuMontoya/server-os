@@ -262,6 +262,35 @@ test("una conversación enorme se recorta en vez de no guardarse", () => {
   assert.equal(out!.byChat[key].messages.at(-1)?.id, 399);
 });
 
+// Bug real (2026-09-17, gemelo de jaime-os/src/lib/lab-persist.test.ts): un
+// guión de clase completo fácil supera los 12.000 caracteres que tenía este
+// tope antes, y el corte partía palabras a mitad.
+test("un guión largo pero realista (80.000 caracteres) NO se recorta", () => {
+  const key = chatStorageKey("general", "c1");
+  const guion = "La palabra herramienta aparece muchas veces. ".repeat(1_740); // ~80.5k
+  const h = hilo("c1", {
+    messages: [{ id: 1, role: "assistant", content: "", blocks: [{ kind: "text", text: guion }] }],
+  });
+  const out = ida({ [key]: h }, { general: "c1" });
+  const bloque = out?.byChat[key].messages[0].blocks?.[0];
+  assert.ok(bloque && bloque.kind === "text");
+  assert.equal((bloque as { kind: "text"; text: string }).text, guion, "no debió tocarse");
+});
+
+test("cuando SÍ hace falta recortar, el corte respeta el borde de palabra (no parte 'herramienta' en 'herr')", () => {
+  const key = chatStorageKey("general", "c1");
+  const relleno = "x ".repeat(59_998); // 119.996 caracteres
+  const texto = `${relleno}herramienta útil para terminar el guión`;
+  const h = hilo("c1", {
+    messages: [{ id: 1, role: "assistant", content: "", blocks: [{ kind: "text", text: texto }] }],
+  });
+  const out = ida({ [key]: h }, { general: "c1" });
+  const bloque = out?.byChat[key].messages[0].blocks?.[0] as { kind: "text"; text: string };
+  assert.match(bloque.text, /recortado/);
+  const sinMarcador = bloque.text.replace(/\n\n\[…recortado\]$/, "");
+  assert.doesNotMatch(sinMarcador, /herr$/, "no debe cortar 'herramienta' a mitad (bug real reportado)");
+});
+
 test("un chat activo no se descarta por cuota aunque sea el más viejo", () => {
   const activeKey = chatStorageKey("general", "viejo-activo");
   const byChat: Record<string, LabThread> = {
