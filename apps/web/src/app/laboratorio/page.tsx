@@ -2179,6 +2179,83 @@ export default function Laboratorio() {
     };
   }, []);
 
+  /** Ids de turno que YA tienen una consulta de fondo en vuelo — evita
+   *  pisar una respuesta con dos fetches del mismo turno si el tick de abajo
+   *  dispara antes de que el anterior vuelva. */
+  const bgTurnCheckInFlightRef = useRef<Set<string>>(new Set());
+
+  /**
+   * El chat EN FOCO se reengancha con `follow`/`resumePending` (arriba), pero
+   * un chat de FONDO con un turno corriendo (`pendingTurn`, dejado ahí por
+   * `saveActiveIntoMap` al cambiar de chat) no tenía NADA que lo siguiera: su
+   * `updatedAt` se quedaba congelado en el momento del cambio, así que aunque
+   * el turno terminara del otro lado la fila nunca pasaba a "sin leer" (fondo
+   * gris) — quedaba viéndose "en curso" para siempre hasta que Samu la
+   * reabriera a mano (pedido de Jaime 2026-09-17: "cuando termina el fondo
+   * debe cambiar a gris").
+   *
+   * Este tick (cada 6s) barre los chats de fondo del proyecto actual con un
+   * turno pendiente y pregunta su estado sin abrir stream (`fetchTurnResilient`
+   * con un solo intento — ya se reintenta solo en el próximo tick, no hace
+   * falta la escalera de reintentos completa). Si sigue "running" o la
+   * consulta fue inconclusa, no toca nada. Si terminó (o el turno ya no
+   * existe), vuelca el texto final en el último mensaje del asistente, limpia
+   * `pendingTurn` y pone `updatedAt = Date.now()` — eso es lo único que hace
+   * falta para que `listChatsForProject` marque `unread: true` en el próximo
+   * repintado (`bumpChatsVersion`).
+   */
+  const checkBackgroundTurns = () => {
+    for (const [key, t] of chatsRef.current) {
+      if (!key.startsWith(`${projKey}::`)) continue;
+      if (t.status === "trashed") continue;
+      if (t.id === activeChatIdRef.current) continue; // el activo ya tiene su propio `follow`
+      const pending = t.pendingTurn;
+      if (!pending || bgTurnCheckInFlightRef.current.has(pending.id)) continue;
+      bgTurnCheckInFlightRef.current.add(pending.id);
+      void fetchTurnResilient(pending.id, pending.seq, 1)
+        .then((st) => {
+          bgTurnCheckInFlightRef.current.delete(pending.id);
+          if (st === null) return; // inconcluso: se reintenta en el próximo tick
+          // Releer por si el chat cambió (se abrió, se borró) mientras esperábamos.
+          const current = chatsRef.current.get(key);
+          if (!current || current.pendingTurn?.id !== pending.id) return;
+          if (st !== "not-found" && st.status === "running") {
+            // Sigue vivo: solo refresca el cursor para el próximo tick.
+            chatsRef.current.set(key, { ...current, pendingTurn: { id: pending.id, seq: st.seq } });
+            return;
+          }
+          const messages = [...current.messages];
+          const lastIdx = messages.length - 1;
+          const last = messages[lastIdx];
+          if (last?.role === "assistant") {
+            if (st === "not-found") {
+              messages[lastIdx] = {
+                ...last,
+                blocks: [
+                  ...(last.blocks ?? []),
+                  { kind: "text" as const, text: "⚠ el agente se reinició a mitad de esta respuesta." },
+                ],
+              };
+            } else if (st.text) {
+              messages[lastIdx] = { ...last, blocks: [{ kind: "text" as const, text: st.text }] };
+            }
+          }
+          chatsRef.current.set(key, { ...current, messages, pendingTurn: undefined, updatedAt: Date.now() });
+          bumpChatsVersion();
+          schedulePersist();
+        })
+        .catch(() => {
+          bgTurnCheckInFlightRef.current.delete(pending.id);
+        });
+    }
+  };
+
+  useEffect(() => {
+    const iv = window.setInterval(checkBackgroundTurns, 6000);
+    return () => window.clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projKey]);
+
   // Persistencia: guarda tras cada cambio visible, agrupado (escribir en cada
   // token del stream sería absurdo). Lo importante es que el turno cerrado se
   // guarde ya — de eso se encargan los `schedulePersist()` explícitos.

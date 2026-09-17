@@ -1581,7 +1581,12 @@ html.lab-route body::after {
    gana sobre el `transparent` de arriba: misma especificidad, gana el que
    aparece último. */
 .lab-chatcard--idle {
-  background: rgba(55, 53, 47, 0.05);
+  /* 0.05 (pedido original) resultaba casi imperceptible sobre el blanco de
+     `.lab-chats-screen` — Jaime reportó 2026-09-17 que "no se ve" el gris de
+     no leído. Subido a 0.10: sigue siendo un fondo sutil (no compite con el
+     rojo de "Eliminar" ni con el título en negro de `--active`), pero ya se
+     distingue a simple vista contra una fila blanca de verdad. */
+  background: rgba(55, 53, 47, 0.1);
 }
 /* ── Avatar líder de la fila ──────────────────────────────────────────────
    Pedido de Samu 2026-09-07: antes había DOS señales de "corriendo" (un
