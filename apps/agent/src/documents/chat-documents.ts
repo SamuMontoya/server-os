@@ -102,7 +102,10 @@ export interface ChatDocRow {
  */
 export interface IngestDeps {
   extractText: (buf: Buffer, mimeType: string, name: string) => Promise<string>;
-  embedBatch: (texts: string[]) => Promise<(number[] | null)[]>;
+  embedBatch: (
+    texts: string[],
+    onProgress?: (done: number, total: number) => void,
+  ) => Promise<(number[] | null)[]>;
   /** null = insert OK; string = mensaje de error de Supabase. */
   insertRows: (rows: ChatDocRow[]) => Promise<string | null>;
   /** ¿Hay dónde guardar? Si no, se falla rápido sin gastar extracción/embeddings. */
@@ -129,6 +132,12 @@ export async function ingestOne(
   file: UploadedFile,
   deps: Required<Pick<IngestDeps, "extractText" | "embedBatch" | "insertRows">>,
   docId: string = randomUUID(),
+  /** Progreso EN FRAGMENTOS de este archivo (no confundir con el progreso de
+   *  un lote interno de Ollama): se llama una vez apenas se conoce el total
+   *  (recién troceado, antes de vectorizar nada) y de nuevo cada vez que
+   *  `embedBatch` resuelve un lote — así el job puede mostrar "4/12" real en
+   *  vez de solo "processing"/"ready". */
+  onProgress?: (done: number, total: number) => void,
 ): Promise<{ ok: IngestedDoc } | { failed: IngestFailure }> {
   let text: string;
   try {
@@ -149,8 +158,12 @@ export async function ingestOne(
   if (pieces.length === 0) {
     return { failed: { name: file.name, error: "no se generó ningún fragmento del texto extraído" } };
   }
+  onProgress?.(0, pieces.length);
 
-  const vectors = await deps.embedBatch(pieces.map((p) => `${file.name}\n${p}`));
+  const vectors = await deps.embedBatch(
+    pieces.map((p) => `${file.name}\n${p}`),
+    onProgress,
+  );
   // embedBatch nunca lanza: si el motor de embeddings falla (Ollama caído,
   // OpenAI sin key, rate limit, etc.) devuelve `null` por posición en vez de
   // tumbar el batch entero (ver embeddings.ts). Si NO se chequea acá, esa

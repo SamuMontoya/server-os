@@ -158,3 +158,60 @@ test("el pipeline async respeta la misma concurrencia acotada que la versión s�
   assert.ok(picoMaximo > 1, `esperaba paralelismo > 1, midió ${picoMaximo}`);
   assert.ok(picoMaximo <= 2, `esperaba <= INGEST_CONCURRENCY (2), midió ${picoMaximo}`);
 });
+
+// ── Progreso/ETA (auditoría 2026-09-17: "la subida es lenta") ─────────
+
+test("mientras procesa, el job expone chunksDone/chunksTotal crecientes vía getDocJobs", async () => {
+  let releaseEmbed: (() => void) | undefined;
+  const gate = new Promise<void>((r) => (releaseEmbed = r));
+  const { deps } = depsWith({
+    extractText: async () => "x".repeat(25_000), // varios chunks
+    embedBatch: async (texts, onProgress) => {
+      const mid = Math.ceil(texts.length / 2);
+      onProgress?.(mid, texts.length);
+      await gate; // se congela a mitad de camino hasta que el test lo suelte
+      onProgress?.(texts.length, texts.length);
+      return texts.map(() => [0.1]);
+    },
+  });
+  const [queued] = startChatDocumentJobs([file("grande.txt")], deps);
+  // Poll manual hasta ver progreso intermedio > 0 (sin esperar a "ready").
+  const start = Date.now();
+  let mid: ReturnType<typeof getDocJobs>[number] | undefined;
+  while (Date.now() - start < 2000) {
+    const [j] = getDocJobs([queued.docId]);
+    if ("chunksDone" in j && (j.chunksDone ?? 0) > 0) {
+      mid = j;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.ok(mid, "nunca se vio progreso intermedio antes del timeout");
+  assert.ok((mid as DocJob).chunksTotal! > 0);
+  assert.ok((mid as DocJob).chunksDone! < (mid as DocJob).chunksTotal!, "a mitad de camino, no debería estar completo");
+  releaseEmbed?.();
+  const [done] = await waitSettled([queued.docId]);
+  assert.equal(done.status, "ready");
+});
+
+test("getDocJobs no calcula etaMs para un job que ya está 'ready' (solo tiene sentido en 'processing')", async () => {
+  const { deps } = depsWith();
+  const [queued] = startChatDocumentJobs([file("chico.txt", "hola")], deps);
+  await waitSettled([queued.docId]);
+  const [job] = getDocJobs([queued.docId]);
+  assert.equal(job.status, "ready");
+  assert.equal((job as { etaMs?: number }).etaMs, undefined);
+});
+
+test("getDocJobs no revienta ni inventa etaMs si un job 'processing' todavía no tiene chunksTotal (recién arrancó)", () => {
+  const { deps } = depsWith({
+    embedBatch: async () => {
+      await new Promise(() => {}); // nunca resuelve: se queda "processing" sin progreso reportado
+      return [];
+    },
+  });
+  const [queued] = startChatDocumentJobs([file("a.txt")], deps);
+  const [job] = getDocJobs([queued.docId]);
+  assert.equal(job.status, "processing");
+  assert.equal((job as { etaMs?: number }).etaMs, undefined);
+});

@@ -59,6 +59,31 @@ export interface ChatDocumentJobStatus {
   chars?: number;
   truncated?: boolean;
   error?: string;
+  /** Progreso EN VIVO mientras sigue "processing" (auditoría 2026-09-17: la
+   *  vieja versión solo mostraba un spinner mudo). `chunksTotal` recién se
+   *  conoce cuando el servidor termina de trocear el texto — puede faltar
+   *  un instante al arrancar. `etaMs` viene calculado por el servidor con el
+   *  ms/chunk medido en caliente contra Ollama; `undefined` si aún no hay
+   *  base para estimarlo (mejor no mostrar ETA que inventar uno). */
+  chunksDone?: number;
+  chunksTotal?: number;
+  etaMs?: number;
+}
+
+/** "4/12 fragmentos (~30s)" — mismo texto en el chip del composer y en la
+ *  card de la burbuja ya enviada, para no mantener el formato en dos sitios.
+ *  `null` si todavía no hay ni `chunksTotal` (recién se encoló, el servidor
+ *  no terminó de trocear el texto) — en ese caso el llamador debe caer al
+ *  texto genérico de siempre ("Indexando…"). */
+export function formatDocProgress(job: {
+  chunksDone?: number;
+  chunksTotal?: number;
+  etaMs?: number;
+}): string | null {
+  if (!job.chunksTotal) return null;
+  const done = Math.min(job.chunksDone ?? 0, job.chunksTotal);
+  const eta = job.etaMs != null && job.etaMs > 0 ? ` (~${Math.max(1, Math.round(job.etaMs / 1000))}s)` : "";
+  return `${done}/${job.chunksTotal} fragmento${job.chunksTotal === 1 ? "" : "s"}${eta}`;
 }
 
 /**

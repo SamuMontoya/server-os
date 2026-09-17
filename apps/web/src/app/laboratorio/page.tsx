@@ -30,6 +30,7 @@ import {
   isSupportedDocument,
   startChatDocumentUpload,
   fetchChatDocumentStatus,
+  formatDocProgress,
 } from "@/lib/chat-documents";
 import { OrbeIA } from "@/components/orbe/OrbeIA";
 import {
@@ -129,6 +130,12 @@ type LabDocument = {
   chunks?: number;
   truncated?: boolean;
   error?: string;
+  /** Progreso en vivo mientras `status === "processing"` — ver
+   *  `ChatDocumentJobStatus`/`formatDocProgress` en lib/chat-documents.ts
+   *  (auditoría 2026-09-17: antes esto era un spinner mudo hasta minutos). */
+  chunksDone?: number;
+  chunksTotal?: number;
+  etaMs?: number;
 };
 
 /**
@@ -321,8 +328,9 @@ function UserBubble({ m }: { m: LabMessage }) {
             const ext = dot > -1 ? displayName.slice(dot + 1).toUpperCase() : "ARCHIVO";
             const processing = d.status === "processing";
             const failed = d.status === "error";
+            const progress = processing ? formatDocProgress(d) : null;
             const estado = processing
-              ? `Indexando ${displayName} en background…`
+              ? `Indexando ${displayName} en background…${progress ? ` (${progress})` : ""}`
               : failed
                 ? `${displayName} — no se pudo indexar`
                 : `${displayName}${
@@ -353,6 +361,7 @@ function UserBubble({ m }: { m: LabMessage }) {
                   </svg>
                 </span>
                 <span className="lab-doc-card-name">{displayName}</span>
+                {processing && progress && <span className="lab-chip-doc-progress">{progress}</span>}
                 {processing ? (
                   <span className="lab-doc-card-spin" aria-hidden="true" />
                 ) : (
@@ -514,6 +523,11 @@ export default function Laboratorio() {
    *  que sin este segundo tracking la card de esa burbuja se quedaba
    *  "indexando…" congelada para siempre (auditoría 2026-09-16). */
   const [sentPendingDocs, setSentPendingDocs] = useState<{ msgId: number; docId: string }[]>([]);
+  /** Aviso VISIBLE (no bloqueante) tras mandar un mensaje con documentos que
+   *  seguían "processing" — ver el comentario largo en `handleSend`
+   *  (auditoría 2026-09-17). Se autolimpia solo, no exige cerrarlo a mano. */
+  const [docsPendingNotice, setDocsPendingNotice] = useState<string | null>(null);
+  const docsPendingNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const docInputRef = useRef<HTMLInputElement | null>(null);
   const [dropping, setDropping] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1639,7 +1653,14 @@ export default function Laboratorio() {
           prev.map((d) => {
             if (d.status !== "processing" || !d.docId) return d;
             const job = jobs.find((j) => j.docId === d.docId);
-            if (!job || job.status === "processing") return d;
+            if (!job) return d;
+            if (job.status === "processing") {
+              // Sigue en curso: no es un cambio terminal, pero el progreso
+              // (chunksDone/chunksTotal/etaMs) sí cambió — sin esto el chip
+              // se queda mudo hasta "ready"/"error" (auditoría 2026-09-17:
+              // "la subida es lenta" era en buena parte "no se ve avanzar").
+              return { ...d, chunksDone: job.chunksDone, chunksTotal: job.chunksTotal, etaMs: job.etaMs };
+            }
             if (job.status === "ready") {
               return { ...d, status: "done" as const, chunks: job.chunks, truncated: job.truncated };
             }
@@ -1653,9 +1674,14 @@ export default function Laboratorio() {
           }),
         );
       } catch {
-        // Un fallo de red puntual en el polling no tumba el chip: el
-        // siguiente tick (disparado por el próximo cambio de `documents`,
-        // que este mismo efecto reprograma) reintenta solo.
+        // Un fallo de red puntual en el polling NO debe matar el timer para
+        // siempre: este efecto solo se reprograma si `documents` cambia de
+        // REFERENCIA, y un `catch` que no toca el estado no la cambia — sin
+        // este `setDocuments` el próximo tick nunca llega y el spinner queda
+        // colgado para siempre tras UN solo hipo de red (auditoría
+        // 2026-09-17). `[...prev]` fuerza una referencia nueva con el mismo
+        // contenido, solo para reprogramar.
+        setDocuments((prev) => [...prev]);
       }
     }, DOC_STATUS_POLL_MS);
     return () => {
@@ -1687,7 +1713,14 @@ export default function Laboratorio() {
               const pending = sentPendingDocs.some((p) => p.msgId === m.id && p.docId === d.docId);
               if (!pending) return d;
               const job = jobs.find((j) => j.docId === d.docId);
-              if (!job || job.status === "processing") return d;
+              if (!job) return d;
+              if (job.status === "processing") {
+                // Mismo motivo que en el polling del composer: progreso en
+                // vivo aunque el estado siga siendo "processing".
+                if (job.chunksDone === d.chunksDone && job.chunksTotal === d.chunksTotal) return d;
+                changed = true;
+                return { ...d, chunksDone: job.chunksDone, chunksTotal: job.chunksTotal, etaMs: job.etaMs };
+              }
               changed = true;
               resolvedIds.add(d.docId);
               if (job.status === "ready") {
@@ -1705,8 +1738,13 @@ export default function Laboratorio() {
         setSentPendingDocs((prev) => prev.filter((p) => !resolvedIds.has(p.docId)));
         if (resolvedIds.size > 0) schedulePersist();
       } catch {
-        // Fallo de red puntual: el próximo tick (reprogramado por este mismo
-        // efecto mientras `sentPendingDocs` siga sin resolverse) reintenta solo.
+        // Un fallo de red puntual NO debe matar el timer para siempre: este
+        // efecto solo se reprograma si `sentPendingDocs` cambia de
+        // REFERENCIA, y un `catch` que no la toca no la cambia — mismo bug
+        // que en el polling del composer (auditoría 2026-09-17). `[...prev]`
+        // fuerza una referencia nueva con el mismo contenido, solo para
+        // reprogramar el próximo tick.
+        setSentPendingDocs((prev) => [...prev]);
       }
     }, DOC_STATUS_POLL_MS);
     return () => {
@@ -1778,6 +1816,21 @@ export default function Laboratorio() {
       : "";
     const finalText = [docNote, pendingNote, text].filter(Boolean).join("\n\n");
 
+    // Aviso VISIBLE para Samu (el `pendingNote` de arriba solo lo lee el
+    // modelo): no bloquea el envío (decisión ya tomada — poder seguir
+    // chateando mientras se indexa), solo evita que una pregunta que
+    // dependía del documento parezca "no funcionó" cuando en realidad faltan
+    // unos segundos/minutos de Ollama. Se autolimpia solo a los 6s.
+    if (pendingDocs.length) {
+      if (docsPendingNoticeTimer.current) clearTimeout(docsPendingNoticeTimer.current);
+      setDocsPendingNotice(
+        pendingDocs.length === 1
+          ? `"${pendingDocs[0].name}" sigue indexándose en background — si tu pregunta depende de él, puede que aún no aparezca.`
+          : `${pendingDocs.length} documentos siguen indexándose en background — si tu pregunta depende de ellos, puede que aún no aparezcan.`,
+      );
+      docsPendingNoticeTimer.current = setTimeout(() => setDocsPendingNotice(null), 6000);
+    }
+
     const sent = attachments.filter((a) => a.id);
     // La card se arma con done + processing (nunca "error" — un documento
     // que falló no deja rastro en el mensaje, igual que una imagen con error
@@ -1803,7 +1856,9 @@ export default function Laboratorio() {
               status: d.status as "done" | "processing",
               chunks: d.chunks,
               truncated: d.truncated,
-              ...(d.status === "processing" && d.docId ? { docId: d.docId } : {}),
+              ...(d.status === "processing" && d.docId
+                ? { docId: d.docId, chunksDone: d.chunksDone, chunksTotal: d.chunksTotal, etaMs: d.etaMs }
+                : {}),
             })),
           }
         : {}),
@@ -2724,7 +2779,9 @@ export default function Laboratorio() {
                       : d.status === "uploading"
                         ? `Subiendo ${d.name}…`
                         : d.status === "processing"
-                          ? `Indexando ${d.name} en background — ya puedes seguir escribiendo o mandar el mensaje`
+                          ? `Indexando ${d.name} en background${
+                              formatDocProgress(d) ? ` — ${formatDocProgress(d)}` : ""
+                            } — ya puedes seguir escribiendo o mandar el mensaje`
                           : `${d.name} — ${d.chunks} fragmento${d.chunks === 1 ? "" : "s"} indexado${
                               d.chunks === 1 ? "" : "s"
                             }${d.truncated ? " (recortado: el archivo era muy grande)" : ""}`
@@ -2742,6 +2799,9 @@ export default function Laboratorio() {
                     </svg>
                   </span>
                   <span className="lab-chip-doc-name">{d.name}</span>
+                  {d.status === "processing" && formatDocProgress(d) && (
+                    <span className="lab-chip-doc-progress">{formatDocProgress(d)}</span>
+                  )}
                   {(d.status === "uploading" || d.status === "processing") && (
                     <span className="lab-chip-spin" aria-hidden="true" />
                   )}
@@ -2756,6 +2816,11 @@ export default function Laboratorio() {
                   </button>
                 </div>
               ))}
+            </div>
+          )}
+          {docsPendingNotice && (
+            <div className="lab-docs-pending-notice" role="status">
+              {docsPendingNotice}
             </div>
           )}
           <div className="lab-composer-row">

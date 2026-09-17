@@ -65,6 +65,14 @@ export type LabMessage = {
     chunks?: number;
     truncated?: boolean;
     docId?: string;
+    /** Progreso en vivo mientras sigue "processing" — ver `ChatDocumentJobStatus`
+     *  en lib/chat-documents.ts (misma forma, mismo motivo: auditoría 2026-09-17,
+     *  "la subida de documentos sigue lenta" — el objetivo no era hacerla
+     *  instantánea, Ollama en 1 vCPU sigue siendo Ollama en 1 vCPU, sino que
+     *  se VEA avanzar en vez de un spinner mudo). */
+    chunksDone?: number;
+    chunksTotal?: number;
+    etaMs?: number;
   }[];
 };
 

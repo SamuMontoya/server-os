@@ -12,6 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ingestUploadedDocuments,
+  ingestOne,
   MAX_CHUNKS_PER_DOCUMENT,
   INGEST_CONCURRENCY,
   type UploadedFile,
@@ -249,4 +250,62 @@ test("edge: con un solo archivo no hace falta paralelismo, sigue funcionando igu
   const result = await ingestUploadedDocuments([file("solo.txt")], deps);
   assert.equal(result.ok.length, 1);
   assert.equal(result.failed.length, 0);
+});
+
+// ── Progreso (`onProgress` de `ingestOne`, auditoría 2026-09-17) ───────
+
+test("ingestOne llama onProgress(0, total) apenas trocea, ANTES de vectorizar nada", async () => {
+  const calls: [number, number][] = [];
+  const { deps } = depsWith({
+    extractText: async () => "x".repeat(12_500), // varios chunks
+    embedBatch: async (texts, onEmbedProgress) => {
+      // Si onProgress(0, total) no se llamó todavía en este punto, el
+      // contrato "se conoce el total antes de vectorizar" está roto.
+      assert.deepEqual(calls[0], [0, texts.length]);
+      onEmbedProgress?.(texts.length, texts.length);
+      return texts.map(() => [0.1]);
+    },
+  });
+  const result = await ingestOne(
+    file("grande.txt"),
+    deps as Required<Pick<IngestDeps, "extractText" | "embedBatch" | "insertRows">>,
+    "doc-1",
+    (done, total) => calls.push([done, total]),
+  );
+  assert.ok("ok" in result);
+  // Última llamada: todo hecho.
+  const [lastDone, lastTotal] = calls[calls.length - 1];
+  assert.equal(lastDone, lastTotal);
+});
+
+test("ingestOne propaga cada lote de embedBatch como un avance de progreso intermedio", async () => {
+  const calls: [number, number][] = [];
+  const { deps } = depsWith({
+    extractText: async () => "x".repeat(25_000), // ~5 chunks
+    embedBatch: async (texts, onEmbedProgress) => {
+      // Simula 2 lotes internos (mismo patrón que viaOllama con BATCH=8).
+      const mid = Math.ceil(texts.length / 2);
+      onEmbedProgress?.(mid, texts.length);
+      onEmbedProgress?.(texts.length, texts.length);
+      return texts.map(() => [0.1]);
+    },
+  });
+  await ingestOne(
+    file("grande.txt"),
+    deps as Required<Pick<IngestDeps, "extractText" | "embedBatch" | "insertRows">>,
+    "doc-2",
+    (done, total) => calls.push([done, total]),
+  );
+  // 0/N inicial (chunking) + 2 avances intermedios de embedBatch, en orden creciente.
+  assert.ok(calls.length >= 3, `esperaba al menos 3 avances, hubo ${calls.length}`);
+  for (let i = 1; i < calls.length; i++) assert.ok(calls[i][0] >= calls[i - 1][0]);
+});
+
+test("ingestOne sin onProgress sigue funcionando igual (parámetro opcional real, no solo de tipos)", async () => {
+  const { deps } = depsWith();
+  const result = await ingestOne(
+    file("solo.txt", "hola"),
+    deps as Required<Pick<IngestDeps, "extractText" | "embedBatch" | "insertRows">>,
+  );
+  assert.ok("ok" in result);
 });

@@ -1971,6 +1971,27 @@ html.lab-route.lab-kb .lab-inputbar {
   flex: 0 0 auto;
 }
 .lab-chip--doc.lab-chip--error .lab-chip-doc-name { color: #b3261e; }
+/* Progreso en vivo ("4/12 fragmentos (~30s)") mientras "processing" —
+   auditoría 2026-09-17: antes el chip era un spinner mudo. Chico y apagado
+   a propósito, no compite con el nombre del archivo. */
+.lab-chip-doc-progress {
+  font-size: 10px;
+  line-height: 1;
+  color: #9b9a95;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+/* Aviso no bloqueante al mandar un mensaje con documentos aún "processing"
+   (auditoría 2026-09-17). Se autolimpia solo. */
+.lab-docs-pending-notice {
+  font-size: 12px;
+  color: #7a7468;
+  background: #f7f5f0;
+  border: 1px solid #e5e2da;
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+}
 
 /* Input de archivo nativo del clip: invisible pero funcional (el botón
    visible dispara el click vía ref). display:none rompería el evento en

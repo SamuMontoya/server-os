@@ -25,7 +25,7 @@
 import { randomUUID } from "node:crypto";
 import { extractText } from "../drive/extract.js";
 import { hasSupabase } from "../supabase.js";
-import { embedBatch } from "../embeddings.js";
+import { embedBatch, avgOllamaChunkMs } from "../embeddings.js";
 import {
   ingestOne,
   defaultInsertRows,
@@ -46,6 +46,20 @@ export interface DocJob {
   error?: string;
   startedAt: number;
   endedAt?: number;
+  /** Fragmentos ya vectorizados / total del documento — solo tiene sentido
+   *  mientras `status === "processing"` (se conoce recién tras el chunking,
+   *  puede faltar un instante al arrancar). Ver `onProgress` en `ingestOne`. */
+  chunksDone?: number;
+  chunksTotal?: number;
+  /** Cuándo llegó el último avance real — el ETA lo descuenta del tiempo ya
+   *  corrido desde ese momento, no solo de los fragmentos que faltan. */
+  lastChunkAt?: number;
+}
+
+/** `DocJob` + el ETA calculado al vuelo (nunca se guarda, se recalcula en
+ *  cada `getDocJobs` con el promedio de Ollama más fresco disponible). */
+export interface DocJobView extends DocJob {
+  etaMs?: number;
 }
 
 export interface QueuedDoc {
@@ -119,10 +133,18 @@ export function startChatDocumentJobs(
       const file = files[i];
       if (!file) return;
       const docId = queued[i].docId;
+      const onProgress = (done: number, total: number): void => {
+        const job = jobs.get(docId);
+        if (!job) return; // Se evictó (poco probable en 30 min) o el proceso reinició.
+        job.chunksDone = done;
+        job.chunksTotal = total;
+        job.lastChunkAt = Date.now();
+      };
       const result = await ingestOne(
         file,
         { extractText: extract, embedBatch: embed, insertRows },
         docId,
+        onProgress,
       );
       const j = jobs.get(docId);
       if (!j) continue; // Se evictó (poco probable en 30 min, pero no revienta si pasa).
@@ -146,11 +168,30 @@ export function startChatDocumentJobs(
   return queued;
 }
 
+/**
+ * ETA en ms para un job "processing": fragmentos que faltan × el ms/chunk
+ * medido en caliente (`avgOllamaChunkMs`, se recalibra solo con cada request
+ * real a Ollama — ver embeddings.ts), descontando lo ya transcurrido desde
+ * el último avance real. `undefined` si todavía no hay ni chunking (no se
+ * conoce `chunksTotal`) — mejor no mostrar ETA que mostrar uno inventado.
+ */
+function computeEtaMs(j: DocJob): number | undefined {
+  if (j.status !== "processing" || j.chunksTotal == null || j.chunksDone == null) return undefined;
+  const remaining = Math.max(0, j.chunksTotal - j.chunksDone);
+  if (remaining === 0) return 0;
+  const elapsedSinceLast = j.lastChunkAt ? Date.now() - j.lastChunkAt : 0;
+  return Math.max(0, remaining * avgOllamaChunkMs - elapsedSinceLast);
+}
+
 /** Estado de una tanda de ids, para el polling del composer. Ids desconocidos
  *  (nunca existieron o ya se evictaron) vuelven como "not_found" en vez de
  *  romper la respuesta entera. */
-export function getDocJobs(ids: string[]): (DocJob | { docId: string; status: "not_found" })[] {
-  return ids.map((id) => jobs.get(id) ?? { docId: id, status: "not_found" as const });
+export function getDocJobs(ids: string[]): (DocJobView | { docId: string; status: "not_found" })[] {
+  return ids.map((id) => {
+    const j = jobs.get(id);
+    if (!j) return { docId: id, status: "not_found" as const };
+    return { ...j, etaMs: computeEtaMs(j) };
+  });
 }
 
 /** Solo para tests: vacía el registro entre casos. */

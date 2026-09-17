@@ -60,17 +60,31 @@ export async function embed(text: string): Promise<number[] | null> {
   return vector ?? null;
 }
 
+/** Progreso de un `embedBatch` en curso: cuántos de los `total` textos ya
+ *  volvieron (con vector o null), no solo los que faltan mandar. Pensado para
+ *  que quien encoló el trabajo (`chat-document-jobs.ts`) pueda mostrar
+ *  "4/12 fragmentos" en vez de un spinner mudo — ver auditoría 2026-09-17. */
+export type EmbedProgress = (done: number, total: number) => void;
+
 /**
  * Vectoriza varios textos. Devuelve un array paralelo al input; null en las
  * posiciones que fallaron. Un lote fallido no tumba los demás.
+ *
+ * `onProgress`, si viene, se llama al menos una vez al arrancar (0, total) y
+ * una vez por lote interno que vuelve — quien no lo necesita (memorias,
+ * vault, etc.) simplemente no lo pasa.
  */
-export async function embedBatch(texts: string[]): Promise<(number[] | null)[]> {
+export async function embedBatch(
+  texts: string[],
+  onProgress?: EmbedProgress,
+): Promise<(number[] | null)[]> {
   if (PROVIDER === "none" || texts.length === 0) return texts.map(() => null);
-  return PROVIDER === "ollama" ? viaOllama(texts) : viaOpenAI(texts);
+  onProgress?.(0, texts.length);
+  return PROVIDER === "ollama" ? viaOllama(texts, onProgress) : viaOpenAI(texts, onProgress);
 }
 
 // ── OpenAI ────────────────────────────────────────────────────────────
-async function viaOpenAI(texts: string[]): Promise<(number[] | null)[]> {
+async function viaOpenAI(texts: string[], onProgress?: EmbedProgress): Promise<(number[] | null)[]> {
   if (!env.OPENAI_API_KEY) return texts.map(() => null);
   const out: (number[] | null)[] = [];
   const BATCH = 64;
@@ -89,6 +103,7 @@ async function viaOpenAI(texts: string[]): Promise<(number[] | null)[]> {
       if (!res.ok) {
         console.error("[hermes] embeddings openai", res.status, await res.text());
         out.push(...chunk.map(() => null));
+        onProgress?.(out.length, texts.length);
         continue;
       }
       const json = (await res.json()) as { data: { index: number; embedding: number[] }[] };
@@ -98,6 +113,7 @@ async function viaOpenAI(texts: string[]): Promise<(number[] | null)[]> {
       console.error("[hermes] embeddings openai fetch", err);
       out.push(...chunk.map(() => null));
     }
+    onProgress?.(out.length, texts.length);
   }
   return out;
 }
@@ -114,38 +130,103 @@ async function viaOpenAI(texts: string[]): Promise<(number[] | null)[]> {
 // completo — el `content` guardado en la fila sigue siendo el fragmento
 // entero de 6000, esto solo acorta lo que ve el modelo de embeddings.
 const OLLAMA_EMBED_INPUT_CAP = 4000;
-async function viaOllama(texts: string[]): Promise<(number[] | null)[]> {
+
+/**
+ * ms/chunk medido en caliente (EMA, arranca en el valor documentado arriba y
+ * se recalibra solo con cada request real). Lo lee `chat-document-jobs.ts`
+ * para el ETA — leerlo desde afuera es intencional, no un detalle interno:
+ * es la única fuente de verdad de "qué tan rápido responde Ollama AHORA" sin
+ * necesidad de que cada llamador mida por su cuenta.
+ */
+export let avgOllamaChunkMs = 7400;
+function recordOllamaTiming(elapsedMs: number, itemCount: number): void {
+  if (itemCount <= 0) return;
+  const perItem = elapsedMs / itemCount;
+  // EMA 70/30: no se deja arrastrar por un outlier puntual (una request lenta
+  // por una racha de swap no debe disparar el ETA de las siguientes 10).
+  avgOllamaChunkMs = avgOllamaChunkMs * 0.7 + perItem * 0.3;
+}
+
+/**
+ * Mutex de proceso: serializa TODAS las llamadas reales a Ollama, vengan del
+ * job que vengan. `-np 1` en el servidor (ver `ps aux`, un solo slot de
+ * cómputo) significa que dos requests "en paralelo" desde jobs distintos
+ * (INGEST_CONCURRENCY=2) no se paralelizan de verdad — solo compiten por el
+ * mismo slot, i/o de red se solapa pero el cómputo no. Sin este mutex cada
+ * job mide su propio ms/chunk como si tuviera el slot para él solo, y el ETA
+ * de ambos miente (auditoría 2026-09-17). Con el mutex, el segundo job en
+ * llegar simplemente espera su turno — mismo trabajo total, pero medido y
+ * mostrado con precisión.
+ */
+let ollamaLock: Promise<void> = Promise.resolve();
+function withOllamaLock<T>(fn: () => Promise<T>): Promise<T> {
+  const runAfter = ollamaLock.then(fn, fn);
+  // El lock en sí NUNCA debe quedar rechazado (si no, el próximo `.then(fn)`
+  // se saltearía por completo y el mutex se rompe para siempre) — lo que le
+  // pasó a `fn` se lo devolvemos igual a quien llamó, vía `runAfter`.
+  ollamaLock = runAfter.then(
+    () => undefined,
+    () => undefined,
+  );
+  return runAfter;
+}
+
+/** Timeout por request: si Ollama queda "vivo pero mudo" (proceso up, sin
+ *  responder — pasa con swap/OOM en 1 vCPU), sin esto el job queda colgado
+ *  para siempre (ni "ready" ni "error", el chip nunca sale de "processing").
+ *  20s de piso + 15s por texto del lote: generoso sobre los ~7.4s/chunk
+ *  medidos, para no disparar en falso en una racha normal de lentitud. */
+function ollamaTimeoutMs(itemCount: number): number {
+  return 20_000 + itemCount * 15_000;
+}
+
+async function fetchOllamaBatch(chunk: string[]): Promise<(number[] | null)[]> {
+  const controller = new AbortController();
+  const timeoutMs = ollamaTimeoutMs(chunk.length);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+  try {
+    const res = await fetch(`${env.OLLAMA_URL}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: env.OLLAMA_EMBED_MODEL, input: chunk }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.error("[hermes] embeddings ollama", res.status, await res.text());
+      return chunk.map(() => null);
+    }
+    const json = (await res.json()) as { embeddings?: number[][] };
+    const vecs = json.embeddings ?? [];
+    recordOllamaTiming(Date.now() - startedAt, chunk.length);
+    // Si el modelo devuelve otra dimensión, insertarlo reventaría el insert
+    // con un error de pgvector difícil de leer: mejor descartarlo aquí.
+    return chunk.map((_, j) => {
+      const v = vecs[j];
+      if (v && v.length === EMB.dims) return v;
+      if (v) console.error(`[hermes] embeddings ollama: ${v.length} dims, esperaba ${EMB.dims}`);
+      return null;
+    });
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      console.error(`[hermes] embeddings ollama: sin respuesta tras ${timeoutMs}ms, se descarta el lote`);
+    } else {
+      console.error("[hermes] embeddings ollama fetch", err);
+    }
+    return chunk.map(() => null);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function viaOllama(texts: string[], onProgress?: EmbedProgress): Promise<(number[] | null)[]> {
   const out: (number[] | null)[] = [];
   const BATCH = 8;
   for (let i = 0; i < texts.length; i += BATCH) {
     const chunk = texts.slice(i, i + BATCH).map((t) => (t || " ").slice(0, OLLAMA_EMBED_INPUT_CAP));
-    try {
-      const res = await fetch(`${env.OLLAMA_URL}/api/embed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: env.OLLAMA_EMBED_MODEL, input: chunk }),
-      });
-      if (!res.ok) {
-        console.error("[hermes] embeddings ollama", res.status, await res.text());
-        out.push(...chunk.map(() => null));
-        continue;
-      }
-      const json = (await res.json()) as { embeddings?: number[][] };
-      const vecs = json.embeddings ?? [];
-      // Si el modelo devuelve otra dimensión, insertarlo reventaría el insert
-      // con un error de pgvector difícil de leer: mejor descartarlo aquí.
-      chunk.forEach((_, j) => {
-        const v = vecs[j];
-        if (v && v.length === EMB.dims) out.push(v);
-        else {
-          if (v) console.error(`[hermes] embeddings ollama: ${v.length} dims, esperaba ${EMB.dims}`);
-          out.push(null);
-        }
-      });
-    } catch (err) {
-      console.error("[hermes] embeddings ollama fetch", err);
-      out.push(...chunk.map(() => null));
-    }
+    const vecs = await withOllamaLock(() => fetchOllamaBatch(chunk));
+    out.push(...vecs);
+    onProgress?.(out.length, texts.length);
   }
   return out;
 }
