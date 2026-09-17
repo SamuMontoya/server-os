@@ -629,6 +629,29 @@ export default function Laboratorio() {
   // ChatPanel.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  /** Última vez que el chat EN FOCO recibió una respuesta de verdad TERMINADA
+   *  (no cualquier commit de `messages`) — bug de Jaime 2026-09-17: escribir
+   *  "Hola", irse a la lista (`showChats=true`) y volver cuando terminó el
+   *  turno mostraba la fila SIN el fondo gris de "sin leer", aunque el chat
+   *  activo sí tenía actividad más nueva que la última vez que se abrió. La
+   *  causa real: `listChatsForProject` forzaba `unread:false` para el chat
+   *  activo sin condición — asumía que "activo" siempre significa "a la
+   *  vista", pero mientras `showChats` está abierto el usuario está mirando
+   *  la LISTA, no los mensajes de este chat.
+   *
+   *  OJO (auditoría adversaria, misma tarde): la primera versión de este ref
+   *  se actualizaba con un `useEffect` sobre `[messages]` — pero CARGAR un
+   *  chat (`loadChatIntoState`, línea de abajo) TAMBIÉN dispara `setMessages`,
+   *  así que ese efecto corría un tick después de fijar `seenAtRef` con un
+   *  `Date.now()` más tardío, dejando `activeUpdatedAtRef > seenAtRef` con
+   *  CERO actividad real (falso "sin leer" con solo abrir/recargar). Por eso
+   *  esto ya NO se toca en un efecto genérico: se asigna a mano en los
+   *  puntos exactos donde el turno del chat activo termina de verdad —
+   *  `onEnd` de `follow` (streaming completo) y los dos remates de error que
+   *  no pasan por `follow` (fallo al mandar, turno perdido al reenganchar).
+   *  Ver los 3 `activeUpdatedAtRef.current = Date.now()` más abajo. (Fix
+   *  duplicado desde jaime-os — mismo bug, mismo diff, ver ese repo.) */
+  const activeUpdatedAtRef = useRef(Date.now());
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const modelRef = useRef(model);
@@ -850,17 +873,23 @@ export default function Laboratorio() {
     // rondando como una entrada fantasma "Chat nuevo" mientras durara la
     // pestaña, aunque nunca se llegara a usar.
     if (pk === projKey && messagesRef.current.length > 0) {
+      const activeRunning = busy || !!pendingTurnRef.current;
       out.push({
         id: activeChatIdRef.current,
         title: titleRef.current || deriveTitle(messagesRef.current),
         preview: derivePreview(messagesRef.current),
         updatedAt: Date.now(),
-        running: busy || !!pendingTurnRef.current,
-        // El activo es, por definición, el que Samu tiene abierto (o
-        // acaba de abrir): nunca "sin leer", aunque su `updatedAt` de
-        // arriba sea siempre "ahora" — comparar eso contra `seenAtRef`
-        // no tendría sentido (siempre ganaría "ahora").
-        unread: false,
+        running: activeRunning,
+        // El activo SOLO es "por definición leído" mientras el usuario de
+        // verdad está mirando sus mensajes — o sea, mientras `showChats`
+        // está cerrado (bug de Jaime 2026-09-17: irse a la lista con un
+        // turno en vuelo y volver cuando terminó no pintaba el fondo gris,
+        // porque esto decía `unread:false` sin condición). Con la lista
+        // abierta, el chat activo se trata como cualquier chat de fondo:
+        // "sin leer" si tuvo actividad nueva (`activeUpdatedAtRef`) después
+        // de la última vez que se abrió (`seenAtRef`) — y nunca mientras
+        // sigue corriendo (el avatar animado ya cuenta esa historia).
+        unread: showChats && !activeRunning && activeUpdatedAtRef.current > seenAtRef.current,
       });
     }
     for (const [key, t] of chatsRef.current) {
@@ -966,6 +995,14 @@ export default function Laboratorio() {
 
   const switchToChat = (id: string) => {
     if (id === activeChatIdRef.current) {
+      // Tocar la propia fila del chat activo en la lista: no hay OTRO chat
+      // que cargar, pero SÍ hay que marcarlo "visto" (igual que hace
+      // `loadChatIntoState` al abrir cualquier otro) — si no, `seenAtRef`
+      // se queda desactualizado y la próxima vez que se abra la lista sin
+      // actividad nueva de por medio, `unread` (ver `listChatsForProject`)
+      // sigue comparando contra un `seenAt` viejo y pinta gris una fila que
+      // Samu ya miró recién.
+      seenAtRef.current = Date.now();
       setShowChats(false);
       return;
     }
@@ -1266,6 +1303,11 @@ export default function Laboratorio() {
         pendingTurnRef.current = null;
         setStopping(false);
         setBusy(false);
+        // El turno de ESTE chat (activo) terminó de verdad ahora: si Samu
+        // está mirando la lista (`showChats`), esto es lo que hace que
+        // `listChatsForProject` lo pinte "sin leer" en el próximo repintado
+        // (ver el comentario grande de `activeUpdatedAtRef` más arriba).
+        activeUpdatedAtRef.current = Date.now();
         // Terminó un turno = se gastó consumo: el pie se entera ya, no en el
         // próximo tick del minuto.
         bumpUsage();
@@ -1898,6 +1940,20 @@ export default function Laboratorio() {
     // muestra mientras Hermes piensa ya es el de esta ventana, recién pedido.
     bumpUsage();
 
+    // `startTurn` es un await: si Samu cambia de chat (`switchToChat`) MIENTRAS
+    // esta promesa sigue en vuelo, `activeChatIdRef.current` ya apunta a OTRO
+    // chat cuando esto resuelve. Sin este chequeo (hallazgo real de la
+    // auditoría adversaria del 2026-09-17), tanto el camino feliz
+    // (`turnIdRef`/`pendingTurnRef`/`follow`) como el de error de abajo
+    // pisaban a ciegas el estado del chat NUEVO con datos del chat VIEJO —
+    // incluido, con el fix de `activeUpdatedAtRef`, marcar "sin leer" al chat
+    // equivocado. Si esto pasa, el chat viejo queda con su `pendingTurn`
+    // guardado en `chatsRef` (lo dejó ahí `saveActiveIntoMap` al cambiar) y
+    // se resuelve solo, más tarde, por `checkBackgroundTurns` (si sigue de
+    // fondo) o por este mismo `resumePending`/`handleSend` si Samu vuelve a
+    // abrirlo.
+    const chatIdAtSend = activeChatIdRef.current;
+
     try {
       const turnId = await startTurn({
         message: finalText,
@@ -1906,6 +1962,7 @@ export default function Laboratorio() {
         resume: sdkSessionIdRef.current,
         attachments: sent.map((a) => a.id!),
       });
+      if (activeChatIdRef.current !== chatIdAtSend) return;
       turnIdRef.current = turnId;
       lastSeqRef.current = 0;
       if (watchLinked) {
@@ -1918,11 +1975,16 @@ export default function Laboratorio() {
       schedulePersist();
       follow(turnId, 0, replyMsg.id);
     } catch (err) {
+      if (activeChatIdRef.current !== chatIdAtSend) return;
       turnIdRef.current = null;
       pendingTurnRef.current = null;
       setBusy(false);
       const detail = err instanceof Error ? err.message : "no se pudo enviar el mensaje";
       appendNotice(replyMsg.id, `⚠ ${detail}`);
+      // No pasa por `follow`/`onEnd` (nunca llegó a arrancar el turno), pero
+      // igual es actividad nueva de verdad en este chat (ver comentario de
+      // `activeUpdatedAtRef` más arriba).
+      activeUpdatedAtRef.current = Date.now();
     }
   };
 
@@ -1981,6 +2043,12 @@ export default function Laboratorio() {
     }
     turnIdRef.current = pending.id;
     setBusy(true);
+    // Mismo motivo que `chatIdAtSend` en `handleSend` (auditoría adversaria
+    // 2026-09-17): `fetchTurnResilient` puede tardar (reintentos incluidos)
+    // y Samu puede cambiar de chat mientras tanto — sin este chequeo, el
+    // `.then` de abajo pisaría el estado del chat NUEVO con el desenlace del
+    // VIEJO.
+    const chatIdAtResume = activeChatIdRef.current;
     // `fetchTurnResilient` ya reintenta contra blips transitorios (token de
     // Supabase a punto de refrescar, 5xx del agente, red caída un instante).
     // Solo un "not-found" confirmado es pérdida real; `null` significa "no se
@@ -1989,6 +2057,7 @@ export default function Laboratorio() {
     // otro lado.
     void fetchTurnResilient(pending.id, pending.seq).then((st) => {
       resumeInFlightRef.current = false;
+      if (activeChatIdRef.current !== chatIdAtResume) return;
       if (st === "not-found") {
         // El agente se reinició y el turno ya no existe. Lo honesto es
         // decirlo, no dejar el composer bloqueado para siempre.
@@ -1996,6 +2065,10 @@ export default function Laboratorio() {
         pendingTurnRef.current = null;
         setBusy(false);
         appendNotice(replyId, "⚠ el turno se perdió al reiniciarse el agente. Vuelve a preguntar.");
+        // Mismo motivo que en el catch de `handleSend`: esto no pasa por
+        // `follow`/`onEnd`, pero sigue siendo actividad nueva real (ver
+        // comentario de `activeUpdatedAtRef` más arriba).
+        activeUpdatedAtRef.current = Date.now();
         schedulePersist();
         return;
       }
@@ -2661,7 +2734,13 @@ export default function Laboratorio() {
           key={chatsVersion}
           chats={listChatsForProject(projKey)}
           activeId={activeChatIdRef.current}
-          onClose={() => setShowChats(false)}
+          onClose={() => {
+            // Cerrar la lista (✕/hamburguesa) sin tocar ninguna fila también
+            // vuelve a mostrar el chat activo — cuenta como "visto" igual
+            // que tocar su propia fila (ver el comentario en `switchToChat`).
+            seenAtRef.current = Date.now();
+            setShowChats(false);
+          }}
           onOpen={switchToChat}
           onNew={createNewChat}
           onDelete={deleteChat}
