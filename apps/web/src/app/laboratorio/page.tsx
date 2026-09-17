@@ -629,6 +629,18 @@ export default function Laboratorio() {
   // ChatPanel.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  /** Espejo de `showChats` para leer su valor MÁS RECIENTE desde dentro de
+   *  `onEnd`/catch/`resumePending` — esos closures se crean en el render de
+   *  cuando ARRANCA el turno (`follow(...)` dentro de `handleSend`), así que
+   *  leer `showChats` directo ahí adentro devolvería el valor de ESE render,
+   *  no el de cuando el turno de verdad termina (bug real, encontrado por el
+   *  e2e `lab-chats-active-unread.spec.ts` de jaime-os, caso "chat a la
+   *  vista": mirar el chat en vivo hasta que responde y recién DESPUÉS abrir
+   *  la lista lo pintaba "sin leer" igual, aunque Samu lo hubiera visto
+   *  llegar en vivo — ver el uso de este ref más abajo, junto a cada
+   *  `activeUpdatedAtRef`). */
+  const showChatsRef = useRef(showChats);
+  showChatsRef.current = showChats;
   /** Última vez que el chat EN FOCO recibió una respuesta de verdad TERMINADA
    *  (no cualquier commit de `messages`) — bug de Jaime 2026-09-17: escribir
    *  "Hola", irse a la lista (`showChats=true`) y volver cuando terminó el
@@ -652,6 +664,23 @@ export default function Laboratorio() {
    *  Ver los 3 `activeUpdatedAtRef.current = Date.now()` más abajo. (Fix
    *  duplicado desde jaime-os — mismo bug, mismo diff, ver ese repo.) */
   const activeUpdatedAtRef = useRef(Date.now());
+  /** Se llama en los 3 puntos donde el turno del chat activo termina de
+   *  verdad (ver comentario de `activeUpdatedAtRef`). Además de marcar la
+   *  actividad, si la lista de chats está CERRADA en este instante
+   *  (`showChatsRef`) significa que Samu estaba mirando el chat en vivo — ya
+   *  lo vio llegar, así que también se marca "visto" (`seenAtRef`) ya mismo.
+   *  Sin esto (bug real, encontrado por el e2e de este mismo fix): mirar el
+   *  chat en vivo hasta que responde y recién DESPUÉS abrir la lista lo
+   *  pintaba "sin leer" de todos modos, porque `seenAtRef` solo se actualizaba
+   *  al ABRIR el chat (antes de que llegara la respuesta), nunca al
+   *  terminar de verla en vivo. Si la lista SÍ está abierta, no se toca
+   *  `seenAtRef` — ahí es donde debe quedar "sin leer" hasta que Samu la
+   *  mire (ver `unread` en `listChatsForProject`). */
+  const markActiveTurnFinished = () => {
+    const now = Date.now();
+    activeUpdatedAtRef.current = now;
+    if (!showChatsRef.current) seenAtRef.current = now;
+  };
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const modelRef = useRef(model);
@@ -1306,8 +1335,8 @@ export default function Laboratorio() {
         // El turno de ESTE chat (activo) terminó de verdad ahora: si Samu
         // está mirando la lista (`showChats`), esto es lo que hace que
         // `listChatsForProject` lo pinte "sin leer" en el próximo repintado
-        // (ver el comentario grande de `activeUpdatedAtRef` más arriba).
-        activeUpdatedAtRef.current = Date.now();
+        // (ver el comentario grande de `markActiveTurnFinished` más arriba).
+        markActiveTurnFinished();
         // Terminó un turno = se gastó consumo: el pie se entera ya, no en el
         // próximo tick del minuto.
         bumpUsage();
@@ -1983,8 +2012,8 @@ export default function Laboratorio() {
       appendNotice(replyMsg.id, `⚠ ${detail}`);
       // No pasa por `follow`/`onEnd` (nunca llegó a arrancar el turno), pero
       // igual es actividad nueva de verdad en este chat (ver comentario de
-      // `activeUpdatedAtRef` más arriba).
-      activeUpdatedAtRef.current = Date.now();
+      // `markActiveTurnFinished` más arriba).
+      markActiveTurnFinished();
     }
   };
 
@@ -2067,8 +2096,8 @@ export default function Laboratorio() {
         appendNotice(replyId, "⚠ el turno se perdió al reiniciarse el agente. Vuelve a preguntar.");
         // Mismo motivo que en el catch de `handleSend`: esto no pasa por
         // `follow`/`onEnd`, pero sigue siendo actividad nueva real (ver
-        // comentario de `activeUpdatedAtRef` más arriba).
-        activeUpdatedAtRef.current = Date.now();
+        // comentario de `markActiveTurnFinished` más arriba).
+        markActiveTurnFinished();
         schedulePersist();
         return;
       }
