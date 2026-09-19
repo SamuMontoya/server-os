@@ -25,7 +25,17 @@ export function BotonGoogle({ destino }: { destino?: string }) {
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+        // `prompt: "select_account"`: sin esto, Google reautentica en
+        // silencio con la cuenta que ya tiene abierta en ESTE navegador (su
+        // propia sesión en accounts.google.com, aparte del `signOut()` de
+        // Supabase) — un click y adentro, sin pedir nada. Reporte de Jaime
+        // 2026-09-19: "cierra sesión pero para volver a entrar solo hay que
+        // presionar el botón". Gemelo del mismo fix en jaime-os
+        // (BotonGoogle.tsx) — ver ese comentario para el detalle completo.
+        queryParams: { prompt: "select_account" },
+      },
     });
 
     if (error) {
