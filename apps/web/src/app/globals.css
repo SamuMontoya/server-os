@@ -1938,6 +1938,16 @@ html.lab-route.lab-kb .lab-inputbar {
   transition: background 0.15s;
 }
 .lab-chip-x:hover { background: #181715; }
+/* `.lab-chip-x` nace pensada para el chip CUADRADO de imagen (46×46): el
+   offset simétrico top/right:2px se ve centrado ahí. El chip de documento
+   es una PÍLDORA de 28px de alto (`.lab-chip--doc`) — heredar ese `top:2px`
+   deja la × pegada al borde superior en vez de centrada en los 28px (bug
+   real, reporte de Jaime 2026-09-19: "la X no está centrada"). */
+.lab-chip--doc .lab-chip-x {
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+}
 
 /* Chip de documento: a diferencia del de imagen (cuadrado 46×46 con
    miniatura), acá lo que hay que reconocer es el NOMBRE, así que es una

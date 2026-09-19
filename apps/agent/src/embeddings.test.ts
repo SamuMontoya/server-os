@@ -62,20 +62,24 @@ test("mutex: dos embedBatch 'en paralelo' (dos jobs distintos) nunca tienen más
   assert.equal(maxInFlight, 1, `esperaba que el mutex serializara (máx 1 en vuelo), midió ${maxInFlight}`);
 });
 
-test("mutex: una request que revienta (rechaza) no rompe el mutex para las siguientes", async () => {
+test("mutex: una request que revienta en TODOS sus reintentos no rompe el mutex para las siguientes", async () => {
   let call = 0;
   await withFetch(
     (async (_url: string, init?: RequestInit) => {
       call++;
       const input = (JSON.parse(init!.body as string) as { input: string[] }).input;
-      if (call === 1) throw new Error("boom de red simulado");
+      // `fetchOllamaBatch` reintenta una vez sola (MAX_OLLAMA_ATTEMPTS=2, fix
+      // 2026-09-19: un solo hipo transitorio no puede reprobar el documento
+      // entero) — para probar que el mutex sobrevive a un fallo real hay que
+      // agotar AMBOS intentos del primer `embedBatch`, no solo el primero.
+      if (call <= 2) throw new Error("boom de red simulado");
       return fakeEmbedResponse(input);
     }) as typeof fetch,
     async () => {
       const r1 = await embedBatch(["falla"]);
-      assert.deepEqual(r1, [null]); // el propio embedBatch nunca lanza, ver comentario en ingestOne
+      assert.deepEqual(r1, [null]); // agotó los 2 intentos; el propio embedBatch nunca lanza
       const r2 = await embedBatch(["deberia-funcionar"]);
-      assert.ok(r2[0] !== null, "el mutex debe seguir vivo tras un fallo previo");
+      assert.ok(r2[0] !== null, "el mutex debe seguir vivo tras agotar los reintentos del anterior");
     },
   );
 });
@@ -116,7 +120,7 @@ test("avgOllamaChunkMs se recalibra (EMA) con la duración real medida de una re
   assert.notEqual(avgOllamaChunkMs, before, "esperaba que la EMA se moviera tras una medición real");
 });
 
-test("timeout: un fetch que nunca responde no cuelga el batch para siempre — se aborta y vuelve null", async () => {
+test("timeout: un fetch que nunca responde no cuelga el batch para siempre — se aborta, reintenta una vez y al final vuelve null", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
     await withFetch(
@@ -130,16 +134,21 @@ test("timeout: un fetch que nunca responde no cuelga el batch para siempre — s
         })) as unknown) as typeof fetch,
       async () => {
         const promise = embedBatch(["texto que nunca vuelve"]);
-        // `withOllamaLock` encadena la primera llamada con un `.then()`
-        // (microtask), así que `fetchOllamaBatch` recién registra su
-        // `setTimeout` real un turno después de esta línea — hay que dejar
-        // correr ESE turno (macrotask real, `setImmediate` no está mockeado)
-        // antes de adelantar el reloj falso, o `tick()` no encuentra ningún
-        // timer todavía y no dispara nada.
-        await new Promise((r) => setImmediate(r));
-        // Timeout real = 20_000 + 15_000*1 = 35_000ms — se adelanta el reloj
-        // virtual en vez de esperarlo de verdad.
-        mock.timers.tick(35_001);
+        // `fetchOllamaBatch` reintenta una vez (MAX_OLLAMA_ATTEMPTS=2, fix
+        // 2026-09-19) — cada intento registra su PROPIO `setTimeout`, así que
+        // hay que repetir el mismo baile dos veces: `withOllamaLock` encadena
+        // la primera llamada con un `.then()` (microtask), así que
+        // `fetchOllamaBatch` recién registra su `setTimeout` real un turno
+        // después de esta línea — hay que dejar correr ESE turno (macrotask
+        // real, `setImmediate` no está mockeado) antes de adelantar el reloj
+        // falso, o `tick()` no encuentra ningún timer todavía y no dispara
+        // nada. El reintento (llamada recursiva DENTRO de la misma cadena de
+        // promesas) repite el mismo patrón.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await new Promise((r) => setImmediate(r));
+          // Timeout real = 20_000 + 15_000*1 = 35_000ms por intento.
+          mock.timers.tick(35_001);
+        }
         const result = await promise;
         assert.deepEqual(result, [null]);
       },

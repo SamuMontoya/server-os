@@ -126,6 +126,76 @@ function renderInline(text: string, kp: string): ReactNode[] {
 
 const SPECIAL = /^(#{1,6})\s|^```|^>\s?|^\s*[-*+]\s+|^\s*\d+\.\s+|^(-{3,}|\*{3,}|_{3,})\s*$/;
 
+/**
+ * Junta las líneas de UNA lista (ordenada o no), sin cortarla prematuramente
+ * ante dos patrones típicos de lo que escribe un LLM (bug real, reporte de
+ * Jaime 2026-09-19: "a veces no numera bien y las pone todas como si fueran
+ * una"):
+ *
+ *  1. Listas "sueltas" (línea en blanco entre ítems: "1. A\n\n2. B"). Sin
+ *     este manejo, la línea en blanco cortaba la lista, el ítem 2 abría un
+ *     `<ol>` NUEVO (reinicia en 1) y el navegador mostraba "1." repetido en
+ *     vez de "1., 2., 3." — cada fragmento parecía "todo el mismo ítem".
+ *  2. Continuación de un ítem en la línea siguiente sin volver a numerar
+ *     ("1. Texto\n   más detalle\n2. Otro"): esa línea de continuación
+ *     tampoco matcheaba el marcador y cortaba la lista igual que el caso 1.
+ *
+ * Se hace `peek` hacia adelante saltando líneas en blanco: si más adelante
+ * sigue habiendo un ítem del MISMO tipo de lista, las líneas de por medio se
+ * absorben (blancas se descartan, de texto se anexan al último ítem) en vez
+ * de cerrar la lista. Solo se corta de verdad cuando lo que sigue ya no es
+ * ni un ítem ni algo que pueda pertenecerle (otro bloque SPECIAL, o el fin
+ * del texto).
+ *
+ * Trade-off ACEPTADO (auditoría adversaria 2026-09-19): dos listas del mismo
+ * tipo separadas por NADA MÁS que una línea en blanco ("1. A\n2. B\n\n1. C\n2. D",
+ * sin texto/encabezado de por medio) se fusionan en una sola lista continua
+ * (1,2,3,4) en vez de quedar como dos — mismo comportamiento que CommonMark/
+ * GitHub en el caso análogo (una lista "suelta" y dos listas consecutivas son
+ * indistinguibles sin algo que las separe). Es intencional, no un bug: la
+ * alternativa (cortar ante CUALQUIER línea en blanco seguida de un ítem que
+ * reinicia en "1.") reintroduciría exactamente el bug original que este
+ * fix arregla, porque el LLM genera esa misma forma ("1. Uno\n\n2. Dos\n\n3.
+ * Tres") como una única lista suelta legítima la mayoría de las veces. Si el
+ * modelo necesita dos listas realmente separadas, un párrafo/encabezado de
+ * por medio (lo normal en su propia salida) ya las separa bien — ver el test
+ * (jaime-os, este repo no tiene vitest) "dos listas de verdad separadas por
+ * un párrafo NO se fusionan".
+ */
+function collectListItems(
+  lines: string[],
+  start: number,
+  markerRe: RegExp,
+): { items: string[]; nextIndex: number } {
+  const items: string[] = [];
+  let i = start;
+  while (i < lines.length) {
+    if (markerRe.test(lines[i])) {
+      items.push(lines[i].replace(markerRe, ""));
+      i++;
+      continue;
+    }
+    if (/^\s*$/.test(lines[i])) {
+      let j = i;
+      while (j < lines.length && /^\s*$/.test(lines[j])) j++;
+      if (j < lines.length && markerRe.test(lines[j])) {
+        i = j; // línea(s) en blanco DENTRO de la lista: se saltan, no la cierran.
+        continue;
+      }
+      break; // línea en blanco seguida de algo que no es un ítem: fin real.
+    }
+    // Continuación de texto del ítem anterior (ni ítem, ni blanco, ni otro
+    // bloque especial ni el arranque de una tabla): se anexa, no corta.
+    if (items.length > 0 && !SPECIAL.test(lines[i]) && !isTableStart(lines, i)) {
+      items[items.length - 1] += ` ${lines[i].trim()}`;
+      i++;
+      continue;
+    }
+    break;
+  }
+  return { items, nextIndex: i };
+}
+
 // ── Tablas (GFM) ──────────────────────────────────────────────────────
 // Lo que hace tabla a una tabla es la fila de guiones DEBAJO del encabezado.
 // Sin ella son pipes sueltos y se tratan como párrafo — por eso la detección
@@ -219,18 +289,16 @@ export function Markdown({ source, project }: { source: string; project?: string
 
     // Lista no ordenada
     if (/^\s*[-*+]\s+/.test(line)) {
-      const items: ReactNode[] = [];
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
-        items.push(
-          <li key={items.length} className="md-li">
-            {renderInline(lines[i].replace(/^\s*[-*+]\s+/, ""), `li${key}-${items.length}`)}
-          </li>,
-        );
-        i++;
-      }
+      const { items: raw, nextIndex } = collectListItems(lines, i, /^\s*[-*+]\s+/);
+      i = nextIndex;
+      const k = key++;
       blocks.push(
-        <ul key={key++} className="md-ul">
-          {items}
+        <ul key={k} className="md-ul">
+          {raw.map((text, n) => (
+            <li key={n} className="md-li">
+              {renderInline(text, `li${k}-${n}`)}
+            </li>
+          ))}
         </ul>,
       );
       continue;
@@ -238,18 +306,23 @@ export function Markdown({ source, project }: { source: string; project?: string
 
     // Lista ordenada
     if (/^\s*\d+\.\s+/.test(line)) {
-      const items: ReactNode[] = [];
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(
-          <li key={items.length} className="md-li">
-            {renderInline(lines[i].replace(/^\s*\d+\.\s+/, ""), `ol${key}-${items.length}`)}
-          </li>,
-        );
-        i++;
-      }
+      // Guarda el número real del primer ítem: si el modelo arranca en "3."
+      // (continuación de una lista que el propio parser fragmentó en otro
+      // `source`, ver el bloque de streaming en vivo), el `<ol>` respeta ese
+      // arranque en vez de reiniciar en 1 — no es EL fix de fondo (que es no
+      // cortar la lista, ver `collectListItems`), pero cubre el caso en que
+      // sí toca fragmentar de verdad (dos `<Markdown>` separados).
+      const firstNum = Number((/^\s*(\d+)\./.exec(line) ?? [, "1"])[1]);
+      const { items: raw, nextIndex } = collectListItems(lines, i, /^\s*\d+\.\s+/);
+      i = nextIndex;
+      const k = key++;
       blocks.push(
-        <ol key={key++} className="md-ol">
-          {items}
+        <ol key={k} className="md-ol" start={firstNum !== 1 ? firstNum : undefined}>
+          {raw.map((text, n) => (
+            <li key={n} className="md-li">
+              {renderInline(text, `ol${k}-${n}`)}
+            </li>
+          ))}
         </ol>,
       );
       continue;

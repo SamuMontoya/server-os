@@ -1112,6 +1112,18 @@ export default function Laboratorio() {
    * archivo — se asigna la función real más abajo, en cada render.
    */
   const resumePendingRef = useRef<() => void>(() => {});
+  /** Mismo truco de ref indirecto que `resumePendingRef`, para poder llamar
+   *  `syncThreadsFromServer` (definida más abajo) desde el listener de
+   *  `visibilitychange` de arriba en el archivo. Antes de este fix, volver
+   *  de segundo plano solo reenganchaba el STREAM del chat activo
+   *  (`resumePendingRef`) — la lista de chats (threads creados/actualizados
+   *  en OTRO dispositivo mientras esta pestaña estaba dormida/en background)
+   *  nunca se refrescaba sola: solo se sincronizaba una vez, al montar. Es
+   *  el hallazgo real detrás de "deslizar hacia abajo para sincronizar los
+   *  chats" (auditoría 2026-09-19) — el gesto de pull-to-refresh es un paso
+   *  posterior (UI en LabChatsScreen), pero el gap de fondo (nunca se
+   *  refrescaba al volver) se cierra ya con esto. */
+  const syncThreadsFromServerRef = useRef<() => void>(() => {});
   /** Mismo truco de ref indirecto: `scrollToBottomNow` vive junto a los
    *  demás helpers de scroll (más abajo, ya que usan `listRef`/`anchorGap`),
    *  pero `loadChatIntoState` (definida antes) necesita poder llamarla al
@@ -2177,7 +2189,21 @@ export default function Laboratorio() {
       // tiene una versión más nueva (p. ej. el turno siguió avanzando en
       // el otro dispositivo mientras esta pestaña ni había cargado).
       const remoteMeta = remote.threads.find((t) => t.id === targetActiveId);
-      const localUpdatedAt = initialThread?.id === targetActiveId ? initialThread.updatedAt : 0;
+      // Baseline REAL de actividad local, no la foto congelada del montaje
+      // (`initialThread`, fija desde que se abrió la pestaña). Bug real de
+      // esta misma sesión de fixes (auditoría adversaria 2026-09-19): con
+      // `initialThread.updatedAt` fijo, apenas este dispositivo terminaba UN
+      // turno (que también empuja su propio `updatedAt` al servidor vía
+      // `persistNow`→`pushRemoteThread`), `remoteMeta.updatedAt` quedaba para
+      // siempre por encima del baseline congelado — como ahora este bloque
+      // corre en CADA `visibilitychange` (no solo al montar, ver
+      // `syncThreadsFromServerRef`), eso disparaba `loadChatIntoState` en
+      // casi todo regreso de segundo plano, cortando el stream en vivo y
+      // reseteando el scroll por una "novedad" que en realidad era la propia
+      // actividad pasada de este mismo dispositivo. `activeUpdatedAtRef`
+      // (arriba en el archivo) SÍ avanza con cada actividad real del chat
+      // activo, propia o ajena — es el reloj correcto para comparar.
+      const localUpdatedAt = activeUpdatedAtRef.current;
       if (remoteMeta && remoteMeta.updatedAt > localUpdatedAt) {
         const full = await fetchRemoteThread(targetActiveId);
         if (full && activeChatEstable()) loadChatIntoState(targetActiveId, full);
@@ -2197,6 +2223,7 @@ export default function Laboratorio() {
     bumpChatsVersion();
     schedulePersist();
   };
+  syncThreadsFromServerRef.current = () => void syncThreadsFromServer();
 
   /**
    * Papelera cross-device (pedido de Jaime 2026-09-16): trae los chats
@@ -2268,10 +2295,18 @@ export default function Laboratorio() {
 
   // Al volver del segundo plano: iOS cierra las conexiones de una pestaña
   // congelada sin avisar, así que al recuperar visibilidad (o red) se
-  // reengancha.
+  // reengancha. Antes SOLO reenganchaba el turno en vivo del chat activo
+  // (`resumePendingRef`) — la lista de chats (threads nuevos/actualizados en
+  // otro dispositivo mientras esta pestaña dormía) se quedaba con la foto
+  // del montaje inicial hasta un F5 (auditoría 2026-09-19, reporte de Jaime
+  // "no se sincronizan los chats"). `syncThreadsFromServerRef` cierra ese
+  // gap sin tocar el mecanismo de reenganche del turno.
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === "visible") resumePendingRef.current();
+      if (document.visibilityState === "visible") {
+        resumePendingRef.current();
+        syncThreadsFromServerRef.current();
+      }
     };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", onVisible);

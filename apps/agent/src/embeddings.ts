@@ -180,11 +180,25 @@ function ollamaTimeoutMs(itemCount: number): number {
   return 20_000 + itemCount * 15_000;
 }
 
-async function fetchOllamaBatch(chunk: string[]): Promise<(number[] | null)[]> {
+/**
+ * Un solo hipo (swap momentáneo, el mutex sosteniendo el turno más de la
+ * cuenta, un timeout que dispara por poco) no puede reprobar el DOCUMENTO
+ * ENTERO — `ingestOne` (chat-documents.ts) descarta el archivo completo si
+ * `vectors.some(v => v === null)`, así que un solo lote fallido tira todo a
+ * "rojo" sin razón real (auditoría 2026-09-19, reporte de Jaime: "los
+ * archivos tardan mucho y luego queda en rojo"). Un reintento único, con su
+ * propio timeout completo, cubre el caso transitorio sin ocultar un fallo
+ * de verdad (Ollama caído de raíz sigue fallando tras el reintento).
+ */
+const MAX_OLLAMA_ATTEMPTS = 2;
+
+async function fetchOllamaBatch(chunk: string[], attempt = 1): Promise<(number[] | null)[]> {
   const controller = new AbortController();
   const timeoutMs = ollamaTimeoutMs(chunk.length);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
+  const retryOrGiveUp = (): Promise<(number[] | null)[]> | (number[] | null)[] =>
+    attempt < MAX_OLLAMA_ATTEMPTS ? fetchOllamaBatch(chunk, attempt + 1) : chunk.map(() => null);
   try {
     const res = await fetch(`${env.OLLAMA_URL}/api/embed`, {
       method: "POST",
@@ -193,8 +207,12 @@ async function fetchOllamaBatch(chunk: string[]): Promise<(number[] | null)[]> {
       signal: controller.signal,
     });
     if (!res.ok) {
-      console.error("[hermes] embeddings ollama", res.status, await res.text());
-      return chunk.map(() => null);
+      console.error(
+        `[hermes] embeddings ollama (intento ${attempt}/${MAX_OLLAMA_ATTEMPTS})`,
+        res.status,
+        await res.text(),
+      );
+      return retryOrGiveUp();
     }
     const json = (await res.json()) as { embeddings?: number[][] };
     const vecs = json.embeddings ?? [];
@@ -209,11 +227,14 @@ async function fetchOllamaBatch(chunk: string[]): Promise<(number[] | null)[]> {
     });
   } catch (err) {
     if ((err as Error).name === "AbortError") {
-      console.error(`[hermes] embeddings ollama: sin respuesta tras ${timeoutMs}ms, se descarta el lote`);
+      console.error(
+        `[hermes] embeddings ollama: sin respuesta tras ${timeoutMs}ms ` +
+          `(intento ${attempt}/${MAX_OLLAMA_ATTEMPTS})`,
+      );
     } else {
-      console.error("[hermes] embeddings ollama fetch", err);
+      console.error(`[hermes] embeddings ollama fetch (intento ${attempt}/${MAX_OLLAMA_ATTEMPTS})`, err);
     }
-    return chunk.map(() => null);
+    return retryOrGiveUp();
   } finally {
     clearTimeout(timer);
   }

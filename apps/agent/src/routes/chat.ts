@@ -428,6 +428,16 @@ export function registerChatRoutes(app: Hono): void {
               status: snap.status,
               text: snap.text,
               steps: snap.steps,
+              // Faltaba (bug real, auditoría 2026-09-19): el cliente SÍ lee
+              // `st.files` cuando `truncated` es true (ver laboratorio/page.tsx,
+              // reconstrucción de bloques tras un buffer botado) — sin este
+              // campo llegaba `undefined` y `st.files.length` reventaba el
+              // handler `onState` a mitad de camino, dejando `setBusy` sin
+              // ejecutarse (chat colgado en "escribiendo…" para siempre). El
+              // endpoint HTTP plano (`GET /chat/turns/:id`) sí lo incluía
+              // porque hace `c.json(snap)` directo — este payload armado a
+              // mano se había quedado atrás.
+              files: snap.files,
               seq: snap.seq,
               truncated: snap.truncated,
               attempts: snap.attempts,
