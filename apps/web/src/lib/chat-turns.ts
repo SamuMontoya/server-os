@@ -9,7 +9,7 @@
  * cancela nada; cancelar es pulsar ⏹.
  */
 import { hermesFetch, sseUrl } from "@/lib/hermes";
-import type { ChatToolStep } from "@hermes/shared";
+import type { ChatToolStep, GeneratedFile } from "@hermes/shared";
 
 export type TurnStatus = "running" | "done" | "error" | "stopped";
 
@@ -18,6 +18,13 @@ export interface TurnState {
   /** Texto ÍNTEGRO acumulado en el servidor: con esto se repinta sin dudas. */
   text: string;
   steps: ChatToolStep[];
+  /** Archivos generados por el turno (cards de descarga). El servidor lo
+   *  manda desde `chat.ts` (`onSnapshot` → `files: snap.files`, fix
+   *  2026-09-19: antes faltaba y un reenganche con buffer truncado podía
+   *  explotar `state.files.length` sobre `undefined`). Opcional acá porque
+   *  un deploy viejo del agente todavía puede omitirlo — el consumidor debe
+   *  seguir usando `state.files ?? []`. */
+  files?: GeneratedFile[];
   seq: number;
   /** El buffer botó eventos: hay que repintar con `text`, no concatenar. */
   truncated: boolean;
