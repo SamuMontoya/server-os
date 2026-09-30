@@ -9,7 +9,7 @@ import { supabase } from "./supabase.js";
  * varianza de `Context#set`/`#get`) — en vez de eso, cada punto que necesita
  * `userId` castea `c` puntualmente a este tipo.
  */
-export type CtxWithUser = Context<{ Variables: { userId?: string } }>;
+export type CtxWithUser = Context<{ Variables: { userId?: string; userEmail?: string } }>;
 
 /** El cast de arriba cruza dos tipos de Env que TS considera no solapados
  *  (`BlankEnv` no declara `Variables`) — de ahí el paso por `unknown`. */
@@ -29,6 +29,7 @@ export function withUser(c: Context): CtxWithUser {
 
 interface CacheEntry {
   userId: string | null;
+  email: string | null;
   expiresAt: number;
 }
 
@@ -65,6 +66,7 @@ export async function verifySupabaseToken(token: string): Promise<string | null>
   if (hit && hit.expiresAt > now) return hit.userId;
 
   let userId: string | null = null;
+  let email: string | null = null;
   try {
     const { data, error } = await supabase.auth.getUser(token);
     if (!error && data.user) {
@@ -72,6 +74,7 @@ export async function verifySupabaseToken(token: string): Promise<string | null>
       const correo = (data.user.email || "").toLowerCase();
       if (permitidos.length === 0 || permitidos.includes(correo)) {
         userId = data.user.id;
+        email = correo || null;
       } else {
         // Autenticado pero sin permiso. Se registra: un JWT válido de alguien
         // que no debería entrar es justo lo que se quiere ver en el log.
@@ -84,11 +87,18 @@ export async function verifySupabaseToken(token: string): Promise<string | null>
 
   // Los rechazos también se cachean (TTL corto) para no dejar que un token
   // inválido repetido convierta cada request en una llamada a Supabase.
-  cache.set(token, { userId, expiresAt: now + (userId ? CACHE_TTL_MS : 30_000) });
+  cache.set(token, { userId, email, expiresAt: now + (userId ? CACHE_TTL_MS : 30_000) });
   if (cache.size > 500) {
     for (const [k, v] of cache) {
       if (v.expiresAt <= now) cache.delete(k);
     }
   }
   return userId;
+}
+
+/** Correo cacheado del último verifySupabaseToken(token) exitoso — para
+ *  rutas que necesitan saber QUIÉN es el usuario, no solo su userId (ej:
+ *  feedback.ts, que solo permite a samu7montoya@gmail.com cerrar reportes). */
+export function getCachedEmail(token: string): string | null {
+  return cache.get(token)?.email ?? null;
 }

@@ -5,7 +5,7 @@ import { env } from "./env.js";
 import { EMB } from "./embeddings.js";
 import { modelSummary } from "./agent/models.js";
 import { budgetState } from "./agent/budget.js";
-import { verifySupabaseToken, withUser } from "./auth.js";
+import { verifySupabaseToken, withUser, getCachedEmail } from "./auth.js";
 import { pushPresence } from "./presence.js";
 import { readProjects } from "./vault/projects.js";
 import { hasSupabase } from "./memory.js";
@@ -25,6 +25,7 @@ import { registerVaultRoutes } from "./routes/vault.js";
 import { registerSystemRoutes } from "./routes/system.js";
 import { registerChatThreadsRoutes } from "./routes/chat-threads.js";
 import { registerFilesRoutes } from "./routes/files.js";
+import { registerFeedbackRoutes } from "./routes/feedback.js";
 import { purgeExpiredTrashedThreads } from "./chat-threads.js";
 
 const app = new Hono();
@@ -121,6 +122,8 @@ app.use("*", async (c, next) => {
       const userId = await verifySupabaseToken(bearer || queryKey);
       if (!userId) return c.json({ error: "unauthorized" }, 401);
       withUser(c).set("userId", userId);
+      const email = getCachedEmail(bearer || queryKey);
+      if (email) withUser(c).set("userEmail", email);
     }
   }
   await next();
@@ -142,6 +145,7 @@ registerKnowledgeRoutes(app); // /knowledge/*, /memories/recent
 registerVaultRoutes(app); // /projects*, /vault/doc
 registerChatThreadsRoutes(app); // /chat/threads*, /chat/active — continuidad entre dispositivos
 registerFilesRoutes(app); // /files/download — archivos que el agente generó
+registerFeedbackRoutes(app); // /feedback* — buzón de mejoras del portal
 
 // ── Boot ───────────────────────────────────────────────────────────────
 startSystemSampler(); // sampler de CPU (5s) para GET /system
