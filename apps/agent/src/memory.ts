@@ -134,4 +134,50 @@ export async function memoriesCount(): Promise<number> {
   return count ?? 0;
 }
 
+/**
+ * Panel "Memoria y preferencias" del portal (pedido de Jaime 2026-10-02):
+ * listado completo para ver/editar/borrar lo que el agente aprendió — hasta
+ * ahora invisible salvo por la etiqueta de tool-call en el scroll del chat.
+ */
+export async function listAllMemories(): Promise<Memory[]> {
+  if (!supabase) return [];
+  const { data } = await supabase
+    .from("memories")
+    .select("id,type,content,summary,project_slug,tags,importance,source,machine,created_at,updated_at")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  return (data ?? []) as Memory[];
+}
+
+export async function updateMemoryContent(id: string, content: string): Promise<boolean> {
+  if (!supabase) return false;
+  const embedding = await embed(content);
+  const { error } = await supabase
+    .from("memories")
+    .update({ content, [EMB.col]: embedding, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  return !error;
+}
+
+export async function deleteMemoryById(id: string): Promise<boolean> {
+  if (!supabase) return false;
+  const { error } = await supabase.from("memories").delete().eq("id", id);
+  return !error;
+}
+
+export async function listAllPreferences(): Promise<{ key: string; value: unknown; updated_at: string }[]> {
+  if (!supabase) return [];
+  const { data } = await supabase
+    .from("preferences")
+    .select("key,value,updated_at")
+    .order("updated_at", { ascending: false });
+  return (data ?? []) as { key: string; value: unknown; updated_at: string }[];
+}
+
+export async function deletePreferenceByKey(key: string): Promise<boolean> {
+  if (!supabase) return false;
+  const { error } = await supabase.from("preferences").delete().eq("key", key);
+  return !error;
+}
+
 export { hasSupabase };

@@ -26,6 +26,7 @@ import { registerSystemRoutes } from "./routes/system.js";
 import { registerChatThreadsRoutes } from "./routes/chat-threads.js";
 import { registerFilesRoutes } from "./routes/files.js";
 import { registerFeedbackRoutes } from "./routes/feedback.js";
+import { registerLearningRoutes } from "./routes/learning.js";
 import { purgeExpiredTrashedThreads } from "./chat-threads.js";
 
 const app = new Hono();
@@ -146,6 +147,7 @@ registerVaultRoutes(app); // /projects*, /vault/doc
 registerChatThreadsRoutes(app); // /chat/threads*, /chat/active — continuidad entre dispositivos
 registerFilesRoutes(app); // /files/download — archivos que el agente generó
 registerFeedbackRoutes(app); // /feedback* — buzón de mejoras del portal
+registerLearningRoutes(app); // /memories, /preferences — panel de aprendizaje del portal
 
 // ── Boot ───────────────────────────────────────────────────────────────
 startSystemSampler(); // sampler de CPU (5s) para GET /system

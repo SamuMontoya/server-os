@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { env } from "../env.js";
 import { saveMemory, searchMemory, savePreference } from "../memory.js";
+import { resetSystemPromptCache } from "./system-prompt.js";
 import { searchKnowledge, knowledgeToText } from "../knowledge.js";
 import { readProjects } from "../vault/projects.js";
 import { supabase } from "../supabase.js";
@@ -21,6 +22,18 @@ function text(t: string) {
   return { content: [{ type: "text" as const, text: t }] };
 }
 
+/**
+ * Wrapper de escritura con 1 reintento inmediato — pedido explícito de Jaime
+ * (2026-10-02): "si falla la escritura en BD, se avisa el error Y se
+ * reintenta". No reintenta en loop: si el segundo intento también falla, se
+ * reporta el error tal cual, sin tercer intento.
+ */
+async function writeWithRetry<T>(fn: () => Promise<T>, isError: (r: T) => boolean): Promise<T> {
+  const first = await fn();
+  if (!isError(first)) return first;
+  return fn();
+}
+
 // ── Tools MCP in-process del servidor "hermes" ─────────────────────────
 
 const saveMemoryTool = tool(
@@ -33,7 +46,17 @@ const saveMemoryTool = tool(
     tags: z.array(z.string()).optional(),
     importance: z.number().min(1).max(5).optional().describe("1=trivial, 5=crítico"),
   },
-  async (args) => text(await saveMemory({ ...args, source: "agent" })),
+  async (args) => {
+    const result = await writeWithRetry(
+      () => saveMemory({ ...args, source: "agent" }),
+      (r) => r.startsWith("Error"),
+    );
+    if (result.startsWith("Error")) return text(`⚠️ No se pudo guardar la memoria: ${result}`);
+    // Invalida el cache del system prompt de inmediato (bug conocido: antes
+    // quedaba hasta 1h servida sin la memoria nueva, pedido de Jaime 2026-10-02).
+    resetSystemPromptCache();
+    return text(`🧠 Memoria guardada${args.project ? ` (${args.project})` : ""}: ${args.content}`);
+  },
 );
 
 const KNOWLEDGE_SOURCES = [
@@ -88,7 +111,15 @@ const savePreferenceTool = tool(
   "save_preference",
   `Guarda una preferencia GLOBAL de ${OWNER} (clave-valor), que se inyecta garantizado en el system prompt de CADA turno futuro (a diferencia de save_memory, que depende de búsqueda semántica y puede no aparecer). Úsala para reglas de comportamiento/formato que valen siempre, sin scope de proyecto — ej: key='formato_tablas', value='siempre markdown, nunca ASCII'; key='package_manager', value='pnpm'. Si ${OWNER} dice "recuerda que...", "de ahora en adelante...", "siempre haz/no hagas X" sobre algo transversal, llama esta tool EN ESE MISMO TURNO, antes de responder que quedó anotado.`,
   { key: z.string(), value: z.string() },
-  async ({ key, value }) => text(await savePreference(key, value)),
+  async ({ key, value }) => {
+    const result = await writeWithRetry(
+      () => savePreference(key, value),
+      (r) => r.startsWith("Error"),
+    );
+    if (result.startsWith("Error")) return text(`⚠️ No se pudo guardar la preferencia: ${result}`);
+    resetSystemPromptCache();
+    return text(`📌 Preferencia guardada: ${key} = ${value}`);
+  },
 );
 
 const getProjectStatusTool = tool(
