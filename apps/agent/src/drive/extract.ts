@@ -15,9 +15,14 @@ const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 const EPUB_MIME = "application/epub+zip";
 
-/** Texto plano de verdad: se decodifica tal cual, sin parser de por medio. */
-const PLAIN_TEXT_EXT = new Set([".txt", ".md", ".markdown", ".csv", ".json", ".log"]);
-const PLAIN_TEXT_MIME_PREFIXES = ["text/", "application/json"];
+/** Texto plano de verdad: se decodifica tal cual, sin parser de por medio.
+ *  `.xml` entró acá (fix 2026-10-09, Épica B, buzón #14 "no puedo subir
+ *  archivos XML") — no necesita parser propio, es texto estructurado que se
+ *  indexa igual que un JSON o un CSV. Va por extensión Y no solo por
+ *  mimeType porque el navegador puede reportar `application/xml` (no
+ *  arranca con "text/" ni matchea "application/json"). */
+const PLAIN_TEXT_EXT = new Set([".txt", ".md", ".markdown", ".csv", ".json", ".log", ".xml"]);
+const PLAIN_TEXT_MIME_PREFIXES = ["text/", "application/json", "application/xml"];
 
 /** Extensiones de imagen que Tesseract/leptonica decodifican directo. */
 const IMAGE_EXT_BY_MIME: Record<string, string> = {

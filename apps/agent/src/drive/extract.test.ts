@@ -108,3 +108,29 @@ test("EPUB: archivo corrupto/sin container.xml devuelve string vacío en vez de 
   const text = await extractText(buf, "application/epub+zip", "roto.epub");
   assert.equal(text, "");
 });
+
+// ── XML (fix 2026-10-09, Épica B, buzón #14 "no puedo subir archivos XML") ──
+//
+// No necesita parser propio: es texto estructurado, se decodifica tal cual
+// como un .txt/.json/.csv (ver PLAIN_TEXT_EXT en extract.ts). El bug real
+// estaba en el gate del cliente (ACCEPTED_EXT en jaime-os), no acá — pero
+// esto faltaba probar de todos modos, por si algún día SÍ hiciera falta un
+// parser dedicado (ej. extraer solo texto de nodos, no las etiquetas).
+
+test("XML con mimeType 'text/xml': se extrae como texto plano", async () => {
+  const xml = '<?xml version="1.0"?><quiz><pregunta>¿Cuál es la ley de cierre?</pregunta></quiz>';
+  const text = await extractText(Buffer.from(xml, "utf8"), "text/xml", "quiz.xml");
+  assert.match(text, /ley de cierre/);
+});
+
+test("XML con mimeType 'application/xml' (variante que NO arranca con 'text/'): también se extrae", async () => {
+  const xml = "<root><item>contenido vía application/xml</item></root>";
+  const text = await extractText(Buffer.from(xml, "utf8"), "application/xml", "datos.xml");
+  assert.match(text, /contenido vía application\/xml/);
+});
+
+test("XML sin mimeType reconocible (ej. 'application/octet-stream', típico al arrastrar desde Finder/Explorer): se extrae igual por la EXTENSIÓN", async () => {
+  const xml = "<root><item>rescatado solo por la extensión .xml</item></root>";
+  const text = await extractText(Buffer.from(xml, "utf8"), "application/octet-stream", "sin-mime.xml");
+  assert.match(text, /rescatado solo por la extensión/);
+});

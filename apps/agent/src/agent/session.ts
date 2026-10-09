@@ -165,28 +165,99 @@ const SAFE_FILE_EXTENSIONS = new Set([
   ".mp3",
   ".zip",
   ".json",
+  ".xml",
   ".txt",
   ".md",
   ".html",
   ".ics",
 ]);
 
-/** name → mtimeMs de los archivos "entregables" en el primer nivel de `dir`. */
-async function snapshotDeliverables(dir: string): Promise<Map<string, number>> {
+/**
+ * fullPath → mtimeMs de los archivos "entregables" bajo `dir`.
+ *
+ * `recursive` (fix 2026-10-09, Épica B, buzón #13 "no hay manera de acceder
+ * a esos archivos"): antes esto SOLO miraba el primer nivel de `dir`, lo
+ * cual es razonable para el cwd de un proyecto (evita escanear un repo
+ * entero) pero rompía el caso real reportado — el agente deja un archivo en
+ * una SUBCARPETA del vault (ej. `00 Inbox/archivo.xml`) y nunca se detecta
+ * porque nadie mira un nivel más abajo. El vault es contenido propio,
+ * curado y acotado (no un `node_modules`), así que recorrerlo entero con un
+ * tope de profundidad es seguro y barato. Las claves pasan a ser la ruta
+ * COMPLETA (no solo el nombre): con dos raíces distintas (cwd del proyecto +
+ * vault, ver más abajo) un nombre repetido entre ambas pisaría la entrada.
+ */
+export async function snapshotDeliverables(
+  dir: string,
+  recursive = false,
+  maxDepth = 3,
+): Promise<Map<string, number>> {
   const out = new Map<string, number>();
-  try {
-    const entries = await readdir(dir, { withFileTypes: true });
+  async function walk(current: string, depth: number): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(current, { withFileTypes: true });
+    } catch {
+      return; // directorio inexistente/sin permiso: no hay nada que detectar.
+    }
     for (const entry of entries) {
-      if (!entry.isFile() || entry.name.startsWith(".")) continue;
+      if (entry.name.startsWith(".")) continue;
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (recursive && depth < maxDepth) await walk(full, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
       const ext = entry.name.slice(entry.name.lastIndexOf(".")).toLowerCase();
       if (!SAFE_FILE_EXTENSIONS.has(ext)) continue;
-      const info = await stat(join(dir, entry.name)).catch(() => null);
-      if (info) out.set(entry.name, info.mtimeMs);
+      const info = await stat(full).catch(() => null);
+      if (info) out.set(full, info.mtimeMs);
     }
-  } catch {
-    // cwd inexistente/sin permiso: no hay nada que detectar, no es un error.
   }
+  await walk(dir, 0);
   return out;
+}
+
+/**
+ * Raíces a vigilar para detectar archivos que un Bash dejó nuevos — fix
+ * 2026-10-09 (Épica B, buzón #13): antes era UNA sola (`opts.cwd ||
+ * env.VAULT_PATH || process.cwd()`), así que con un proyecto en foco
+ * (`opts.cwd` apunta al repo local) cualquier escritura al vault —que vive
+ * en otra ruta— quedaba completamente invisible, aunque el archivo sí se
+ * hubiera creado de verdad. Ahora se vigilan AMBAS cuando difieren: el cwd
+ * del proyecto (primer nivel, como siempre — es código ajeno, no conviene
+ * recorrerlo entero) y el vault (recursivo acotado, ver `snapshotDeliverables`).
+ */
+export function deliverableRoots(
+  cwd?: string,
+  /** Inyectable para tests — `env.VAULT_PATH` se congela al importar
+   *  `env.js` (lee `process.env` una sola vez), así que mutar la env var en
+   *  caliente desde un test NO lo cambia. En producción siempre es el
+   *  default real. */
+  vaultPath: string = env.VAULT_PATH,
+): { dir: string; recursive: boolean }[] {
+  const roots: { dir: string; recursive: boolean }[] = [];
+  const seen = new Set<string>();
+  const add = (dir: string | undefined, recursive: boolean) => {
+    if (!dir || seen.has(dir)) return;
+    seen.add(dir);
+    roots.push({ dir, recursive });
+  };
+  add(cwd, false);
+  add(vaultPath, true);
+  if (roots.length === 0) add(process.cwd(), false);
+  return roots;
+}
+
+export async function snapshotAllRoots(
+  cwd?: string,
+  vaultPath: string = env.VAULT_PATH,
+): Promise<Map<string, number>> {
+  const maps = await Promise.all(
+    deliverableRoots(cwd, vaultPath).map(({ dir, recursive }) => snapshotDeliverables(dir, recursive)),
+  );
+  const merged = new Map<string, number>();
+  for (const m of maps) for (const [k, v] of m) merged.set(k, v);
+  return merged;
 }
 
 export interface RunTurnResult {
@@ -519,10 +590,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
             // llegue el tool_result con el MISMO tool_use_id (ver el bloque
             // `m.type === "user"` más abajo), nunca por posición.
             if (block.name === "Bash" && typeof block.id === "string") {
-              pendingBashSnapshots.set(
-                block.id,
-                snapshotDeliverables(opts.cwd || env.VAULT_PATH || process.cwd()),
-              );
+              pendingBashSnapshots.set(block.id, snapshotAllRoots(opts.cwd));
             }
           }
         }
@@ -555,19 +623,19 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
             const before = toolUseId ? pendingBashSnapshots.get(toolUseId) : undefined;
             if (toolUseId) pendingBashSnapshots.delete(toolUseId);
             if (before) {
-              const cwd = opts.cwd || env.VAULT_PATH || process.cwd();
               void before.then(async (beforeMap) => {
-                const afterMap = await snapshotDeliverables(cwd);
-                for (const [name, mtime] of afterMap) {
-                  if (beforeMap.get(name) === mtime) continue;
+                const afterMap = await snapshotAllRoots(opts.cwd);
+                for (const [path, mtime] of afterMap) {
+                  if (beforeMap.get(path) === mtime) continue;
                   // Asentado: un Bash puede lanzar un proceso que sigue
                   // escribiendo tras "terminar" (& en background, un
                   // conversor tipo soffice/ffmpeg) — comparar el tamaño dos
                   // veces con una pausa corta evita registrar (y ofrecer para
                   // descarga) un archivo a medio escribir. No es una garantía
                   // absoluta, pero cubre el caso común sin bloquear el turno
-                  // más que unos ms.
-                  const path = join(cwd, name);
+                  // más que unos ms. `path` ya es la ruta completa (ver
+                  // `snapshotDeliverables`/`snapshotAllRoots`), no hace falta
+                  // reconstruirla con `join`.
                   const first = await stat(path).catch(() => null);
                   if (!first) continue;
                   await new Promise((r) => setTimeout(r, 300));

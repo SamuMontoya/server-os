@@ -57,7 +57,7 @@ export const INGEST_CONCURRENCY = 2;
 
 /** Mismo criterio que drive/extract.ts — aquí solo para el mensaje de error. */
 const SUPPORTED_LABEL =
-  "PDF, DOCX, XLSX, PPTX, EPUB, TXT, MD, CSV, JSON, SVG o imagen (JPG/PNG/WEBP/BMP/TIFF/GIF, vía OCR)";
+  "PDF, DOCX, XLSX, PPTX, EPUB, TXT, MD, CSV, JSON, XML, SVG o imagen (JPG/PNG/WEBP/BMP/TIFF/GIF, vía OCR)";
 
 export interface UploadedFile {
   name: string;
