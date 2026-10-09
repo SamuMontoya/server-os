@@ -54,6 +54,44 @@
 
 Monorepo pnpm. Dos procesos: `apps/web` (Next.js 15, dashboard "AGENTIC OS") y `apps/agent` (Hono, Claude Agent SDK; en este fork corre en :8650 vía systemd `hermes-agent.service`). Tipos compartidos en `packages/shared`.
 
+## ⚠️ Hay DOS frontends — `apps/web` de aquí NO es el que ve Jaime
+
+Diagnosticado el 2026-10-09 (confusión reportada por Jaime/Samu: "¿por qué hay
+dos cosas, jaime-os y server-os?"). Nada se borró, solo se documenta cuál es
+cuál:
+
+- **`/root/dev/jaime-os` (repo standalone, remoto `SamuMontoya/jaime-os.git`)
+  es la ÚNICA fuente de verdad del frontend que corre en producción.**
+  Verificado contra la API de Vercel: el último deploy `target: production`
+  del proyecto Vercel `jaime-os` (`prj_FW54fEC0LoAMnBtAKLNXXukgdPYz`, dominios
+  `jaime-os-iota.vercel.app` y `os-jtautiva-6409.vercel.app`) tiene
+  `gitCommitSha` idéntico al HEAD de `jaime-os` y `gitRemoteUrl:
+  github-jaimeos:SamuMontoya/jaime-os.git`. Ahí viven features que NO existen
+  en `apps/web` de este monorepo: Buzón de mejoras (`LabFeedbackScreen`),
+  `LabAccountFooter`, `LabChatsScreen`, `LabGeneratedFiles`, `LabUserBubble`,
+  `LabLearningScreen`. El deploy se hace a mano con `vercel --prod` desde esa
+  carpeta (no hay integración Git↔Vercel automática).
+- **`apps/web` (este monorepo) es un fork histórico del mismo frontend,
+  desactualizado desde el commit `9420b64` (2026-09-19) y NO conectado al
+  deploy real** — aunque confusamente *también* tiene su propio
+  `.vercel/project.json` apuntando AL MISMO `projectId` que `jaime-os`. Eso es
+  un riesgo real, no solo cosmético: si alguien corre `vercel --prod` (o
+  `vercel deploy`) parado en `server-os` o en `server-os/apps/web`, pisaría la
+  producción real con código viejo sin el Buzón de mejoras ni los fixes
+  recientes de memoria/preferencias. **Regla: nunca deployar desde
+  `server-os`. El único directorio válido para `vercel --prod` del portal es
+  `/root/dev/jaime-os`.**
+- **`apps/agent` (este monorepo) SÍ es el backend real y único** — el Hono +
+  Claude Agent SDK que corre vía systemd `hermes-agent.service` en :8650, y al
+  que le habla tanto el frontend de producción (`jaime-os`, vía
+  `NEXT_PUBLIC_HERMES_URL`/`HERMES_PORTAL_ORIGINS`) como esta misma sesión de
+  Hermes/CLI. No hay dos backends, solo dos frontends.
+- Pendiente de decidir con Jaime/Samu (no se tocó porque no es reversible
+  sin riesgo): si `apps/web` se borra, se congela como legacy explícito, o se
+  sincroniza y se vuelve el único frontend (eliminando el repo `jaime-os`
+  standalone). Hasta que se decida, tratar `apps/web` como código muerto de
+  solo lectura.
+
 ## Arquitectura
 - **Dictado del composer** (mic → texto): `apps/agent/src/stt.ts` (el STT que antes servía a las juntas borradas, ahora movido aquí para dictado puro; ElevenLabs Scribe con fallback a OpenAI Whisper) vía `POST /dictado/transcribir` — un clip corto que se transcribe y se devuelve en la misma respuesta, sin persistencia ni job async. El cliente (`useVoiceDictation.ts`) graba con MediaRecorder y mientras tanto pinta en vivo el texto (sin puntuación real) de la Web Speech API del navegador como vista previa; al soltar el botón, la transcripción del servidor la reemplaza con puntuación de verdad. Sin `ELEVENLABS_API_KEY`/`OPENAI_API_KEY` se queda con la vista previa: nunca se pierde el dictado.
 - El chat de texto usa el **contrato Hermes**: `POST /v1/chat/completions` OpenAI-compatible SSE + header `X-Hermes-Session-Id` (resume de sesión SDK). **Los turnos son TRABAJOS DEL SERVIDOR, no cuerpos de request** (`apps/agent/src/agent/chat-turns.ts`): `POST /chat/turns` devuelve un `turn_id` y el turno corre solo, con buffer de eventos numerados (`seq`), reintentos ×3 con backoff ante fallos transitorios (`isRetryable`; NO reintenta si ya entregó texto, porque duplicaría media respuesta) y persistencia al cerrar aunque no quede nadie escuchando. `GET /chat/turns/:id?from=` da el snapshot con el texto íntegro y `GET /chat/turns/:id/stream?from=` re-adjunta desde el cursor: **cerrar el socket NO cancela nada** — cancelar es `POST /chat/turns/:id/stop`. Esto es lo que hace que bloquear la pantalla del iPhone a mitad de una respuesta ya no la pierda. El cliente guarda el hilo en el navegador (`apps/web/src/lib/chat-persist.ts`: tabs, mensajes, `sdkSessionId` y el `pendingTurn` con su `seq`) y se reengancha al montar y en `visibilitychange` — antes los tabs vivían solo en `useState` y cada remontaje mostraba un chat nuevo y vacío sobre una conversación que seguía existiendo. Tests: `pnpm test` (node:test sobre tsx, sin dependencias nuevas).
