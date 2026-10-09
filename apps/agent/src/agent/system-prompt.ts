@@ -195,12 +195,17 @@ export async function buildTurnContext(
   },
   /** Salta toda la precarga. Lo usa el canal del reloj. */
   magro = false,
+  /** Proyecto en foco del turno (opts.project de startTurn). Sin esto,
+   * search_knowledge busca en TODO el vault sin aislar por materia y
+   * contamina el contexto con contenido de otra materia/proyecto —
+   * causa raíz real de "confunde chats" (buzón #4/#10, 2026-10-09). */
+  project?: string,
 ): Promise<string> {
   if (magro || !message.trim()) return "";
 
   const [recent, relevant] = await Promise.all([
     recentMemories(retrieval.recent),
-    searchKnowledge(message, { limit: retrieval.relevant }),
+    searchKnowledge(message, { limit: retrieval.relevant, project }),
   ]);
 
   const seenMemories = new Set<string>(recent.map((m) => m.id));

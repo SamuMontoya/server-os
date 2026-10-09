@@ -241,7 +241,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     // historial del turno que se está continuando.
     opts.precargarContexto === false
       ? Promise.resolve("")
-      : buildTurnContext(opts.prompt, _profile.retrieval, opts.magro),
+      : buildTurnContext(opts.prompt, _profile.retrieval, opts.magro, opts.project),
   ]);
 
   // Enrutamiento del turno. La clasificación es local (cero tokens) y el nivel
