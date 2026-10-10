@@ -5,7 +5,6 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Readable } from "node:stream";
 import { turnToMarkdown, exportTurn } from "./turn-export.js";
 import type { ChatTurn } from "../agent/chat-turns.js";
 
@@ -21,7 +20,9 @@ function mockTurn(): ChatTurn {
     files: [
       { id: "f1", name: "ejemplo.docx", mime: "application/msword", size: 456 },
     ],
-  } as ChatTurn;
+    attempts: 1,
+    startedAt: Date.now(),
+  } as unknown as ChatTurn;
 }
 
 test("integración: markdown exportado contiene todo lo necesario", async () => {

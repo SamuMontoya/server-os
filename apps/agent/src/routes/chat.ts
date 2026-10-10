@@ -7,6 +7,7 @@ import { getSdkSession } from "../agent/session.js";
 import { listChatSessions, readChatSession, resolveChatCwd } from "../agent/chat-history.js";
 import { chatTurns, turnVisibleTo, type TurnEvent } from "../agent/chat-turns.js";
 import { exportTurn } from "./turn-export.js";
+import { buildImageZip } from "./image-export.js";
 import { titleForChat } from "../agent/chat-title.js";
 import { gistForAnswer } from "../agent/chat-gist.js";
 import {
@@ -393,6 +394,28 @@ export function registerChatRoutes(app: Hono): void {
     } catch (err) {
       console.error("[chat.export] error exportando turno", id, err);
       return c.json({ error: "error generando exportación" }, 500);
+    }
+  });
+
+  /** Empaqueta en .zip las imágenes sugeridas (URLs) que el turno dejó en su
+   *  respuesta, verificadas una por una antes de incluirlas (Épica B, buzón
+   *  B5) — las que no pasan verificación quedan listadas en reporte.md
+   *  dentro del mismo zip, nunca se descartan en silencio. */
+  app.get("/chat/turns/:id/export-images", async (c) => {
+    const id = c.req.param("id");
+    const turn = chatTurns.get(id);
+    if (!turn || !turnVisibleTo(turn, withUser(c).get("userId"))) {
+      return c.json({ error: "turno no encontrado" }, 404);
+    }
+    try {
+      const { stream } = await buildImageZip(turn);
+      const timestamp = new Date().toISOString().split("T")[0];
+      c.header("Content-Type", "application/zip");
+      c.header("Content-Disposition", `attachment; filename="imagenes-${id.slice(0, 8)}-${timestamp}.zip"`);
+      return c.body(Readable.toWeb(stream) as ReadableStream);
+    } catch (err) {
+      console.error("[chat.export-images] error empaquetando imágenes", id, err);
+      return c.json({ error: "error generando el zip de imágenes" }, 500);
     }
   });
 
