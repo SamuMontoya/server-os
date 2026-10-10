@@ -183,6 +183,51 @@ const SOURCE_LABELS: Record<string, string> = {
  * Devuelve "" si no hay nada que aportar — el llamador no debe agregar
  * encabezados vacíos al mensaje.
  */
+/**
+ * Cota de tiempo para la precarga especulativa de contexto (Épica C, C2 —
+ * buzón #12 "tareas tardan 3-4x más que Claude directo"). Antes
+ * `recentMemories`/`searchKnowledge` corrían SIN límite dentro del
+ * `Promise.all` de abajo: el comentario de `buildSystemPrompt` ya documentaba
+ * que cada ida a Supabase son ~1,3s (hasta 6 la semántica) y que eso era "el
+ * grueso de los ~9s que tardaba un turno en arrancar, no el modelo" — pero
+ * nada evitaba que una ida lenta (red, Supabase bajo carga) se comiera eso
+ * ENTERO antes del primer token. Con este tope, un turno nunca espera más de
+ * `CONTEXT_FETCH_TIMEOUT_MS` por esta precarga: si se pasa, sigue con lo que
+ * ya tenía (memoria vacía si ninguna llegó a tiempo) — el agente igual puede
+ * pedir lo que falte con `search_knowledge` como tool, así que no se pierde
+ * capacidad, solo la especulación que no llegó a tiempo.
+ */
+export const CONTEXT_FETCH_TIMEOUT_MS = 2_500;
+
+/** Exportada para que el test pueda pasar un `ms` corto y no esperar 2,5s de
+ *  verdad por cada caso — el comportamiento es el mismo, solo cambia la cota. */
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  fallback: T,
+  label: string,
+  ms = CONTEXT_FETCH_TIMEOUT_MS,
+): Promise<T> {
+  // No solo lenta: si la promesa original RECHAZA (red caída, Supabase
+  // abajo), tampoco debe tronar el turno entero — se degrada al fallback
+  // igual que si se hubiera pasado del tiempo.
+  const guarded = promise.catch((err) => {
+    console.warn(`[system-prompt] ${label} falló — sigo sin esto`, err);
+    return fallback;
+  });
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`[system-prompt] ${label} tardó más de ${ms}ms — sigo sin esto`);
+      resolve(fallback);
+    }, ms);
+  });
+  try {
+    return await Promise.race([guarded, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 export async function buildTurnContext(
   message: string,
   /** Cuánto contexto PRECARGAR. Lo fija el perfil de consumo (budget.ts):
@@ -204,8 +249,8 @@ export async function buildTurnContext(
   if (magro || !message.trim()) return "";
 
   const [recent, relevant] = await Promise.all([
-    recentMemories(retrieval.recent),
-    searchKnowledge(message, { limit: retrieval.relevant, project }),
+    withTimeout(recentMemories(retrieval.recent), [], "recentMemories"),
+    withTimeout(searchKnowledge(message, { limit: retrieval.relevant, project }), [], "searchKnowledge"),
   ]);
 
   const seenMemories = new Set<string>(recent.map((m) => m.id));
