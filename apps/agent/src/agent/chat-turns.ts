@@ -76,6 +76,9 @@ export interface ChatTurn {
    * respondería a ciegas sobre el texto pelado.
    */
   attachments?: string[];
+  /** Mismo principio que `attachments`, para documentos del clip (ver
+   *  documentPreamble en chat-attachments.ts, buzón #2). */
+  documentNames?: string[];
   status: TurnStatus;
   /** Texto acumulado ÍNTEGRO — no se recorta nunca; es lo que ve quien vuelve. */
   text: string;
@@ -213,6 +216,8 @@ export interface TurnRunnerArgs {
   prompt: string;
   /** Rutas absolutas de imágenes adjuntas (ver ChatTurn.attachments). */
   attachments?: string[];
+  /** Ver ChatTurn.documentNames. */
+  documentNames?: string[];
   project?: string;
   cwd?: string;
   /** Clave del hilo: fija el nivel del router. Ver RunTurnOptions. */
@@ -264,6 +269,8 @@ export interface StartTurnInput {
   prompt: string;
   /** Rutas absolutas de imágenes adjuntas (ver ChatTurn.attachments). */
   attachments?: string[];
+  /** Ver ChatTurn.documentNames. */
+  documentNames?: string[];
   sessionKey: string;
   project?: string;
   cwd?: string;
@@ -347,6 +354,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       project: input.project || "general",
       prompt: input.prompt,
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      ...(input.documentNames?.length ? { documentNames: input.documentNames } : {}),
       ...(input.userId ? { userId: input.userId } : {}),
       status: "running",
       text: "",
@@ -414,6 +422,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             // deja claro que cada reintento/continuación manda los adjuntos
             // otra vez.
             attachments: turn.attachments,
+            documentNames: turn.documentNames,
             project: input.project,
             cwd: input.cwd,
             resumeSessionId: resume,
@@ -641,6 +650,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
     const r = await runAgentTurn({
       prompt: args.prompt,
       attachments: args.attachments,
+      documentNames: args.documentNames,
       project: args.project,
       cwd: args.cwd,
       // OJO: este adaptador copia campo a campo, no hace spread. Añadir una

@@ -297,11 +297,18 @@ export function registerChatRoutes(app: Hono): void {
         project?: string;
         resume?: string;
         attachments?: string[];
+        documents?: string[];
       }>()
       .catch(() => ({}) as Record<string, never>);
     const message = b.message?.trim();
     // Ids → rutas absolutas, descartando lo que ya no exista en disco.
     const attachments = resolveChatAttachments(b.attachments);
+    // Nombres tal cual (sin resolver nada: read_chat_document ya hace match
+    // difuso) de los documentos subidos vía el clip en ESTE mensaje — ver
+    // documentPreamble en chat-attachments.ts, buzón #2.
+    const documentNames = Array.isArray(b.documents)
+      ? b.documents.filter((n): n is string => typeof n === "string" && n.trim().length > 0).slice(0, 10)
+      : [];
     // Con imagen y sin texto el turno es válido: pegar un pantallazo y darle
     // enviar es una pregunta completa ("¿qué ves acá?"). El preámbulo de
     // chat-attachments ya le dice al modelo qué hacer con ella.
@@ -320,6 +327,7 @@ export function registerChatRoutes(app: Hono): void {
       prompt: message || "¿Qué ves en esta imagen?",
       ...(esReloj ? { maxTier: "trivial" as const, magro: true } : {}),
       attachments,
+      documentNames,
       sessionKey,
       project,
       cwd: await resolveChatCwd(project),

@@ -167,6 +167,36 @@ export function attachmentPreamble(paths: string[]): string {
   ].join("\n");
 }
 
+/**
+ * Mismo principio que `attachmentPreamble`, para documentos (PDF/DOCX/XLSX/
+ * XML/etc) subidos por el clip — fix 2026-10-09 (Épica B, buzón #2 "en
+ * ocasiones no lee los documentos adjuntos").
+ *
+ * Causa raíz real: a diferencia de las imágenes (ruta exacta, orden directa
+ * de abrirla), un documento subido al chat NO viaja con el turno en
+ * absoluto — se vectoriza en `chat_docs` y queda ahí, mudo, esperando que el
+ * modelo decida por su cuenta llamar `search_knowledge` o
+ * `read_chat_document`. Si el mensaje del usuario es vago ("mira el chat",
+ * "revisa esto") o la búsqueda semántica no prioriza el fragmento correcto,
+ * el modelo simplemente nunca se entera de que hay algo nuevo que leer — no
+ * es que "falle" el OCR ni la extracción, es que nadie se lo dijo. Esto
+ * vuelve EXPLÍCITO lo que antes era implícito: nombra el archivo y da la
+ * orden directa de usar `read_chat_document`, la misma tool que ya existía
+ * pero que el modelo tenía que adivinar que debía usar.
+ */
+export function documentPreamble(names: string[]): string {
+  if (names.length === 0) return "";
+  const plural = names.length === 1 ? "un documento" : `${names.length} documentos`;
+  const list = names.map((n) => `- ${n}`).join("\n");
+  return [
+    `[El usuario adjuntó ${plural} a este mensaje (vía el clip del chat, ya indexado).`,
+    `Usa la tool read_chat_document con el nombre exacto ANTES de responder si la pregunta depende de su contenido —`,
+    `no asumas que ya lo viste solo porque está "en la base de conocimiento": este documento es NUEVO en este mensaje.]`,
+    "",
+    list,
+  ].join("\n");
+}
+
 /** Sufijo corto para el historial persistido: la ruta larga no aporta ahí. */
 export function attachmentNote(count: number): string {
   if (count <= 0) return "";

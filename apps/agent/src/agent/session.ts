@@ -24,7 +24,7 @@ import {
 } from "./router.js";
 import { currentProfile } from "./budget.js";
 import { subagentsEnabled } from "./models.js";
-import { attachmentPreamble } from "../chat-attachments.js";
+import { attachmentPreamble, documentPreamble } from "../chat-attachments.js";
 
 /**
  * Corre UN turno agéntico con el Claude Agent SDK.
@@ -44,6 +44,15 @@ export interface RunTurnOptions {
    * como contenido visual. Ver el comentario largo en chat-attachments.ts.
    */
   attachments?: string[];
+  /**
+   * Nombres de los documentos (PDF/DOCX/XML/etc) que el usuario adjuntó vía
+   * el clip EN ESTE mensaje — fix 2026-10-09, buzón #2 "en ocasiones no lee
+   * los documentos adjuntos". Ver `documentPreamble` en chat-attachments.ts
+   * para la causa raíz: a diferencia de las imágenes, un documento subido no
+   * viaja con el turno, solo queda vectorizado a la espera de que el modelo
+   * decida buscarlo por su cuenta.
+   */
+  documentNames?: string[];
   resumeSessionId?: string;
   /**
    * Clave del HILO (la pestaña del chat), estable desde el primer mensaje.
@@ -324,6 +333,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // esto" clasifica como charla y caería en haiku, que en detalle visual fino
   // no da. El techo del perfil se sigue aplicando después.
   const attachments = opts.attachments ?? [];
+  const documentNames = opts.documentNames ?? [];
   const route = routerEnabled()
     ? routeTurn(
         opts.prompt,
@@ -426,6 +436,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   const sdkPrompt = [
     turnContext,
     attachments.length ? attachmentPreamble(attachments) : "",
+    documentNames.length ? documentPreamble(documentNames) : "",
     opts.prompt,
   ]
     .filter(Boolean)
