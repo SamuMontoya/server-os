@@ -18,6 +18,7 @@
     "@hono/node-server": "^2.1.1",
     "@supabase/supabase-js": "^2.112.4",
     "chokidar": "^4.0.3",
+    "docx": "^9.9.0",
     "dotenv": "^16.6.1",
     "google-auth-library": "^11.0.2",
     "gray-matter": "^4.0.3",

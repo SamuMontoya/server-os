@@ -6,6 +6,7 @@ import { withUser } from "../auth.js";
 import { getSdkSession } from "../agent/session.js";
 import { listChatSessions, readChatSession, resolveChatCwd } from "../agent/chat-history.js";
 import { chatTurns, turnVisibleTo, type TurnEvent } from "../agent/chat-turns.js";
+import { exportTurn } from "./turn-export.js";
 import { titleForChat } from "../agent/chat-title.js";
 import { gistForAnswer } from "../agent/chat-gist.js";
 import {
@@ -373,6 +374,26 @@ export function registerChatRoutes(app: Hono): void {
     const snap = chatTurns.snapshot(id, from);
     if (!snap) return c.json({ error: "turno no encontrado" }, 404);
     return c.json(snap);
+  });
+
+  /** Exporta un turno a .docx o .md descargable (Épica B, buzón B4). */
+  app.get("/chat/turns/:id/export", async (c) => {
+    const id = c.req.param("id");
+    const turn = chatTurns.get(id);
+    if (!turn || !turnVisibleTo(turn, withUser(c).get("userId"))) {
+      return c.json({ error: "turno no encontrado" }, 404);
+    }
+    const formatParam = c.req.query("format");
+    const format = formatParam === "docx" ? "docx" : "md";
+    try {
+      const { buffer, mimeType, filename } = await exportTurn(turn, format);
+      c.header("Content-Type", mimeType);
+      c.header("Content-Disposition", `attachment; filename="${filename}"`);
+      return c.body(new Uint8Array(buffer));
+    } catch (err) {
+      console.error("[chat.export] error exportando turno", id, err);
+      return c.json({ error: "error generando exportación" }, 500);
+    }
   });
 
   /** Turnos recientes de un tab: permite re-engancharse sin recordar el id. */
