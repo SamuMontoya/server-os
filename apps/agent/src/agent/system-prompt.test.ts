@@ -18,7 +18,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSystemPrompt, withTimeout } from "./system-prompt.js";
+import { buildSystemPrompt, buildTurnContext, withTimeout } from "./system-prompt.js";
 
 // `magro = true` salta la precarga de proyectos/preferencias (Supabase) y
 // projects (vault) — deja solo el bloque estático de identidad/reglas, que
@@ -36,9 +36,21 @@ test("las reglas instruyen persistir de inmediato un pedido de 'recuerda que'", 
   assert.match(prompt, /EN ESE MISMO TURNO/);
 });
 
-test("distingue save_preference (global, garantizado) de save_memory (scoped, por búsqueda)", async () => {
+/**
+ * Bug real encontrado en esta auditoría (2026-10-12): el commit `0fe9dc2`
+ * reescribió esta prosa ("Llama la tool EN ESE MISMO TURNO...") pero nunca
+ * actualizó este assert, que seguía buscando la frase VIEJA ("solo `#
+ * Preferencias de ${OWNER}` se inyecta garantizado...") — eliminada en ese
+ * mismo commit. El test quedó en rojo en silencio desde entonces (nadie lo
+ * corrió como parte de un protocolo completo hasta ahora). Reescrito contra
+ * el texto real actual, mismo INTENTO: confirmar que el prompt distingue
+ * save_preference (garantizado, cada turno) de save_memory con `project`
+ * (scoped, depende de que la búsqueda semántica lo encuentre).
+ */
+test("distingue save_preference (global, garantizado cada turno) de save_memory con project (scoped)", async () => {
   const prompt = await buildSystemPrompt(undefined, true);
-  assert.match(prompt, /solo `# Preferencias de/);
+  assert.match(prompt, /save_preference:.*Se inyecta completo en CADA turno/s);
+  assert.match(prompt, /save_memory con `project`:.*SOLO a un proyecto puntual/s);
 });
 
 /**
@@ -72,4 +84,57 @@ test("withTimeout: adversarial — la promesa original rechaza (red caída) y NO
 test("withTimeout: adversarial — límite en 0ms sigue sin tronar (caso borde)", async () => {
   const out = await withTimeout(new Promise<string>(() => {}), "fallback-cero", "test-cero", 0);
   assert.equal(out, "fallback-cero");
+});
+
+/**
+ * Integración real de C2: `buildTurnContext` es quien de verdad CABLEA
+ * `withTimeout` a `recentMemories`/`searchKnowledge` (ambas contra Supabase
+ * real — este repo no tiene infraestructura de mocking de módulos, ver el
+ * resto de la suite). Los tests de arriba solo cubren el helper aislado con
+ * promesas de mentira; sin esto, un refactor futuro podría romper el cableado
+ * real (p. ej. dejar de pasarle el límite, o volver a un `Promise.all` sin
+ * `withTimeout`) y ningún test lo notaría. Requiere credenciales de Supabase
+ * en el entorno (las mismas que usa el agente en producción) — si faltan, se
+ * salta sola en vez de fallar en rojo por un problema de entorno de CI.
+ */
+const tieneSupabase = Boolean(
+  process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
+);
+
+test(
+  "buildTurnContext: con mensaje real, resuelve y nunca tarda más que el margen del tope (recentMemories + searchKnowledge en paralelo, cada una acotada)",
+  { skip: !tieneSupabase && "sin credenciales de Supabase en el entorno" },
+  async () => {
+    const antes = Date.now();
+    const out = await buildTurnContext("prueba de integración C2", { recent: 2, relevant: 2, chars: 100 });
+    const transcurrido = Date.now() - antes;
+    assert.equal(typeof out, "string");
+    // Las dos llamadas corren en PARALELO (Promise.all), cada una acotada a
+    // CONTEXT_FETCH_TIMEOUT_MS (2.5s) — el total nunca debería acercarse al
+    // doble de eso (lo que pasaría si en algún refactor volvieran a correr
+    // en serie). Margen generoso (6s) para no ser frágil en una red lenta.
+    assert.ok(transcurrido < 6_000, `tardó ${transcurrido}ms — ¿dejaron de correr en paralelo o de tener tope?`);
+  },
+);
+
+test(
+  "buildTurnContext: magro=true salta TODA la precarga (ni siquiera intenta recentMemories/searchKnowledge)",
+  async () => {
+    const antes = Date.now();
+    const out = await buildTurnContext("cualquier cosa", undefined, true);
+    const transcurrido = Date.now() - antes;
+    assert.equal(out, "");
+    // Sin red de por medio, esto es prácticamente instantáneo — si tardara
+    // cerca del tope de `withTimeout`, significaría que `magro` dejó de
+    // cortar antes de llegar a la red.
+    assert.ok(transcurrido < 200, `magro=true tardó ${transcurrido}ms — ¿dejó de saltarse la precarga?`);
+  },
+);
+
+test("buildTurnContext: adversarial — mensaje vacío/solo espacios devuelve '' sin tocar red", async () => {
+  const antes = Date.now();
+  const out = await buildTurnContext("   ", { recent: 2, relevant: 2, chars: 100 });
+  const transcurrido = Date.now() - antes;
+  assert.equal(out, "");
+  assert.ok(transcurrido < 200, `mensaje vacío tardó ${transcurrido}ms — ¿dejó de cortar antes de la red?`);
 });
