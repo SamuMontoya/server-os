@@ -236,3 +236,14 @@ test("buildSystemPrompt: adversarial — magro=true salta el checklist igual que
   assert.doesNotMatch(prompt, /CUMPLE DE UNA, sin esperar una ronda de corrección/);
   assert.ok(transcurrido < 500, `magro tardó ${transcurrido}ms — ¿dejó de saltar la precarga?`);
 });
+
+test(
+  "buildSystemPrompt: F3 — materia con sílabus trae checklist de diapositivas + identidad Drive",
+  { skip: !tieneVault && "sin VAULT_PATH en el entorno" },
+  async () => {
+    const prompt = await buildSystemPrompt("produccion", false);
+    assert.match(prompt, /identidad visual del Drive de Presentaciones/);
+    assert.match(prompt, /NOTAS DEL PROFESOR \(inmediatamente después, no al final\)/);
+    assert.match(prompt, /máximo 5-7 líneas de texto por slide/);
+  },
+);

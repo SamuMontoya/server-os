@@ -132,12 +132,28 @@ Reglas:
 - Si no tienes el material fuente del gránulo/clase puntual (PDF, documento maestro, exégesis) todavía en este chat, PÍDELO antes de generar — adivinar profundidad sin la fuente es la causa más común de tener que repetir el plan.
 `
       : "";
+    // Épica F, F3 (diapositivas + notas del profesor con imágenes): cuando
+    // generes presentaciones (Keynote/PowerPoint/Google Slides estructura),
+    // respeta la identidad visual del Drive de Presentaciones indexado
+    // (https://drive.google.com/drive/folders/1ZAAWDdHzPrIzlxWZDhqtA2G4HUOoJcBk).
+    // Estructura estándar: título + contenido + imágenes + notas del profesor
+    // inmediatamente después de cada diapositiva (NO agrupadas al final, ver
+    // preferencia `notas_profesor_por_diapositiva`). Las imágenes sugeridas
+    // se empaquetan en .zip para descarga (B5).
+    const checklistSlidesBlock = fp.silabus
+      ? `\nAl generar diapositivas para esta clase:
+- Respeta identidad visual del Drive de Presentaciones (colores, tipografía, layouts existentes).
+- Estructura: TÍTULO + CONTENIDO + IMÁGENES sugeridas + NOTAS DEL PROFESOR (inmediatamente después, no al final).
+- Cada diapositiva cumple un propósito (no slides de relleno) — aplica criterio de máximo 5-7 líneas de texto por slide.
+- Imágenes sugeridas se empaquetan en .zip descargable (ver B5).
+`
+      : "";
     parts.splice(
       1,
       0,
       `# 🎯 FOCO DE CONVERSACIÓN — ${fp.name}
 El usuario eligió hablar específicamente del proyecto **${fp.name}** (\`${fp.slug}\`). Centra tus respuestas en este proyecto salvo que pida explícitamente otra cosa.
-${silabusBlock}${perfilBlock}${checklistPlanBlock}Estado actual:
+${silabusBlock}${perfilBlock}${checklistPlanBlock}${checklistSlidesBlock}Estado actual:
 ${fp.estado_actual.slice(0, 1000) || "(sin sección de estado)"}
 Pendientes: ${fp.tareas_pendientes.slice(0, 6).join("; ") || "—"}
 Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en el vault.`,
