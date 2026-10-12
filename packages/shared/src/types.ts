@@ -54,6 +54,23 @@ export interface ProjectStatus {
   estado_actual: string;
   tareas_pendientes: string[];
   actualizado?: string;
+  /** Frontmatter `tipo:` de la nota (ej. "materia", "ministerio", "producto").
+   *  Épica F, F1 (contexto de materia persistente): decide si tiene sentido
+   *  mostrar `silabus`/`perfil_estudiantes` — un proyecto de código no los
+   *  necesita, uno de clases sí. */
+  tipo?: string;
+  /** Sección `## Sílabus` de la nota: orden oficial de unidades/ciclos/gránulos.
+   *  Durable (casi no cambia entre clases) a diferencia de `estado_actual`
+   *  (qué se trabajó la última vez) — por eso vive aparte, no mezclado ahí.
+   *  `undefined` = la nota no tiene esa sección (proyecto no-materia, o
+   *  materia que aún no la documentó). */
+  silabus?: string;
+  /** Sección `## Perfil de Estudiantes` de la nota: edad, tamaño de grupo,
+   *  nivel socioeconómico, restricciones de idioma, marco doctrinal/académico
+   *  — lo que antes solo existía HARDCODEADO para una materia puntual en la
+   *  preferencia global `planeacion_clases_estandar` y no se generalizaba a
+   *  otras materias/series. */
+  perfil_estudiantes?: string;
 }
 
 /**

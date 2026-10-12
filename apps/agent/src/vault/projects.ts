@@ -36,6 +36,19 @@ export function extractTasks(section: string): string[] {
     .slice(0, 12);
 }
 
+/** Tope del `## Sílabus` extraído (Épica F, F1): generoso a propósito — es
+ *  la estructura completa de unidades/ciclos de la materia, el agente la
+ *  necesita ENTERA para no perder el orden (motivo real: Jaime reportó
+ *  haberse saltado unidades de Producción por no tener el sílabus a la
+ *  vista en cada turno). Si una materia algún día tiene un sílabus más largo
+ *  que esto, hay que subir el tope, no truncar en silencio info que decide
+ *  el orden de 30 clases. */
+const MAX_SILABUS_CHARS = 4_000;
+/** Tope del `## Perfil de Estudiantes`: esto es casi siempre un párrafo o
+ *  una lista corta (edad, tamaño de grupo, nivel, restricciones) — no
+ *  necesita el mismo presupuesto que el sílabus. */
+const MAX_PERFIL_CHARS = 2_000;
+
 export async function readProjects(force = false): Promise<ProjectStatus[]> {
   if (!force && cache && Date.now() - cache.at < TTL) return cache.data;
   // Máquina sin vault (el PC que solo ejecuta): los proyectos se leen del
@@ -73,6 +86,12 @@ export async function readProjects(force = false): Promise<ProjectStatus[]> {
       const { data, content } = matter(raw);
       const estadoActual = extractSection(content, /^#{1,3}\s*.*Estado Actual/i);
       const tareasRaw = extractSection(content, /^#{1,3}\s*.*Tareas Pendientes/i);
+      // Épica F, F1 (contexto de materia persistente): dos secciones NUEVAS,
+      // opcionales — un proyecto de código nunca las tiene, una materia/
+      // ministerio sí. Mismo extractor que estado_actual/tareas_pendientes,
+      // así que heredan su tolerancia a emojis en el header ("## 📚 Sílabus").
+      const silabusRaw = extractSection(content, /^#{1,3}\s*.*S[ií]labus/i);
+      const perfilRaw = extractSection(content, /^#{1,3}\s*.*Perfil de Estudiantes/i);
       results.push({
         slug,
         name: note.replace(/\.md$/, ""),
@@ -82,6 +101,9 @@ export async function readProjects(force = false): Promise<ProjectStatus[]> {
         actualizado: data.actualizado ? String(data.actualizado) : undefined,
         estado_actual: estadoActual.slice(0, 2000),
         tareas_pendientes: extractTasks(tareasRaw),
+        tipo: data.tipo ? String(data.tipo) : undefined,
+        silabus: silabusRaw ? silabusRaw.slice(0, MAX_SILABUS_CHARS) : undefined,
+        perfil_estudiantes: perfilRaw ? perfilRaw.slice(0, MAX_PERFIL_CHARS) : undefined,
       });
     } catch (err) {
       console.error(`[hermes] error leyendo proyecto ${slug}`, err);
@@ -124,6 +146,17 @@ export async function getProjectBriefing(slug: string): Promise<string> {
   return extractSection(content, /^#{1,3}\s*.*Briefing Reuniones/i);
 }
 
+/**
+ * OJO (Épica F, F1): `tipo`/`silabus`/`perfil_estudiantes` NO viajan a este
+ * espejo — la tabla `projects_cache` no tiene esas columnas todavía. Eso
+ * significa que una máquina "solo ejecución" (sin VAULT_PATH, ver
+ * `readProjectsFromCache` más abajo) vería estos tres campos vacíos aunque
+ * el vault real sí los tenga. En el setup actual (un solo servidor dueño del
+ * vault, `jaime-srv`) esto no afecta nada real — se documenta para no
+ * sorprender a quien agregue una segunda máquina de ejecución más adelante:
+ * hay que migrar la tabla (agregar las 3 columnas) antes de que F1 funcione
+ * ahí también.
+ */
 async function syncToSupabase(projects: ProjectStatus[]) {
   if (!supabase) return;
   const rows = projects.map((p) => ({

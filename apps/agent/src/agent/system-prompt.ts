@@ -95,12 +95,32 @@ Reglas:
     : undefined;
 
   if (fp) {
+    // Épica F, F1 (contexto de materia persistente — buzón backlog MVP 4):
+    // antes, para una materia (clases de Producción, Escuela Dominical…) el
+    // sílabus/orden de unidades y el perfil de estudiantes (edad, nivel,
+    // restricciones de idioma) vivían SOLO en la cabeza de Jaime o repetidos
+    // a mano en cada chat — como mucho, una preferencia global hardcodeada
+    // para UNA materia puntual (`planeacion_clases_estandar`) que no
+    // generalizaba a las demás. Ahora, si la nota del proyecto tiene las
+    // secciones `## Sílabus`/`## Perfil de Estudiantes` (ver projects.ts),
+    // se inyectan automáticamente al enfocar ese proyecto — sin tocar código
+    // de nuevo por cada materia nueva, solo escribir la sección en el vault.
+    // Van ANTES de "Estado actual" a propósito: son la estructura DURABLE de
+    // la materia (casi no cambia entre clases), mientras que estado_actual es
+    // la foto de la última sesión — el orden importa para que el agente lea
+    // primero "qué es esto y para quién" y después "en qué íbamos".
+    const silabusBlock = fp.silabus
+      ? `\nSílabus/estructura oficial (orden fijo — NUNCA te lo saltes ni lo reordenes sin que ${OWNER} lo pida explícitamente):\n${fp.silabus}\n`
+      : "";
+    const perfilBlock = fp.perfil_estudiantes
+      ? `\nPerfil de estudiantes/audiencia (tenlo en cuenta en TODO contenido que generes para esta materia — lenguaje, ejemplos, nivel):\n${fp.perfil_estudiantes}\n`
+      : "";
     parts.splice(
       1,
       0,
       `# 🎯 FOCO DE CONVERSACIÓN — ${fp.name}
 El usuario eligió hablar específicamente del proyecto **${fp.name}** (\`${fp.slug}\`). Centra tus respuestas en este proyecto salvo que pida explícitamente otra cosa.
-Estado actual:
+${silabusBlock}${perfilBlock}Estado actual:
 ${fp.estado_actual.slice(0, 1000) || "(sin sección de estado)"}
 Pendientes: ${fp.tareas_pendientes.slice(0, 6).join("; ") || "—"}
 Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en el vault.`,

@@ -19,6 +19,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSystemPrompt, buildTurnContext, withTimeout } from "./system-prompt.js";
+import { env } from "../env.js";
 
 // `magro = true` salta la precarga de proyectos/preferencias (Supabase) y
 // projects (vault) — deja solo el bloque estático de identidad/reglas, que
@@ -137,4 +138,66 @@ test("buildTurnContext: adversarial — mensaje vacío/solo espacios devuelve ''
   const transcurrido = Date.now() - antes;
   assert.equal(out, "");
   assert.ok(transcurrido < 200, `mensaje vacío tardó ${transcurrido}ms — ¿dejó de cortar antes de la red?`);
+});
+
+/**
+ * Épica F, F1 (contexto de materia persistente — MVP 4 del backlog). Las
+ * notas de `produccion` y `escuela-dominical-juvenil` ya tienen secciones
+ * `## Sílabus`/`## Perfil de Estudiantes` reales en el vault (migradas en
+ * esta misma pasada) — estos tests verifican contra el VAULT REAL, no un
+ * fixture de mentira, que `buildSystemPrompt` de verdad las inyecta cuando
+ * ese proyecto está en foco, y que un proyecto sin esas secciones (jaime-os,
+ * `tipo: producto`) no arrastra encabezados vacíos.
+ */
+const tieneVault = Boolean(env.VAULT_PATH);
+
+test(
+  "buildSystemPrompt: con foco en una materia real (produccion), inyecta Sílabus y Perfil de Estudiantes",
+  { skip: !tieneVault && "sin VAULT_PATH en el entorno" },
+  async () => {
+    const prompt = await buildSystemPrompt("produccion", false);
+    assert.match(prompt, /Sílabus\/estructura oficial/);
+    assert.match(prompt, /Perfil de estudiantes\/audiencia/);
+    // Contenido real de la nota, no solo el encabezado — confirma que de
+    // verdad lee la sección y no un placeholder.
+    assert.match(prompt, /Unidad 5|U5 — Evaluación/);
+    assert.match(prompt, /nivel socioeconómico medio-bajo/i);
+  },
+);
+
+test(
+  "buildSystemPrompt: con foco en otra materia real (escuela-dominical-juvenil), inyecta SU PROPIO sílabus/perfil (no el de produccion)",
+  { skip: !tieneVault && "sin VAULT_PATH en el entorno" },
+  async () => {
+    const prompt = await buildSystemPrompt("escuela-dominical-juvenil", false);
+    assert.match(prompt, /Hijos del Pacto/);
+    assert.match(prompt, /11 a 18 años/);
+    // Negativo acotado al bloque de FOCO (no al prompt completo): la sección
+    // global "# Preferencias de Jaime" SÍ puede mencionar "nivel
+    // socioeconómico medio-bajo" (viene de `planeacion_clases_estandar`,
+    // preferencia transversal que se inyecta SIEMPRE, sin importar el
+    // proyecto) — eso no es una fuga de F1. Lo que SÍ sería una fuga real es
+    // que el BLOQUE DE FOCO de esta materia traiga el perfil de la OTRA.
+    const focoBlock = prompt.slice(
+      prompt.indexOf("FOCO DE CONVERSACIÓN"),
+      prompt.indexOf("---", prompt.indexOf("FOCO DE CONVERSACIÓN")),
+    );
+    assert.doesNotMatch(focoBlock, /nivel socioeconómico medio-bajo/i);
+  },
+);
+
+test(
+  "buildSystemPrompt: proyecto sin Sílabus/Perfil (jaime-os, tipo producto) no agrega encabezados vacíos",
+  { skip: !tieneVault && "sin VAULT_PATH en el entorno" },
+  async () => {
+    const prompt = await buildSystemPrompt("jaime-os", false);
+    assert.doesNotMatch(prompt, /Sílabus\/estructura oficial/);
+    assert.doesNotMatch(prompt, /Perfil de estudiantes\/audiencia/);
+  },
+);
+
+test("buildSystemPrompt: adversarial — slug de proyecto inexistente no rompe nada, sigue sin bloque de FOCO", async () => {
+  const prompt = await buildSystemPrompt("este-proyecto-no-existe-jamas", false);
+  assert.doesNotMatch(prompt, /FOCO DE CONVERSACIÓN/);
+  assert.ok(prompt.length > 0);
 });
