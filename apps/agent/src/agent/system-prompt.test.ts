@@ -201,3 +201,38 @@ test("buildSystemPrompt: adversarial — slug de proyecto inexistente no rompe n
   assert.doesNotMatch(prompt, /FOCO DE CONVERSACIÓN/);
   assert.ok(prompt.length > 0);
 });
+
+/**
+ * Épica F, F2 (plan de clase con profundidad correcta desde el primer
+ * intento). El checklist de profundidad vive JUNTO al sílabus/perfil en el
+ * bloque de FOCO (no solo como preferencia global lejana) — se activa
+ * únicamente cuando hay sílabus, porque eso es lo que distingue "estoy
+ * planeando una clase" de cualquier otra conversación sobre el proyecto.
+ */
+test(
+  "buildSystemPrompt: materia con sílabus (produccion) trae el checklist de profundidad del primer intento",
+  { skip: !tieneVault && "sin VAULT_PATH en el entorno" },
+  async () => {
+    const prompt = await buildSystemPrompt("produccion", false);
+    assert.match(prompt, /CUMPLE DE UNA, sin esperar una ronda de corrección/);
+    assert.match(prompt, /notas_profesor_por_diapositiva/);
+    assert.match(prompt, /PÍDELO antes de generar/);
+  },
+);
+
+test(
+  "buildSystemPrompt: proyecto sin sílabus (jaime-os, tipo producto) NO trae el checklist de plan de clase",
+  { skip: !tieneVault && "sin VAULT_PATH en el entorno" },
+  async () => {
+    const prompt = await buildSystemPrompt("jaime-os", false);
+    assert.doesNotMatch(prompt, /CUMPLE DE UNA, sin esperar una ronda de corrección/);
+  },
+);
+
+test("buildSystemPrompt: adversarial — magro=true salta el checklist igual que el resto de la precarga (no debe tocar red/vault)", async () => {
+  const antes = Date.now();
+  const prompt = await buildSystemPrompt("produccion", true);
+  const transcurrido = Date.now() - antes;
+  assert.doesNotMatch(prompt, /CUMPLE DE UNA, sin esperar una ronda de corrección/);
+  assert.ok(transcurrido < 500, `magro tardó ${transcurrido}ms — ¿dejó de saltar la precarga?`);
+});

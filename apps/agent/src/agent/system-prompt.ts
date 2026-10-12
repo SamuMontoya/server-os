@@ -115,12 +115,29 @@ Reglas:
     const perfilBlock = fp.perfil_estudiantes
       ? `\nPerfil de estudiantes/audiencia (tenlo en cuenta en TODO contenido que generes para esta materia — lenguaje, ejemplos, nivel):\n${fp.perfil_estudiantes}\n`
       : "";
+    // Épica F, F2 (plan de clase con profundidad correcta desde el primer
+    // intento): el estándar de profundidad (`planeacion_clases_estandar`) ya
+    // existe como preferencia GLOBAL, pero vive lejos del punto de uso —
+    // compite por atención con 50+ líneas de reglas generales e instrucciones
+    // de otros proyectos en el mismo prompt. Resultado real reportado por
+    // Jaime: entregas que salían "para revisar después" en vez de completas
+    // de una. Este checklist SOLO aparece cuando hay sílabus (o sea, cuando
+    // de verdad se está planeando una clase), justo al lado del sílabus y el
+    // perfil — el punto exacto donde el modelo decide qué tan profundo ir.
+    const checklistPlanBlock = fp.silabus
+      ? `\nAl generar o editar CUALQUIER plan/guion de clase de esta materia, antes de escribir confirma mentalmente que la entrega CUMPLE DE UNA, sin esperar una ronda de corrección:
+- Profundidad sustanciosa por subtema (no resumen en tabla rápida) — ver preferencia \`planeacion_clases_estandar\`.
+- Diapositivas completas Y notas del profesor completas, intercaladas diapositiva-por-diapositiva (ver \`notas_profesor_por_diapositiva\`), no solo la estructura de actividades.
+- Checkpoints de participación activa (Peer Instruction/ConcepTest, Think-Pair-Share, cold calling) marcados con MINUTO exacto y pregunta exacta en cada bloque teórico de más de 10-15 min.
+- Si no tienes el material fuente del gránulo/clase puntual (PDF, documento maestro, exégesis) todavía en este chat, PÍDELO antes de generar — adivinar profundidad sin la fuente es la causa más común de tener que repetir el plan.
+`
+      : "";
     parts.splice(
       1,
       0,
       `# 🎯 FOCO DE CONVERSACIÓN — ${fp.name}
 El usuario eligió hablar específicamente del proyecto **${fp.name}** (\`${fp.slug}\`). Centra tus respuestas en este proyecto salvo que pida explícitamente otra cosa.
-${silabusBlock}${perfilBlock}Estado actual:
+${silabusBlock}${perfilBlock}${checklistPlanBlock}Estado actual:
 ${fp.estado_actual.slice(0, 1000) || "(sin sección de estado)"}
 Pendientes: ${fp.tareas_pendientes.slice(0, 6).join("; ") || "—"}
 Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en el vault.`,
