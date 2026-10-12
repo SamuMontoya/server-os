@@ -247,3 +247,15 @@ test(
     assert.match(prompt, /máximo 5-7 líneas de texto por slide/);
   },
 );
+
+test(
+  "buildSystemPrompt: F4 — autopilot orchestration (sílabus + modalidad → plan + slides + taller)",
+  { skip: !tieneVault && "sin VAULT_PATH en el entorno" },
+  async () => {
+    const prompt = await buildSystemPrompt("produccion", false);
+    assert.match(prompt, /Orquesta en secuencia \(COMPLETO DE UNA, sin esperar revisión\)/);
+    assert.match(prompt, /Plan de clase profundo.*F2/);
+    assert.match(prompt, /Diapositivas \+ notas.*F3/);
+    assert.match(prompt, /Taller\/actividades/);
+  },
+);

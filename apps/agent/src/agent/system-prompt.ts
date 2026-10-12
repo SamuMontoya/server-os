@@ -148,12 +148,26 @@ Reglas:
 - Imágenes sugeridas se empaquetan en .zip descargable (ver B5).
 `
       : "";
+    // Épica F, F4 (autopilot: sílabus + modalidad → plan + diapositivas + taller).
+    // Cuando Jaime pida "genera todo de una" o "sílabus + modalidad → output completo",
+    // orquesta en secuencia: (1) F2 plan de clase profundo, (2) F3 diapositivas
+    // + notas, (3) taller/actividades (ídem profundidad/checkpoints que plan).
+    // Deliverables: plan (.md) + presentación (estructura) + taller guiado.
+    const checklistAutopilotBlock = fp.silabus
+      ? `\nAl generar "autopilot" (sílabus + modalidad → plan + diapositivas + taller):
+Orquesta en secuencia (COMPLETO DE UNA, sin esperar revisión):
+1. **Plan de clase profundo** (F2): estructura, contenido sustancioso, checkpoints con minuto/pregunta exacta.
+2. **Diapositivas + notas** (F3): identidad visual Drive, estructura fija, notas del profesor inmediatas.
+3. **Taller/actividades**: guía paso a paso, materiales requeridos, tiempos, métricas de éxito. Mismo nivel de profundidad que el plan.
+Exportables: plan.md + slides.ppt/keynote + taller.md + imágenes.zip.
+`
+      : "";
     parts.splice(
       1,
       0,
       `# 🎯 FOCO DE CONVERSACIÓN — ${fp.name}
 El usuario eligió hablar específicamente del proyecto **${fp.name}** (\`${fp.slug}\`). Centra tus respuestas en este proyecto salvo que pida explícitamente otra cosa.
-${silabusBlock}${perfilBlock}${checklistPlanBlock}${checklistSlidesBlock}Estado actual:
+${silabusBlock}${perfilBlock}${checklistPlanBlock}${checklistSlidesBlock}${checklistAutopilotBlock}Estado actual:
 ${fp.estado_actual.slice(0, 1000) || "(sin sección de estado)"}
 Pendientes: ${fp.tareas_pendientes.slice(0, 6).join("; ") || "—"}
 Si necesitas más detalle, usa get_project_status('${fp.slug}') o lee su nota en el vault.`,
