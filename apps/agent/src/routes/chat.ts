@@ -31,6 +31,7 @@ import {
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
+import { BUILT_IN_SKILL_LABELS, getCustomSkills } from "../agent/skills.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -289,6 +290,19 @@ export function registerChatRoutes(app: Hono): void {
       .filter(Boolean);
     if (ids.length === 0) return c.json({ error: "ids requerido" }, 400);
     return c.json({ jobs: getDocJobs(ids) });
+  });
+
+  // Épica G, G1: lista completa de skills activables — las 8 GEMS fijas +
+  // las custom que Jaime haya creado por conversación (`manage_skill` tool,
+  // tabla `custom_skills`). El SkillSelector del frontend pide esto para no
+  // mantener una copia hardcodeada de las 8 duplicada entre repos, y para
+  // que las custom aparezcan sin deploy del frontend.
+  app.get("/chat/skills", async (c) => {
+    const custom = await getCustomSkills();
+    return c.json({
+      builtIn: Object.entries(BUILT_IN_SKILL_LABELS).map(([id, label]) => ({ id, label })),
+      custom: custom.map((s) => ({ id: s.id, label: s.label })),
+    });
   });
 
   app.post("/chat/turns", async (c) => {

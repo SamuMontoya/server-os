@@ -1,7 +1,11 @@
+import { supabase } from "../supabase.js";
+
 /**
  * Épica G (MVP 5): Skills/GEMS activables — 8 especialidades documentadas en
  * /root/vault/documentos/GEMS-Skills-OS.md (fuente: Google Doc de Jaime,
- * indexado 2026-10-06).
+ * indexado 2026-10-06), MÁS skills personalizadas que Jaime crea/edita desde
+ * la conversación (Épica G, G1 — ver `createOrUpdateCustomSkillTool` en
+ * tools.ts, tabla `custom_skills` en Supabase, migración 034).
  *
  * Mismo patrón que `documentPreamble` (chat-attachments.ts): un preámbulo que
  * va SOLO al mensaje del turno (sdkPrompt), NUNCA al system prompt — así no
@@ -56,14 +60,73 @@ export function isValidSkillId(value: unknown): value is SkillId {
   return typeof value === "string" && value in SKILL_PROMPTS;
 }
 
+// Labels mostrados en el dropdown del frontend — fuente única de verdad para
+// GET /chat/skills (antes el frontend tenía su propia copia hardcodeada de
+// las 8, ahora las pide acá para no duplicar y para poder sumarle las
+// custom sin tocar dos repos cada vez).
+export const BUILT_IN_SKILL_LABELS: Record<SkillId, string> = {
+  "asesor-presencial": "Asesor Planeación Presencial",
+  "asesor-virtual": "Asesor Planeación Virtual",
+  "generador-rubricas": "Generador de Rúbricas",
+  "asesor-diseno-grafico": "Asesor Diseño Gráfico",
+  "asesor-escuela-dominical": "Asesor Escuela Dominical",
+  "investigador-academico": "Investigador Académico",
+  "biblical-counselor": "Biblical Counselor",
+  "theologian-apologist": "Theologian & Apologist",
+};
+
+export interface CustomSkill {
+  id: string;
+  label: string;
+  prompt: string;
+}
+
+// Cache en memoria de skills personalizadas — mismo motivo que
+// system-prompt.ts: evitar un roundtrip a Supabase en CADA turno solo para
+// resolver si hay un skill custom activo. Se invalida al crear/editar uno
+// nuevo (ver resetCustomSkillsCache, llamado desde la tool en tools.ts).
+let customSkillsCache: CustomSkill[] | null = null;
+let customSkillsCacheAt = 0;
+const CUSTOM_SKILLS_TTL_MS = 60_000;
+
+export function resetCustomSkillsCache(): void {
+  customSkillsCache = null;
+  customSkillsCacheAt = 0;
+}
+
+export async function getCustomSkills(): Promise<CustomSkill[]> {
+  if (!supabase) return [];
+  const fresh = customSkillsCache && Date.now() - customSkillsCacheAt < CUSTOM_SKILLS_TTL_MS;
+  if (fresh) return customSkillsCache!;
+  const { data, error } = await supabase
+    .from("custom_skills")
+    .select("id, label, prompt")
+    .order("created_at", { ascending: true });
+  if (error || !data) return customSkillsCache ?? [];
+  customSkillsCache = data;
+  customSkillsCacheAt = Date.now();
+  return data;
+}
+
 /**
- * Preámbulo del skill activo para ESTE turno. `null`/inválido → "" (no
- * revienta, simplemente no activa ningún skill — comportamiento default).
+ * Preámbulo del skill activo para ESTE turno. Revisa primero las 8 skills
+ * fijas (síncronas, sin tocar la red); si no hay match, busca entre las
+ * custom creadas por conversación (Épica G, G1). `null`/inválido/no
+ * encontrado → "" (no revienta, simplemente no activa ningún skill).
  */
-export function skillPreamble(skillId: string | null | undefined): string {
-  if (!isValidSkillId(skillId)) return "";
+export async function skillPreamble(skillId: string | null | undefined): Promise<string> {
+  if (!skillId) return "";
+  if (isValidSkillId(skillId)) {
+    return [
+      `[SKILL ACTIVO: el usuario eligió explícitamente esta especialidad para este turno.]`,
+      SKILL_PROMPTS[skillId],
+    ].join("\n");
+  }
+  const custom = await getCustomSkills();
+  const match = custom.find((s) => s.id === skillId);
+  if (!match) return "";
   return [
-    `[SKILL ACTIVO: el usuario eligió explícitamente esta especialidad para este turno.]`,
-    SKILL_PROMPTS[skillId],
+    `[SKILL ACTIVO (personalizado, creado por Jaime en conversación): "${match.label}".]`,
+    match.prompt,
   ].join("\n");
 }

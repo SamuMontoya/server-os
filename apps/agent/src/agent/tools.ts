@@ -13,6 +13,7 @@ import { supabase } from "../supabase.js";
 import { OWNER } from "../owner.js";
 import { syncDriveFolder, extractFolderId } from "../drive/sync.js";
 import { getFullChatDocument, listChatDocuments } from "../documents/chat-documents.js";
+import { isValidSkillId, resetCustomSkillsCache } from "./skills.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -314,6 +315,55 @@ const getRecentActivityTool = tool(
   },
 );
 
+export function slugifySkillId(label: string): string {
+  return label
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // quita tildes
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+/**
+ * Épica G, G1 (motor genérico de creación/edición de skills por conversación)
+ * — caso de prueba pedido por Jaime: "crea un skill que resuma videos de
+ * YouTube". Antes las 8 GEMS vivían SOLO hardcodeadas en skills.ts
+ * (SKILL_PROMPTS) — cualquier especialidad nueva exigía deploy de código.
+ * Con esta tool, Jaime pide crear/editar un skill DESDE la conversación y
+ * queda disponible de inmediato en `custom_skills` (Supabase, migración
+ * 034) — `skillPreamble()` ya lo busca ahí si no es uno de los 8 fijos, y
+ * `GET /skills` (routes/chat.ts) lo expone al SkillSelector del frontend.
+ */
+const manageSkillTool = tool(
+  "manage_skill",
+  `Crea o edita un skill/GEM personalizado que ${OWNER} pueda activar luego desde el selector de skills del chat, SIN necesitar un deploy de código. Úsala cuando ${OWNER} pida explícitamente "crea un skill que..." o "quiero poder activar un modo que...". El id se genera solo a partir del label (slug) — si ya existe un skill custom con ese id, esta misma tool lo EDITA (sobreescribe label/prompt) en vez de duplicar.`,
+  {
+    label: z.string().min(3).max(80).describe("Nombre corto del skill, ej. 'Resumen de YouTube'"),
+    prompt: z.string().min(20).describe("Instrucción completa que el agente debe seguir cuando este skill esté activo — mismo nivel de detalle que las 8 GEMS fijas (rol, dominio, estructura de salida esperada)."),
+  },
+  async ({ label, prompt }) => {
+    const sb = supabase;
+    if (!sb) return text("⚠️ Supabase no configurado: no se puede guardar el skill.");
+    const id = slugifySkillId(label);
+    if (!id) return text(`⚠️ No se pudo generar un id válido a partir de "${label}".`);
+    if (isValidSkillId(id)) {
+      return text(`⚠️ "${id}" ya es uno de los 8 skills fijos del sistema — elige un nombre distinto.`);
+    }
+    const result = await writeWithRetry(
+      async () =>
+        await sb
+          .from("custom_skills")
+          .upsert({ id, label, prompt, updated_at: new Date().toISOString() })
+          .select("id")
+          .maybeSingle(),
+      (r) => !!r.error,
+    );
+    if (result.error) return text(`⚠️ No se pudo guardar el skill "${label}": ${result.error.message}`);
+    resetCustomSkillsCache();
+    return text(`✅ Skill "${label}" (id: ${id}) guardado. Ya está disponible para activar desde el selector de skills.`);
+  },
+);
 
 // El tipo sale de la firma del propio SDK: cada tool tiene su schema y
 // tiparlas con el de UNA sola las hace incompatibles entre sí.
@@ -342,6 +392,7 @@ const ACTIVE_TOOLS: AnyTool[] = [
   syncDriveFolderTool,
   readChatDocumentTool,
   listChatDocumentsTool,
+  manageSkillTool,
 ];
 
 export const hermesMcpServer = createSdkMcpServer({

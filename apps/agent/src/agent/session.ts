@@ -338,7 +338,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // no da. El techo del perfil se sigue aplicando después.
   const attachments = opts.attachments ?? [];
   const documentNames = opts.documentNames ?? [];
-  const skillBlock = skillPreamble(opts.skill);
+  const skillBlock = await skillPreamble(opts.skill);
   const route = routerEnabled()
     ? routeTurn(
         opts.prompt,
