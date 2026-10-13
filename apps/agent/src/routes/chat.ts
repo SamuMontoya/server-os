@@ -300,6 +300,7 @@ export function registerChatRoutes(app: Hono): void {
         resume?: string;
         attachments?: string[];
         documents?: string[];
+        skill?: string;
       }>()
       .catch(() => ({}) as Record<string, never>);
     const message = b.message?.trim();
@@ -330,6 +331,7 @@ export function registerChatRoutes(app: Hono): void {
       ...(esReloj ? { maxTier: "trivial" as const, magro: true } : {}),
       attachments,
       documentNames,
+      skill: b.skill,
       sessionKey,
       project,
       cwd: await resolveChatCwd(project),

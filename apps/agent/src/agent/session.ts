@@ -25,6 +25,7 @@ import {
 import { currentProfile } from "./budget.js";
 import { subagentsEnabled } from "./models.js";
 import { attachmentPreamble, documentPreamble } from "../chat-attachments.js";
+import { skillPreamble } from "./skills.js";
 
 /**
  * Corre UN turno agéntico con el Claude Agent SDK.
@@ -53,6 +54,9 @@ export interface RunTurnOptions {
    * decida buscarlo por su cuenta.
    */
   documentNames?: string[];
+  /** Épica G (MVP 5): id del skill/GEM activo elegido en `SkillSelector` —
+   *  ver skillPreamble en skills.ts. `undefined` = sin skill específico. */
+  skill?: string;
   resumeSessionId?: string;
   /**
    * Clave del HILO (la pestaña del chat), estable desde el primer mensaje.
@@ -334,6 +338,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // no da. El techo del perfil se sigue aplicando después.
   const attachments = opts.attachments ?? [];
   const documentNames = opts.documentNames ?? [];
+  const skillBlock = skillPreamble(opts.skill);
   const route = routerEnabled()
     ? routeTurn(
         opts.prompt,
@@ -435,6 +440,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // ahí cambia en cada turno y rompería el prefijo cacheado (system-prompt.ts).
   const sdkPrompt = [
     turnContext,
+    skillBlock,
     attachments.length ? attachmentPreamble(attachments) : "",
     documentNames.length ? documentPreamble(documentNames) : "",
     opts.prompt,

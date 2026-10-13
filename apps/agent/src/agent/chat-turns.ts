@@ -79,6 +79,9 @@ export interface ChatTurn {
   /** Mismo principio que `attachments`, para documentos del clip (ver
    *  documentPreamble en chat-attachments.ts, buzón #2). */
   documentNames?: string[];
+  /** Épica G (MVP 5): skill/GEM activo elegido en `SkillSelector` — ver
+   *  skillPreamble en skills.ts. `undefined` = sin skill específico. */
+  skill?: string;
   status: TurnStatus;
   /** Texto acumulado ÍNTEGRO — no se recorta nunca; es lo que ve quien vuelve. */
   text: string;
@@ -218,6 +221,8 @@ export interface TurnRunnerArgs {
   attachments?: string[];
   /** Ver ChatTurn.documentNames. */
   documentNames?: string[];
+  /** Ver ChatTurn.skill. */
+  skill?: string;
   project?: string;
   cwd?: string;
   /** Clave del hilo: fija el nivel del router. Ver RunTurnOptions. */
@@ -271,6 +276,8 @@ export interface StartTurnInput {
   attachments?: string[];
   /** Ver ChatTurn.documentNames. */
   documentNames?: string[];
+  /** Ver ChatTurn.skill. */
+  skill?: string;
   sessionKey: string;
   project?: string;
   cwd?: string;
@@ -355,6 +362,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       prompt: input.prompt,
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.documentNames?.length ? { documentNames: input.documentNames } : {}),
+      ...(input.skill ? { skill: input.skill } : {}),
       ...(input.userId ? { userId: input.userId } : {}),
       status: "running",
       text: "",
@@ -423,6 +431,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             // otra vez.
             attachments: turn.attachments,
             documentNames: turn.documentNames,
+            skill: turn.skill,
             project: input.project,
             cwd: input.cwd,
             resumeSessionId: resume,
@@ -651,6 +660,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
       prompt: args.prompt,
       attachments: args.attachments,
       documentNames: args.documentNames,
+      skill: args.skill,
       project: args.project,
       cwd: args.cwd,
       // OJO: este adaptador copia campo a campo, no hace spread. Añadir una
