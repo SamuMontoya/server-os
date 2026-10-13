@@ -32,6 +32,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { BUILT_IN_SKILL_LABELS, getCustomSkills } from "../agent/skills.js";
+import { getPersonas } from "../agent/personas.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -305,6 +306,21 @@ export function registerChatRoutes(app: Hono): void {
     });
   });
 
+  // Épica H (MVP 6): lista de personas/"sombreritos" disponibles — cada una
+  // con su identidad (label/avatar/preamble_base) y skill por defecto
+  // opcional. El PersonaSelector del frontend arma el dropdown con esto.
+  app.get("/chat/personas", async (c) => {
+    const personas = await getPersonas();
+    return c.json({
+      personas: personas.map((p) => ({
+        id: p.id,
+        label: p.label,
+        avatar: p.avatar_emoji_or_url ?? null,
+        defaultSkillId: p.default_skill_id ?? null,
+      })),
+    });
+  });
+
   app.post("/chat/turns", async (c) => {
     const b = await c.req
       .json<{
@@ -315,6 +331,7 @@ export function registerChatRoutes(app: Hono): void {
         attachments?: string[];
         documents?: string[];
         skill?: string;
+        persona?: string;
       }>()
       .catch(() => ({}) as Record<string, never>);
     const message = b.message?.trim();
@@ -346,6 +363,7 @@ export function registerChatRoutes(app: Hono): void {
       attachments,
       documentNames,
       skill: b.skill,
+      persona: b.persona,
       sessionKey,
       project,
       cwd: await resolveChatCwd(project),

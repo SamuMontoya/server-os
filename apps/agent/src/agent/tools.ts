@@ -14,6 +14,7 @@ import { OWNER } from "../owner.js";
 import { syncDriveFolder, extractFolderId } from "../drive/sync.js";
 import { getFullChatDocument, listChatDocuments } from "../documents/chat-documents.js";
 import { isValidSkillId, resetCustomSkillsCache } from "./skills.js";
+import { resetPersonasCache } from "./personas.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -365,6 +366,49 @@ const manageSkillTool = tool(
   },
 );
 
+/**
+ * Épica H (MVP 6): Personas/"sombreritos" — una identidad persistente con su
+ * propio preamble base (distinto de un skill: la persona NO cambia turno a
+ * turno, es el "quién soy" de fondo). Caso de uso: Jaime pide crear la
+ * persona "Doctor" con su contexto médico/profesional de base, disponible
+ * luego desde PersonaSelector (frontend) sin deploy de código.
+ */
+const managePersonaTool = tool(
+  "manage_persona",
+  `Crea o edita una persona/"sombrero" que ${OWNER} pueda activar luego desde el selector de personas del chat — una identidad persistente (no solo un estilo de turno como los skills) con su propio preamble base. El id se genera solo a partir del label (slug) — si ya existe una persona con ese id, esta misma tool la EDITA en vez de duplicar.`,
+  {
+    label: z.string().min(2).max(80).describe("Nombre corto de la persona, ej. 'Doctor'"),
+    preamble_base: z.string().min(20).describe("Identidad persistente inyectada SIEMPRE que esta persona esté activa — quién es, su contexto/historial de base, su tono."),
+    avatar_emoji_or_url: z.string().max(200).optional().describe("Emoji (ej. '🏥') o URL de un avatar pequeño para el selector"),
+    default_skill_id: z.string().optional().describe("Id de un skill (de los 8 fijos o uno custom) que se auto-selecciona al activar esta persona. Opcional."),
+  },
+  async ({ label, preamble_base, avatar_emoji_or_url, default_skill_id }) => {
+    const sb = supabase;
+    if (!sb) return text("⚠️ Supabase no configurado: no se puede guardar la persona.");
+    const id = slugifySkillId(label); // mismo slug kebab-case que los skills
+    if (!id) return text(`⚠️ No se pudo generar un id válido a partir de "${label}".`);
+    const result = await writeWithRetry(
+      async () =>
+        await sb
+          .from("personas")
+          .upsert({
+            id,
+            label,
+            preamble_base,
+            avatar_emoji_or_url: avatar_emoji_or_url ?? null,
+            default_skill_id: default_skill_id ?? null,
+            updated_at: new Date().toISOString(),
+          })
+          .select("id")
+          .maybeSingle(),
+      (r) => !!r.error,
+    );
+    if (result.error) return text(`⚠️ No se pudo guardar la persona "${label}": ${result.error.message}`);
+    resetPersonasCache();
+    return text(`✅ Persona "${label}" (id: ${id}) guardada. Ya está disponible para activar desde el selector de personas.`);
+  },
+);
+
 // El tipo sale de la firma del propio SDK: cada tool tiene su schema y
 // tiparlas con el de UNA sola las hace incompatibles entre sí.
 // `tools` es opcional en la firma, de ahí el NonNullable antes de indexar.
@@ -393,6 +437,7 @@ const ACTIVE_TOOLS: AnyTool[] = [
   readChatDocumentTool,
   listChatDocumentsTool,
   manageSkillTool,
+  managePersonaTool,
 ];
 
 export const hermesMcpServer = createSdkMcpServer({

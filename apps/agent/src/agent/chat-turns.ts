@@ -82,6 +82,9 @@ export interface ChatTurn {
   /** Épica G (MVP 5): skill/GEM activo elegido en `SkillSelector` — ver
    *  skillPreamble en skills.ts. `undefined` = sin skill específico. */
   skill?: string;
+  /** Épica H (MVP 6): persona/sombrero activo elegido en `PersonaSelector` —
+   *  ver personaPreamble en personas.ts. `undefined` = sin persona específica. */
+  persona?: string;
   status: TurnStatus;
   /** Texto acumulado ÍNTEGRO — no se recorta nunca; es lo que ve quien vuelve. */
   text: string;
@@ -223,6 +226,8 @@ export interface TurnRunnerArgs {
   documentNames?: string[];
   /** Ver ChatTurn.skill. */
   skill?: string;
+  /** Ver ChatTurn.persona. */
+  persona?: string;
   project?: string;
   cwd?: string;
   /** Clave del hilo: fija el nivel del router. Ver RunTurnOptions. */
@@ -278,6 +283,8 @@ export interface StartTurnInput {
   documentNames?: string[];
   /** Ver ChatTurn.skill. */
   skill?: string;
+  /** Ver ChatTurn.persona. */
+  persona?: string;
   sessionKey: string;
   project?: string;
   cwd?: string;
@@ -363,6 +370,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.documentNames?.length ? { documentNames: input.documentNames } : {}),
       ...(input.skill ? { skill: input.skill } : {}),
+      ...(input.persona ? { persona: input.persona } : {}),
       ...(input.userId ? { userId: input.userId } : {}),
       status: "running",
       text: "",
@@ -432,6 +440,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
             attachments: turn.attachments,
             documentNames: turn.documentNames,
             skill: turn.skill,
+            persona: turn.persona,
             project: input.project,
             cwd: input.cwd,
             resumeSessionId: resume,
@@ -661,6 +670,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
       attachments: args.attachments,
       documentNames: args.documentNames,
       skill: args.skill,
+      persona: args.persona,
       project: args.project,
       cwd: args.cwd,
       // OJO: este adaptador copia campo a campo, no hace spread. Añadir una

@@ -26,6 +26,7 @@ import { currentProfile } from "./budget.js";
 import { subagentsEnabled } from "./models.js";
 import { attachmentPreamble, documentPreamble } from "../chat-attachments.js";
 import { skillPreamble } from "./skills.js";
+import { personaPreamble } from "./personas.js";
 
 /**
  * Corre UN turno agéntico con el Claude Agent SDK.
@@ -57,6 +58,9 @@ export interface RunTurnOptions {
   /** Épica G (MVP 5): id del skill/GEM activo elegido en `SkillSelector` —
    *  ver skillPreamble en skills.ts. `undefined` = sin skill específico. */
   skill?: string;
+  /** Épica H (MVP 6): id de la persona/sombrero activo elegido en `PersonaSelector` —
+   *  ver personaPreamble en personas.ts. `undefined` = sin persona específica (default). */
+  persona?: string;
   resumeSessionId?: string;
   /**
    * Clave del HILO (la pestaña del chat), estable desde el primer mensaje.
@@ -339,6 +343,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   const attachments = opts.attachments ?? [];
   const documentNames = opts.documentNames ?? [];
   const skillBlock = await skillPreamble(opts.skill);
+  const personaBlock = await personaPreamble(opts.persona);
   const route = routerEnabled()
     ? routeTurn(
         opts.prompt,
@@ -440,6 +445,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
   // ahí cambia en cada turno y rompería el prefijo cacheado (system-prompt.ts).
   const sdkPrompt = [
     turnContext,
+    personaBlock,
     skillBlock,
     attachments.length ? attachmentPreamble(attachments) : "",
     documentNames.length ? documentPreamble(documentNames) : "",
