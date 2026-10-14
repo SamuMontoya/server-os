@@ -13,6 +13,7 @@ import {
 } from "../agent/claude-cli.js";
 import { getClaudeLimits } from "../claude-limits.js";
 import { getClaudeUsage } from "../claude-usage.js";
+import { getUsageByEmail } from "../usage-log.js";
 import {
   listClaudeSessions,
   getClaudeSession,
@@ -195,4 +196,21 @@ export function registerClaudeRunsRoutes(app: Hono): void {
   // consume vía proxy en /api/claude-limits y /api/claude-usage.
   app.get("/claude/limits", async (c) => c.json(await getClaudeLimits()));
   app.get("/claude/usage", async (c) => c.json(await getClaudeUsage()));
+
+  // MVP 8, K1 (pedido de Jaime 2026-10-14): "métricas propias también del
+  // correo que lo usa" — complementa /claude/usage (que agrega POR MODELO/
+  // PROYECTO/DÍA desde los JSONL de Anthropic, sin saber QUIÉN lo pidió) con
+  // el desglose por persona, construido aparte en Supabase (ver
+  // usage-log.ts). `?dias=N` acota la ventana; sin parámetro trae TODO el
+  // historial desde que existe la tabla.
+  app.get("/claude/usage-by-email", async (c) => {
+    const diasParam = c.req.query("dias");
+    const dias = diasParam ? Number(diasParam) : undefined;
+    const createdAfter =
+      dias && Number.isFinite(dias) && dias > 0
+        ? new Date(Date.now() - dias * 24 * 60 * 60 * 1000)
+        : undefined;
+    const byEmail = await getUsageByEmail(createdAfter);
+    return c.json({ byEmail });
+  });
 }

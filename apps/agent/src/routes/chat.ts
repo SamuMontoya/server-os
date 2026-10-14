@@ -332,6 +332,10 @@ export function registerChatRoutes(app: Hono): void {
         documents?: string[];
         skill?: string;
         persona?: string;
+        /** MVP 8, K1 — ver ChatTurn.userEmail: correo de quien manda el turno,
+         *  tal como lo conoce el CLIENTE (su propia sesión de Supabase en
+         *  jaime-os). Sin verificar por JWT — solo para atribuir consumo. */
+        user_email?: string;
       }>()
       .catch(() => ({}) as Record<string, never>);
     const message = b.message?.trim();
@@ -369,6 +373,10 @@ export function registerChatRoutes(app: Hono): void {
       cwd: await resolveChatCwd(project),
       resumeSessionId: resume,
       userId: withUser(c).get("userId"),
+      // MVP 8, K1: prioridad al que manda el BODY (jaime-os, HERMES_API_KEY
+      // estática) — ese es el caso real de uso diario. El de contexto (JWT
+      // verificado, app móvil) queda de respaldo si el cliente no lo manda.
+      userEmail: b.user_email || withUser(c).get("userEmail"),
     });
     return c.json({ turn_id: turn.id, status: turn.status, seq: 0 });
   });

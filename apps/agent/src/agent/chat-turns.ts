@@ -21,7 +21,8 @@
 import { randomUUID } from "node:crypto";
 import { escalateSession, nextTier, routeTurn, type Tier } from "./router.js";
 import type { ChatToolStep, GeneratedFile } from "@hermes/shared";
-import { runAgentTurn, saveSdkSession } from "./session.js";
+import { runAgentTurn, saveSdkSession, type TurnUsage } from "./session.js";
+import { logTurnUsage } from "../usage-log.js";
 import { appendTurn } from "../conversations.js";
 import { attachmentNote } from "../chat-attachments.js";
 import { checkpointTurn, clearCheckpoint } from "../chat-turn-checkpoints.js";
@@ -70,6 +71,18 @@ export interface ChatTurn {
    */
   userId?: string;
   /**
+   * MVP 8, K1 (monitoreo de consumo, pedido de Jaime 2026-10-14): correo que
+   * disparó el turno, tal como lo mandó el CLIENTE en el body del POST
+   * (ver StartTurnInput.userEmail) — a diferencia de `userId`, NO viene de un
+   * JWT verificado. Es una etiqueta de REPORTE (ver usage-log.ts), no un
+   * límite de seguridad: `turnVisibleTo` sigue usando solo `userId`. jaime-os
+   * (la app real) autentica contra el agente con HERMES_API_KEY estática
+   * compartida, así que `userId` casi siempre está vacío ahí — este campo es
+   * lo único que permite atribuir consumo a una persona concreta sin cambiar
+   * el esquema de auth.
+   */
+  userEmail?: string;
+  /**
    * Rutas absolutas de las imágenes adjuntas. Viven en el turno (no solo en el
    * input) porque el motor reintenta hasta 3 veces: cada intento tiene que
    * volver a mandar los mismos adjuntos, o el reintento perdería la imagen y
@@ -104,6 +117,12 @@ export interface ChatTurn {
   error?: string;
   startedAt: number;
   endedAt?: number;
+  /** MVP 8, K1: consumo del ÚLTIMO intento que cerró el turno (ver
+   *  TurnUsage en session.ts). Solo se fija en el camino feliz (`close(turn,
+   *  "done")`) — un turno que terminó en error puede no tener un `usage`
+   *  limpio que valga la pena atribuir. `undefined` = no se pudo loguear
+   *  (Supabase caído, o el SDK no devolvió usage esta vez). */
+  lastUsage?: TurnUsage;
 }
 
 /** Lo que se manda por el cable: el turno + los eventos que el cliente no vio. */
@@ -251,6 +270,8 @@ export interface TurnRunnerResult {
   isError: boolean;
   /** Ver RunTurnResult.errorSubtype en session.ts. */
   errorSubtype?: string;
+  /** MVP 8, K1: consumo real del turno (ver TurnUsage en session.ts). */
+  usage?: TurnUsage;
 }
 
 export interface TurnEngineDeps {
@@ -269,6 +290,10 @@ export interface TurnEngineDeps {
   checkpoint?: (turn: ChatTurn) => void;
   /** Se llama al cerrar el turno (cualquier status): ya no hace falta el checkpoint. */
   clearCheckpoint?: (id: string) => void;
+  /** MVP 8, K1: registra el consumo del turno (best-effort, nunca bloquea ni
+   *  tumba el cierre). Se llama SOLO si `turn.lastUsage` quedó fijado (ver
+   *  `close()`), igual que `persist` se llama solo si `shouldPersist(turn)`. */
+  logUsage?: (turn: ChatTurn) => void;
 }
 
 /** Cada cuánto se re-escribe el checkpoint mientras el turno escribe texto —
@@ -290,6 +315,9 @@ export interface StartTurnInput {
   cwd?: string;
   /** Dueño del turno (ver ChatTurn.userId). Ausente = HERMES_API_KEY/reloj. */
   userId?: string;
+  /** MVP 8, K1 (ver ChatTurn.userEmail): correo del BODY, sin verificar por
+   *  JWT — solo para atribuir consumo en el reporte, nunca para autorizar. */
+  userEmail?: string;
   /** Techo de nivel del turno. El canal del reloj lo fija en `light`. */
   maxTier?: Tier;
   /** Salta la precarga de contexto del prompt (canal del reloj). */
@@ -372,6 +400,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       ...(input.skill ? { skill: input.skill } : {}),
       ...(input.persona ? { persona: input.persona } : {}),
       ...(input.userId ? { userId: input.userId } : {}),
+      ...(input.userEmail ? { userEmail: input.userEmail } : {}),
       status: "running",
       text: "",
       steps: [],
@@ -501,6 +530,7 @@ export function createTurnEngine(deps: TurnEngineDeps) {
               emitEvent(turn.id, { kind: "delta", text: result.finalText });
             }
             if (result.sdkSessionId) turn.sdkSessionId = result.sdkSessionId;
+            if (result.usage) turn.lastUsage = result.usage;
             return close(turn, "done");
           }
           failure = result.finalText || "el agente terminó con error";
@@ -592,6 +622,17 @@ export function createTurnEngine(deps: TurnEngineDeps) {
       deps.clearCheckpoint?.(turn.id);
     } catch {
       /* best-effort */
+    }
+    // MVP 8, K1: loguear consumo es independiente de `shouldPersist` —
+    // `lastUsage` solo se fija en el camino feliz (ver el `return
+    // close(turn, "done")` de arriba), así que esto no compite con esa
+    // regla, solo no depende de ella.
+    if (turn.lastUsage) {
+      try {
+        deps.logUsage?.(turn);
+      } catch {
+        /* best-effort */
+      }
     }
     // Persistir aquí y no en la ruta: el turno se guarda aunque nadie esté
     // escuchando — que es justo el caso que rompía todo.
@@ -693,10 +734,20 @@ export const chatTurns: TurnEngine = createTurnEngine({
       finalText: r.finalText,
       isError: r.isError,
       errorSubtype: r.errorSubtype,
+      usage: r.usage,
     };
   },
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => Date.now(),
+  logUsage: (turn) => {
+    if (!turn.lastUsage) return;
+    void logTurnUsage({
+      userEmail: turn.userEmail,
+      project: turn.project,
+      model: turn.model ?? "unknown",
+      usage: turn.lastUsage,
+    });
+  },
   persist: (turn) => {
     // Al historial va el mensaje del usuario TAL CUAL escribió, más una nota de
     // cuántas imágenes traía. Las rutas del .data no van: son efímeras (se

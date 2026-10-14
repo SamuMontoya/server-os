@@ -18,6 +18,7 @@ import {
   type TurnRunnerArgs,
   type TurnRunnerResult,
 } from "./chat-turns.js";
+import type { TurnUsage } from "./session.js";
 import { routeTurn } from "./router.js";
 
 /** Motor con reloj y esperas de mentira; `run` lo define cada test. */
@@ -27,6 +28,9 @@ function engineWith(run: (args: TurnRunnerArgs, attempt: number) => Promise<Turn
   const persisted: { prompt: string; text: string; status: string }[] = [];
   const checkpoints: { text: string; sdkSessionId?: string }[] = [];
   const clearedCheckpoints: string[] = [];
+  /** MVP 8, K1: cada vez que el motor llama `logUsage` — el turno completo,
+   *  para poder leer `userEmail`/`lastUsage` en las aserciones. */
+  const usageLogged: ChatTurn[] = [];
   let clock = 1_000;
   const engine = createTurnEngine({
     run: (args) => run(args, ++attempt),
@@ -37,6 +41,7 @@ function engineWith(run: (args: TurnRunnerArgs, attempt: number) => Promise<Turn
     persist: (t) => persisted.push({ prompt: t.prompt, text: t.text, status: t.status }),
     checkpoint: (t) => checkpoints.push({ text: t.text, sdkSessionId: t.sdkSessionId }),
     clearCheckpoint: (id) => clearedCheckpoints.push(id),
+    logUsage: (t) => usageLogged.push(t),
   });
   return {
     engine,
@@ -44,6 +49,7 @@ function engineWith(run: (args: TurnRunnerArgs, attempt: number) => Promise<Turn
     persisted,
     checkpoints,
     clearedCheckpoints,
+    usageLogged,
     attempts: () => attempt,
     advance: (ms: number) => {
       clock += ms;
@@ -621,4 +627,92 @@ test("un turno detenido (⏹) también limpia su checkpoint", async () => {
   await settle();
   assert.equal(h.engine.snapshot(turn.id)!.status, "stopped");
   assert.deepEqual(h.clearedCheckpoints, [turn.id]);
+});
+
+// ── MVP 8, K1 (monitoreo de consumo por correo) ─────────────────────────
+
+const USAGE_DE_PRUEBA: TurnUsage = {
+  entrada: 1000,
+  salida: 200,
+  cacheEscrito: 50,
+  cacheLeido: 900,
+  cacheado: 0.9,
+  costoUsd: 0.0123,
+};
+
+test("un turno exitoso con usage llama logUsage con el turno completo (userEmail + lastUsage)", async () => {
+  const h = engineWith(async (args) => {
+    args.onSession("sdk-1");
+    args.onDelta("hola");
+    return { sdkSessionId: "sdk-1", finalText: "hola", isError: false, usage: USAGE_DE_PRUEBA };
+  });
+  const turn = h.engine.start({
+    prompt: "p",
+    sessionKey: "tab-1",
+    userEmail: "jaime@example.com",
+  });
+  await settle();
+  assert.equal(h.usageLogged.length, 1);
+  assert.equal(h.usageLogged[0].id, turn.id);
+  assert.equal(h.usageLogged[0].userEmail, "jaime@example.com");
+  assert.deepEqual(h.usageLogged[0].lastUsage, USAGE_DE_PRUEBA);
+  // El snapshot público también lo expone (quien se re-engancha tarde lo ve).
+  assert.deepEqual(h.engine.snapshot(turn.id)!.lastUsage, USAGE_DE_PRUEBA);
+});
+
+test("un turno SIN userEmail (HERMES_API_KEY/reloj) igual loguea el usage, sin correo", async () => {
+  const h = engineWith(async () => ({
+    finalText: "ok",
+    isError: false,
+    usage: USAGE_DE_PRUEBA,
+  }));
+  h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  assert.equal(h.usageLogged.length, 1);
+  assert.equal(h.usageLogged[0].userEmail, undefined);
+});
+
+test("un turno SIN usage (el adaptador no lo devolvió) NO llama logUsage", async () => {
+  const h = engineWith(async () => ({ finalText: "ok", isError: false }));
+  h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  assert.equal(h.usageLogged.length, 0);
+});
+
+test("un turno que termina en ERROR no loguea usage (solo el camino feliz fija lastUsage)", async () => {
+  const h = engineWith(async () => ({
+    finalText: "algo salió mal",
+    isError: true,
+    usage: USAGE_DE_PRUEBA,
+  }));
+  h.engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  assert.equal(h.usageLogged.length, 0);
+  assert.equal(h.engine.snapshot(h.engine.listBySession("tab-1")[0].id)!.status, "error");
+});
+
+test("adversarial: logUsage que explota no tumba el cierre del turno (best-effort)", async () => {
+  let attempt = 0;
+  const engine = createTurnEngine({
+    run: (args) => {
+      attempt++;
+      args.onSession("sdk-1");
+      return Promise.resolve({
+        sdkSessionId: "sdk-1",
+        finalText: "ok",
+        isError: false,
+        usage: USAGE_DE_PRUEBA,
+      });
+    },
+    sleep: async () => {},
+    now: () => Date.now(),
+    logUsage: () => {
+      throw new Error("Supabase caído");
+    },
+  });
+  const turn = engine.start({ prompt: "p", sessionKey: "tab-1" });
+  await settle();
+  // El turno cierra "done" igual, pese a que logUsage reventó.
+  assert.equal(engine.snapshot(turn.id)!.status, "done");
+  assert.equal(attempt, 1);
 });
