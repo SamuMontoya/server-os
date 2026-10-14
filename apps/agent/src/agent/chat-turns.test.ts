@@ -716,3 +716,43 @@ test("adversarial: logUsage que explota no tumba el cierre del turno (best-effor
   assert.equal(engine.snapshot(turn.id)!.status, "done");
   assert.equal(attempt, 1);
 });
+
+test("context_overflow no se reintenta como fallo transitorio y cierra en español", async () => {
+  // "Prompt is too long" es determinista: el mismo historial vuelve a
+  // desbordar. Antes caía en api_error (429/529) y se reintentaba 3 veces lo
+  // mismo para cerrar con el texto crudo en inglés. La recuperación real
+  // (subir de modelo / compactar) vive en session.ts; si llega hasta aquí es
+  // que ya se agotó, y reintentar no puede arreglar nada.
+  const h = engineWith(async () => ({
+    finalText: "Prompt is too long",
+    isError: true,
+    errorSubtype: "context_overflow",
+  }));
+  const turn = h.engine.start({ prompt: "continúa", sessionKey: "tab-desborde" });
+  await settle();
+  await settle();
+
+  const snap = h.engine.snapshot(turn.id)!;
+  assert.equal(snap.status, "error");
+  assert.equal(h.attempts(), 1, "un desborde no se reintenta: es determinista");
+  assert.deepEqual(h.slept, [], "ni espera backoff");
+  assert.match(snap.error ?? "", /ya no cabe/i);
+  assert.doesNotMatch(snap.error ?? "", /prompt is too long/i, "no se filtra el texto crudo en inglés");
+});
+
+test("los avisos de recuperación del turno llegan al cliente como eventos retry", async () => {
+  // Compactar una sesión grande tarda ~1 min: sin aviso se ve como un cuelgue.
+  const h = engineWith(async (args) => {
+    args.onAviso("el historial ya no cabe — compactando la conversación…");
+    args.onDelta("listo");
+    return { finalText: "listo", isError: false };
+  });
+  const turn = h.engine.start({ prompt: "sigue", sessionKey: "tab-aviso" });
+  await settle();
+  await settle();
+
+  const snap = h.engine.snapshot(turn.id)!;
+  assert.equal(snap.status, "done");
+  const avisos = snap.events.filter((e) => e.kind === "retry").map((e) => e.text);
+  assert.deepEqual(avisos, ["el historial ya no cabe — compactando la conversación…"]);
+});

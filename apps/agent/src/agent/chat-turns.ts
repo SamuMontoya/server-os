@@ -262,6 +262,8 @@ export interface TurnRunnerArgs {
   onTool: (step: ChatToolStep) => void;
   onFile: (file: GeneratedFile) => void;
   onModel: (model: string, effort?: string) => void;
+  /** Aviso de progreso mientras el turno se recupera solo (ver RunTurnOptions.onAviso). */
+  onAviso: (texto: string) => void;
 }
 
 export interface TurnRunnerResult {
@@ -522,6 +524,9 @@ export function createTurnEngine(deps: TurnEngineDeps) {
               turn.effort = effort;
               emitEvent(turn.id, { kind: "model", model, effort });
             },
+            onAviso: (texto) => {
+              emitEvent(turn.id, { kind: "retry", attempt: Math.max(1, continuations), text: texto });
+            },
           });
           if (!result.isError) {
             // El SDK puede cerrar con el texto final sin haber mandado deltas.
@@ -596,7 +601,9 @@ export function createTurnEngine(deps: TurnEngineDeps) {
           const failureMsg =
             errorSubtype === "error_max_turns"
               ? "Se me acabó el presupuesto de turnos investigando esto — probá pedirlo más acotado (un archivo o proyecto puntual en vez de todo)."
-              : (failure ?? "error desconocido");
+              : errorSubtype === "context_overflow"
+                ? "Esta conversación ya no cabe en la memoria del modelo, ni compactada. Abre un chat nuevo y pídeme que retome desde donde quedamos."
+                : (failure ?? "error desconocido");
           return close(turn, "error", failureMsg);
         }
         emitEvent(turn.id, { kind: "retry", attempt: attempt + 1, text: failure ?? "" });
@@ -728,6 +735,7 @@ export const chatTurns: TurnEngine = createTurnEngine({
       onTool: args.onTool,
       onFile: args.onFile,
       onModel: args.onModel,
+      onAviso: args.onAviso,
     });
     return {
       sdkSessionId: r.sdkSessionId,

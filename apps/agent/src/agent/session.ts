@@ -24,6 +24,7 @@ import {
   type Tier,
 } from "./router.js";
 import { currentProfile } from "./budget.js";
+import { compactarSesion, esDesbordeDeContexto } from "./compact.js";
 import { subagentsEnabled } from "./models.js";
 import { attachmentPreamble, documentPreamble } from "../chat-attachments.js";
 import { skillPreamble } from "./skills.js";
@@ -87,6 +88,14 @@ export interface RunTurnOptions {
   precargarContexto?: boolean;
   /** Interno: marca el reintento del escalado para no reintentar en bucle. */
   _escalated?: boolean;
+  /** Interno: este turno YA compactó la sesión una vez por desborde de contexto. */
+  _compacted?: boolean;
+  /**
+   * Avisos de progreso para el cliente mientras el turno se recupera solo de
+   * algo (hoy: subir de modelo o compactar un historial que ya no cabe). Sin
+   * esto, compactar —~1 min con una sesión grande— se vería como un cuelgue.
+   */
+  onAviso?: (texto: string) => void;
   /**
    * Interno: marca que este turno YA reintentó una vez por tools hermes no
    * disponibles (ver `mcpUnavailable` más abajo) — evita bucle infinito si el
@@ -587,7 +596,11 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
         for (const block of content) {
           if (block.type === "text" && block.text) {
             finalText = block.text as string;
-            if (!deltasSeen) opts.onDelta?.(block.text as string);
+            // El aviso sintético de desborde no es respuesta del agente: si se
+            // streameara, el chat mostraría "Prompt is too long" como texto y
+            // además el ⚠ de error (dos veces lo mismo, y en inglés).
+            const esAvisoDesborde = m.message?.model === "<synthetic>" && esDesbordeDeContexto(finalText);
+            if (!deltasSeen && !esAvisoDesborde) opts.onDelta?.(block.text as string);
             emit({ kind: "text", taskId: opts.taskId, detail: (block.text as string).slice(0, 200) });
           }
           if (block.type === "tool_use") {
@@ -682,7 +695,10 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
           // dicho, y encima contaba como turno "done".
           if (m.is_error) {
             isError = true;
-            errorSubtype = "api_error";
+            // "Prompt is too long" NO es transitorio como un 429/529: el mismo
+            // historial vuelve a desbordar. Va aparte para recuperarlo (subir
+            // de modelo o compactar) en vez de reintentarlo a ciegas.
+            errorSubtype = esDesbordeDeContexto(m.result) ? "context_overflow" : "api_error";
             finalText = m.result || finalText;
           } else {
             finalText = m.result || finalText;
@@ -769,7 +785,7 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
       return runAgentTurn({ ...opts, resumeSessionId: undefined });
     }
     isError = true;
-    errorSubtype = errorSubtype ?? "exception";
+    errorSubtype = esDesbordeDeContexto(String(err)) ? "context_overflow" : (errorSubtype ?? "exception");
     finalText = finalText || `Error ejecutando al agente: ${String(err).slice(0, 500)}`;
     emit({ kind: "error", taskId: opts.taskId, detail: String(err).slice(0, 300) });
   } finally {
@@ -806,12 +822,38 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     // La MISMA clave que usó routeTurn, o el escalado fijaría un hilo distinto
     // del que se acaba de enrutar (y el pin quedaría sin efecto).
     escalateSession(opts.sessionKey ?? opts.resumeSessionId ?? sdkSessionId, up);
+    if (errorSubtype === "context_overflow") {
+      opts.onAviso?.("el historial ya no cabe en este modelo — paso a uno con más memoria y sigo…");
+    }
     emit({
       kind: "error",
       taskId: opts.taskId,
       detail: `[router] turno falló en ${tier} — escalando a ${up}`,
     });
     return runAgentTurn({ ...opts, resumeSessionId: sdkSessionId ?? opts.resumeSessionId, _escalated: true });
+  }
+
+  // Desborde que sobrevive a subir de modelo (o que ya iba en el nivel más alto,
+  // o el perfil de consumo no deja subir): el historial de la sesión es
+  // demasiado grande para cualquier ventana disponible. Se compacta — el CLI
+  // resume lo viejo y conserva lo reciente — y se reintenta UNA vez, con el
+  // mismo mensaje: no se pierde nada de lo que el usuario escribió.
+  const sesionADesbordar = sdkSessionId ?? opts.resumeSessionId;
+  if (isError && errorSubtype === "context_overflow" && !opts._compacted && sesionADesbordar) {
+    opts.onAviso?.("el historial ya no cabe — compactando la conversación (puede tardar ~1 min)…");
+    emit({ kind: "error", taskId: opts.taskId, detail: "[compactar] historial desbordado — compactando la sesión" });
+    const c = await compactarSesion({
+      sessionId: sesionADesbordar,
+      cwd: opts.cwd,
+      abortController: opts.abortController,
+    });
+    if (c.ok) {
+      const k = (n?: number) => (n ? `${Math.round(n / 1000)}k` : "?");
+      opts.onAviso?.(`conversación compactada (${k(c.antes)} → ${k(c.despues)} tokens) — sigo`);
+      emit({ kind: "error", taskId: opts.taskId, detail: `[compactar] listo: ${k(c.antes)} → ${k(c.despues)} tokens` });
+      return runAgentTurn({ ...opts, resumeSessionId: sesionADesbordar, _compacted: true });
+    }
+    emit({ kind: "error", taskId: opts.taskId, detail: `[compactar] no se pudo: ${String(c.error).slice(0, 200)}` });
   }
 
   return { sdkSessionId, finalText, toolCalls, isError, errorSubtype, usage };
