@@ -28,39 +28,35 @@ import type { Effort, ModelAlias } from "./models.js";
 export type Tier = "trivial" | "bajo" | "medio" | "alto";
 
 /**
- * `maxTurns` es por NIVEL, no global, y es un techo de COSTO, no de capacidad.
+ * Los niveles fijan MODELO y ESFUERZO — eso es lo que de verdad cuesta distinto
+ * entre un saludo y un refactor. NO fijan un tope de turnos.
  *
- * Cada "turno" del SDK es una llamada al modelo que re-manda el historial
- * completo. Con un techo único para todo, "¿ya está todo arriba?" tenía el
- * mismo presupuesto de exploración que un refactor: el modelo no gasta los 28
- * si no los necesita, pero cuando se enreda —y se enreda— los gasta, y cuesta
- * lo mismo enredarse en una pregunta trivial que en una difícil.
- *
- * Los números salen de para qué sirve cada nivel: una pregunta de estado se
- * responde con una tool y una frase (6 sobra); una aclaración corta apenas
- * necesita tools (10); el grueso son búsquedas y redacción con varias tools
- * (16); el trabajo de código o de razonamiento de verdad lee, escribe y
- * verifica (44). Si un nivel se queda corto, el turno cierra con
- * `error_max_turns` y la auto-continuación lo retoma ESCALANDO un nivel más
- * (chat-turns.ts) — el trabajo no se pierde, solo se paga un techo en vez de
- * una barra libre.
- *
- * `alto` subió de 28 a 44 (2026-09-03): es el TECHO de la escalera — cuando
- * una tarea larga de verdad (instalar algo, esperar una descarga, depurar)
- * llega hasta acá y se queda corta, ya no hay nivel siguiente al que subir,
- * así que el único alivio posible es un techo más alto en este mismo nivel.
- * Confirmado con un caso real que agotó `alto` incluso después de escalar.
+ * Antes cada nivel traía su `maxTurns` (6/10/16/44) como techo de costo, y
+ * cuando el trabajo lo rebasaba el turno cerraba con `error_max_turns` y, ya
+ * agotadas las continuaciones, con "se me acabó el presupuesto de turnos".
+ * Quitados el 2026-10-14 por pedido explícito del dueño: el agente tiene que
+ * poder operar sin parar a mitad de una tarea. El control de costo que queda
+ * es el modelo/esfuerzo de cada nivel, la rampa de consumo (budget.ts) y el ⏹
+ * del usuario; el único techo que sobrevive es `MAX_TURNS_SEGURIDAD`.
  */
-export const TIERS: Record<Tier, { model: ModelAlias; effort?: Effort; maxTurns: number }> = {
+export const TIERS: Record<Tier, { model: ModelAlias; effort?: Effort }> = {
   // Saludos, confirmaciones, preguntas de una línea sobre estado.
-  trivial: { model: "haiku", maxTurns: 6 },
+  trivial: { model: "haiku" },
   // Aclaraciones y pedidos cortos y de baja ambigüedad.
-  bajo: { model: "sonnet", effort: "low", maxTurns: 10 },
+  bajo: { model: "sonnet", effort: "low" },
   // El grueso: preguntas con contexto, búsquedas, redacción.
-  medio: { model: "sonnet", effort: "medium", maxTurns: 16 },
+  medio: { model: "sonnet", effort: "medium" },
   // Código y razonamiento de verdad: escribir/editar, auditorías, investigación.
-  alto: { model: "sonnet", effort: "high", maxTurns: 44 },
+  alto: { model: "sonnet", effort: "high" },
 };
+
+/**
+ * Guarda contra bucles que no convergen, NO un techo de costo: ninguna tarea
+ * real se acerca a 1000 vueltas del SDK. Es el mismo valor que ya usa la
+ * sesión persistente de watch/rapido.ts. Si algún día se alcanza, el flujo de
+ * siempre (auto-continuación y luego aviso, en chat-turns.ts) sigue igual.
+ */
+export const MAX_TURNS_SEGURIDAD = 1000;
 
 // ── Señales ───────────────────────────────────────────────────────────
 // Todo lo que se puede saber sin gastar un token.

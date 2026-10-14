@@ -1,7 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { capEffort, capTier, classify, raiseTier, routeTurn } from "./router.js";
+import {
+  MAX_TURNS_SEGURIDAD,
+  TIERS,
+  capEffort,
+  capTier,
+  classify,
+  raiseTier,
+  routeTurn,
+} from "./router.js";
+import { PROFILES } from "./budget.js";
 
 /**
  * Tests del router de costo.
@@ -182,4 +191,22 @@ test("el piso solo sube, nunca baja", () => {
   assert.equal(raiseTier("trivial", "medio"), "medio");
   assert.equal(raiseTier("alto", "medio"), "alto");
   assert.equal(raiseTier("trivial", undefined), "trivial");
+});
+
+test("ni los niveles ni los perfiles de consumo imponen un tope de turnos propio", () => {
+  // Pedido explícito del dueño (2026-10-14): el agente opera sin parar a mitad
+  // de una tarea. Si alguien vuelve a meter `maxTurns` en TIERS o PROFILES, el
+  // turno vuelve a cerrar con "se me acabó el presupuesto de turnos" sin que
+  // ningún otro test lo note — session.ts ya no lo lee, así que ni siquiera
+  // tendría efecto: este test avisa antes de que alguien crea que sí.
+  for (const [nombre, tier] of Object.entries(TIERS)) {
+    assert.equal("maxTurns" in tier, false, `TIERS.${nombre} no debe traer maxTurns`);
+  }
+  for (const [modo, perfil] of Object.entries(PROFILES)) {
+    assert.equal("maxTurns" in perfil, false, `PROFILES.${modo} no debe traer maxTurns`);
+  }
+  assert.ok(
+    MAX_TURNS_SEGURIDAD >= 500,
+    "la guarda contra bucles debe quedar muy por encima de cualquier tarea real",
+  );
 });

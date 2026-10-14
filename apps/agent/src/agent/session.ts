@@ -13,6 +13,7 @@ import { registerGeneratedFile } from "../generated-files.js";
 import { hermesMcpServer, HERMES_TOOL_NAMES } from "./tools.js";
 import {
   TIERS,
+  MAX_TURNS_SEGURIDAD,
   capEffort,
   capTier,
   escalateSession,
@@ -369,10 +370,9 @@ export async function runAgentTurn(opts: RunTurnOptions): Promise<RunTurnResult>
     model: tierOpts.model,
     ...(effort && tierOpts.model !== "haiku" ? { effort } : {}),
   };
-  // Igual que con el nivel y el esfuerzo: dos techos y gana el más bajo. El del
-  // nivel acota por para-qué-sirve-este-turno (router.ts) y el del perfil por
-  // cuánta ventana queda (budget.ts).
-  const maxTurns = Math.min(tierOpts.maxTurns, profile.maxTurns);
+  // Sin tope de turnos por nivel ni por modo de consumo (quitados el
+  // 2026-10-14, ver router.ts): solo la guarda contra bucles que no convergen.
+  const maxTurns = MAX_TURNS_SEGURIDAD;
   // El modelo se anuncia SIEMPRE (aunque el nivel venga fijado por la sesión):
   // el cliente necesita saber con qué está respondiendo, no solo cuándo cambia.
   opts.onModel?.(tierOpts.model, effort);

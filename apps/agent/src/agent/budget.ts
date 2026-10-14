@@ -176,7 +176,6 @@ export interface PowerProfile {
   maxTier: "trivial" | "bajo" | "medio" | "alto";
   /** Esfuerzo máximo permitido (para sonnet; haiku no lo usa). */
   maxEffort: "low" | "medium" | "high";
-  maxTurns: number;
   /** Cuánto contexto se PRECARGA en el prompt (lo demás lo pide el agente). */
   retrieval: { recent: number; relevant: number; chars: number };
   /** Fuera de `normal` los subagentes dejan de ser opcionales. */
@@ -187,13 +186,6 @@ export const PROFILES: Record<PowerMode, PowerProfile> = {
   normal: {
     maxTier: "alto",
     maxEffort: "high",
-    // Sin techo real: se combina con TIERS[tier].maxTurns por Math.min (ver
-    // session.ts), así que este número solo importa si es MENOR al de algún
-    // nivel — 44 iguala el techo de `alto` (el más alto que existe) para que
-    // "modo normal" de verdad no recorte nada. Subir `alto` sin subir esto
-    // sería un bug silencioso: el Math.min lo taparía de vuelta al valor
-    // viejo sin ningún error visible.
-    maxTurns: 44,
     retrieval: { recent: 5, relevant: 8, chars: 300 },
     forceSubagents: false,
   },
@@ -203,7 +195,6 @@ export const PROFILES: Record<PowerMode, PowerProfile> = {
     // por su cuenta, este techo solo tira hacia abajo lo que iba a costar más.
     maxTier: "bajo",
     maxEffort: "low",
-    maxTurns: 15,
     // ~975 tokens de precarga por turno bajan a ~200. El agente sigue teniendo
     // search_knowledge para traer lo que de verdad necesite.
     retrieval: { recent: 2, relevant: 3, chars: 160 },
@@ -216,7 +207,6 @@ export const PROFILES: Record<PowerMode, PowerProfile> = {
     // necesita — eso sale peor que negarse y esperar el reset.
     maxTier: "trivial",
     maxEffort: "low",
-    maxTurns: 8,
     retrieval: { recent: 1, relevant: 2, chars: 120 },
     forceSubagents: true,
   },

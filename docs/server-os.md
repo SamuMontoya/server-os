@@ -113,7 +113,7 @@ con `HERMES_LOW_POWER=1`.
 | | Normal | Bajo |
 |---|---|---|
 | Modelo | opus/high | sonnet/low |
-| Turnos | 40 | 15 |
+| Turnos | sin tope | sin tope |
 | Subagentes | opcional | forzados |
 | Precarga de contexto | 5+8 @300 | 2+3 @160 |
 
